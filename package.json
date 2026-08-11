@@ -1,0 +1,31 @@
+{
+  "name": "autotrade",
+  "version": "1.0.0",
+  "description": "Autonomous momentum trading agent using Alpaca paper trading API",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/daemon.js",
+    "dev": "ts-node src/daemon.ts",
+    "replay": "ts-node src/scripts/replay.ts",
+    "journal": "ts-node src/scripts/journal.ts",
+    "verify:policy": "ts-node src/scripts/verifyPolicyPrompt.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@stoqey/ib": "^1.6.6",
+    "@types/blessed": "^0.1.27",
+    "axios": "^1.7.0",
+    "blessed": "^0.1.81",
+    "dotenv": "^16.4.0",
+    "js-yaml": "^5.2.3",
+    "node-cron": "^3.0.3",
+    "yahoo-finance2": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/node-cron": "^3.0.11",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
+  }
+}

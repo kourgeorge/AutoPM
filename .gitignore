@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.js.map
+.env
+.env.*
+.DS_Store
+data/state.json
+data/journal.jsonl
+package-lock.json
