@@ -9,6 +9,11 @@ import { ackEvent, getPendingEvents, type AckDisposition } from '../features/eve
 
 import { RESEARCH_TOOL_DEFINITIONS, executeResearchTool } from './researchTools';
 import {
+  ALPACA_DATA_TOOL_DEFINITIONS,
+  ALPACA_DATA_TOOL_NAMES,
+  executeAlpacaDataTool,
+} from './alpacaDataTools';
+import {
   getState,
   openPositionSnapshot,
   removePositionSnapshot,
@@ -117,8 +122,10 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       required: ['minutes', 'reason'],
     },
   },
-  // The one tool that reaches outside the system. It lived behind the research sub-agent;
-  // with that agent gone the decision maker searches for itself.
+  // Native Alpaca market data — bars, snapshots, movers, news — direct REST calls.
+  // Order-placement tools are excluded: those go through enterPosition/exitPosition.
+  ...ALPACA_DATA_TOOL_DEFINITIONS,
+  // General web search for anything not covered by Alpaca's market data API.
   ...RESEARCH_TOOL_DEFINITIONS,
 ];
 
@@ -139,8 +146,10 @@ export async function executeTraderTool(
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
       case 'sleep':               return JSON.stringify({ ok: true, nextCycleIn: `${input.minutes} min` });
-      default:                    return (await executeResearchTool(name, input))
-                                    ?? JSON.stringify({ error: `Unknown tool: ${name}` });
+      default:
+        if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
+        return (await executeResearchTool(name, input))
+          ?? JSON.stringify({ error: `Unknown tool: ${name}` });
     }
   } catch (err: any) {
     logger.error(`[TraderTool:${name}] ${err.message}`);
@@ -335,8 +344,6 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
 
   openPositionSnapshot({
     symbol,
-    qty,
-    lastPrice: price,
     entryPrice: price,
     sessionHigh: price,
     sessionLow: price,
