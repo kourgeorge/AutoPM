@@ -74,7 +74,7 @@ triggers:
   heartbeatWithPositionsMs: 900000
   heartbeatFlatMs: 3600000
   # A quote older than this is stale: it produces data_stale, never a price event.
-  maxQuoteAgeMs: 90000
+  maxQuoteAgeMs: 180000
 
 # Hard bounds. The proposer cannot emit changes to this block, and the loader
 # REFUSES any policy whose values violate it — including one edited by hand.
