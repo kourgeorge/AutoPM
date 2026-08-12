@@ -11,6 +11,7 @@
 import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
+import { mutatePolicy } from '../policy/mutate';
 import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState } from '../state/state';
@@ -93,6 +94,24 @@ const CONCIERGE_TOOLS: ToolDefinition[] = [
         message: { type: 'string', description: 'Instruction for the trader.' },
       },
       required: ['message'],
+    },
+  },
+  {
+    name: 'update_policy',
+    description: 'Persistently change trading behaviour: add/remove watchlist symbols, adjust position sizing, risk limits, or stop/target multipliers. Changes are validated and hot-reloaded — the trader sees them on its next cycle. Immutable safety ceilings are always enforced.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        addToWatchlist:      { type: 'array',  items: { type: 'string' }, description: 'Ticker symbols to add to the watchlist.' },
+        removeFromWatchlist: { type: 'array',  items: { type: 'string' }, description: 'Ticker symbols to remove from the watchlist.' },
+        setWatchlist:        { type: 'array',  items: { type: 'string' }, description: 'Replace the entire watchlist with these symbols.' },
+        maxPositions:        { type: 'integer', minimum: 1,               description: 'Maximum number of open positions.' },
+        positionSizePct:     { type: 'number',  minimum: 0,               description: 'Position size as a fraction of equity (e.g. 0.05 = 5%).' },
+        stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'Stop distance = entry − stopLossAtrMult × ATR.' },
+        takeProfitAtrMult:   { type: 'number',  minimum: 0,               description: 'Target = entry + takeProfitAtrMult × ATR.' },
+        maxDailyLossPct:     { type: 'number',  minimum: 0,               description: 'Daily loss limit as a fraction of equity (e.g. 0.03 = 3%).' },
+      },
+      required: [],
     },
   },
 ];
@@ -194,6 +213,10 @@ export class ConciergeAgent {
       const message = input.message as string;
       this.wake(message);
       return JSON.stringify({ ok: true, sent: message });
+    }
+
+    if (name === 'update_policy') {
+      return JSON.stringify(mutatePolicy(input as any));
     }
 
     return executeTraderTool(name, input);
