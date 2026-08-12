@@ -185,10 +185,7 @@ async function getMostActiveStocks(input: Record<string, unknown>): Promise<stri
 
 async function getMarketMovers(input: Record<string, unknown>): Promise<string> {
   const res = await dataClient.get('/v1beta1/screener/stocks/movers', {
-    params: {
-      market_type: input.market_type ?? 'stocks',
-      top:         input.top ?? 10,
-    },
+    params: { top: input.top ?? 10 },
   });
   return JSON.stringify(res.data);
 }
