@@ -11,8 +11,30 @@
 
 import axios from 'axios';
 import { config } from '../core/config';
+import { marketSession } from '../core/time';
 import { getQuoteRaw } from '../prices/yahoo';
 import { DEFAULT_MAX_AGE_MS, Maybe, missingFrom, observe } from './types';
+
+/**
+ * Alpaca returns nanosecond-precision timestamps ("...723490207Z", 9 decimal
+ * digits). Date.parse() returns NaN for anything beyond milliseconds on some
+ * runtimes, which makes ageMs = NaN and observe() flags every price as stale.
+ * Truncate to 3 fractional digits before any date arithmetic.
+ */
+function toMs(ts: string): string {
+  return ts.replace(/(\.\d{3})\d+/, '$1');
+}
+
+/**
+ * When the market is not in its regular session the last-trade timestamp can be
+ * hours old — that is not a stale feed, it is the most recent price available.
+ * Use the fetch time as asOf so the 90-second freshness gate does not fire
+ * spuriously overnight and after close.
+ */
+function effectiveAsOf(dataAsOf: string): string {
+  const normalized = toMs(dataAsOf);
+  return marketSession() === 'open' ? normalized : new Date().toISOString();
+}
 
 const ALPACA_SOURCE = 'alpaca' as const;
 const YAHOO_SOURCE  = 'yahoo'  as const;
@@ -50,7 +72,7 @@ async function fetchAlpacaSnapshots(
       snap?.latestTrade?.t ?? snap?.latestQuote?.t;
 
     if (typeof price === 'number' && Number.isFinite(price) && asOf) {
-      out.set(symbol, { price, asOf });
+      out.set(symbol, { price, asOf: effectiveAsOf(asOf) });
     }
   }
   return out;
@@ -62,7 +84,7 @@ async function collectPriceYahoo(
 ): Promise<Maybe<number>> {
   try {
     const { price, asOf } = await getQuoteRaw(symbol);
-    return observe(price, YAHOO_SOURCE, asOf ?? new Date().toISOString(), maxAgeMs);
+    return observe(price, YAHOO_SOURCE, effectiveAsOf(asOf ?? new Date().toISOString()), maxAgeMs);
   } catch (err) {
     return missingFrom(YAHOO_SOURCE, err);
   }

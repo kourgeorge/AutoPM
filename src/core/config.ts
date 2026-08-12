@@ -17,11 +17,22 @@ function requireEnv(key: string): string {
  * model id, it belongs here.
  */
 export const config = {
+  /** Active broker. Set BROKER=ibkr to switch; defaults to alpaca. */
+  broker: (process.env.BROKER ?? 'alpaca') as 'alpaca' | 'ibkr',
+
   alpaca: {
-    keyId: requireEnv('ALPACA_KEY_ID'),
-    secretKey: requireEnv('ALPACA_SECRET_KEY'),
+    keyId: process.env.ALPACA_KEY_ID ?? '',
+    secretKey: process.env.ALPACA_SECRET_KEY ?? '',
     baseUrl: process.env.ALPACA_BASE_URL ?? 'https://paper-api.alpaca.markets',
     dataUrl: process.env.ALPACA_DATA_URL ?? 'https://data.alpaca.markets',
+  },
+
+  /** Interactive Brokers TWS / IB Gateway connection. */
+  ibkr: {
+    host:     process.env.IBKR_HOST     ?? 'localhost',
+    port:     parseInt(process.env.IBKR_PORT     ?? '7497'), // 7497=paper TWS, 4002=paper Gateway
+    clientId: parseInt(process.env.IBKR_CLIENT_ID ?? '1'),
+    account:  process.env.IBKR_ACCOUNT ?? '',  // leave blank for single-account setups
   },
 
   ai: {

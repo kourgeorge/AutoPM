@@ -161,8 +161,6 @@ function snapshotSeed(
 ): PositionSnapshot {
   return {
     symbol,
-    qty: 10,
-    lastPrice: opts.entryPrice,
     openedAt: openedAt.toISOString(),
     ...opts,
     sessionHigh: opts.sessionHigh ?? opts.entryPrice,

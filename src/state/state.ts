@@ -19,8 +19,6 @@ import path from 'path';
  */
 export interface PositionSnapshot {
   symbol: string;
-  qty: number;
-  lastPrice: number;
 
   entryPrice?: number;        // set once at fill, NEVER overwritten
   sessionHigh?: number;       // monotonic max since entry (gives MFE)
@@ -120,9 +118,7 @@ export function updateState(patch: Partial<SystemState>): void {
  */
 export function openPositionSnapshot(snap: PositionSnapshot): void {
   const existing = _state.positionSnapshots[snap.symbol];
-  const merged: PositionSnapshot = existing
-    ? { ...existing, qty: existing.qty + snap.qty, lastPrice: snap.lastPrice }
-    : snap;
+  const merged: PositionSnapshot = existing ?? snap;
   _state.positionSnapshots = { ..._state.positionSnapshots, [snap.symbol]: merged };
   scheduleSave();
 }

@@ -64,7 +64,7 @@ export class AlpacaBroker implements IBroker {
         qty:            req.qty,
         side:           req.side,
         type:           req.type,
-        time_in_force:  'day',
+        time_in_force:  req.symbol.includes('/') ? 'gtc' : 'day',
         limit_price:    req.limitPrice,
       });
       return { id: res.data.id };

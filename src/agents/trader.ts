@@ -192,22 +192,21 @@ export class Trader {
 
 function buildPortfolioContext(
   snapshots: Record<string, PositionSnapshot>,
-  equity: number,
 ): string {
   const entries = Object.values(snapshots);
   if (entries.length === 0) return '';
 
   const lines = ['=== PORTFOLIO CONTEXT ==='];
-  let totalValue = 0;
 
   for (const snap of entries) {
-    totalValue += snap.qty * snap.lastPrice;
-    lines.push(`  ${snap.symbol.padEnd(6)} ${snap.qty}sh @ $${snap.lastPrice.toFixed(2)}`);
+    const entry = snap.entryPrice != null ? ` entry $${snap.entryPrice.toFixed(2)}` : '';
+    const stop = snap.stopLevel != null ? ` SL $${snap.stopLevel.toFixed(2)}` : '';
+    const tp = snap.takeProfitLevel != null ? ` TP $${snap.takeProfitLevel.toFixed(2)}` : '';
+    lines.push(`  ${snap.symbol.padEnd(8)}${entry}${stop}${tp}`);
   }
 
-  const utilPct = equity > 0 ? Math.round((totalValue / equity) * 100) : 0;
   const slotsLeft = getPolicy().risk.maxPositions - entries.length;
-  lines.push(`Deployed: ~$${totalValue.toFixed(0)} / $${equity.toFixed(0)} equity (${utilPct}%) — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining`);
+  lines.push(`${entries.length} open position${entries.length !== 1 ? 's' : ''} — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining. Call get_positions for live qty and P&L.`);
   lines.push('Avoid sector concentration — assess the sectors of open positions before adding a new entry.');
   lines.push('=== END PORTFOLIO CONTEXT ===');
   return lines.join('\n');
@@ -314,7 +313,7 @@ function buildCycleContext(
     }`,
   );
 
-  const portfolioCtx = buildPortfolioContext(state.positionSnapshots, state.startOfDayEquity);
+  const portfolioCtx = buildPortfolioContext(state.positionSnapshots);
   if (portfolioCtx) { lines.push(''); lines.push(portfolioCtx); }
 
   const historyCtx = buildDecisionHistory();
