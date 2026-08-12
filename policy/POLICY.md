@@ -43,6 +43,15 @@ RISK RULES
 - execute_entry is checked before it reaches the broker and returns {error, rejectedBy, rule} if refused: missing_stop (no stop, or a stop at or above entry), invalid_intent (a non-finite number, a non-positive qty, a target at or below entry), max_positions, already_holding, insufficient_buying_power, daily_loss_breached. A refusal is recorded in the journal — read the rule and fix the intent rather than resubmitting it.
 - execute_entry requires the ATR you sized the stop against — read it from get_pending_events() evidence or compute it from recent bars
 
+MACRO REGIME
+- Call get_macro_regime once per cycle (it is cached for 6 hours, so it is cheap).
+- The regime conditions your aggressiveness:
+  - expansion: normal entry criteria, full position size
+  - recovery: normal entry criteria, slightly favor beaten-down quality names
+  - late_cycle: tighten entry criteria (require stronger momentum confirmation), reduce position size by 20-30%, favor defensive names
+  - recession: very selective entries only on extreme oversold bounces, reduce position size by 40-50%, widen stops to avoid noise exits
+- If confidence is "low", treat the regime as advisory — do not dramatically change behavior on weak data.
+
 ADAPTATION
 - Read RECENT DECISIONS in each cycle. It is the record of what worked and what did not — a run of exits at a loss is a reason to tighten entry criteria, not to size up to recover.
 - After a loss, look up what the entry rationale was before entering the same symbol again.

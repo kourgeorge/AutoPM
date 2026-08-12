@@ -13,6 +13,7 @@ import {
   ALPACA_DATA_TOOL_NAMES,
   executeAlpacaDataTool,
 } from './alpacaDataTools';
+import { getRegime } from '../macro/regime';
 import {
   getState,
   openPositionSnapshot,
@@ -108,6 +109,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_macro_regime',
+    description: 'Classify the current macro regime (expansion, late_cycle, recession, recovery) based on GDP growth, unemployment, CPI, yield curve, and VIX from FRED. Cached for 6h. Use this to condition entry aggressiveness: tighten in late_cycle/recession, widen in expansion/recovery.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
     name: 'sleep',
     description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240.',
     input_schema: {
@@ -140,6 +146,7 @@ export async function executeTraderTool(
       case 'get_market_status':   return await toolGetMarketStatus();
       case 'get_account':         return await toolGetAccount();
       case 'get_positions':       return await toolGetPositions();
+      case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'execute_entry':       return await toolExecuteEntry(input);
       case 'execute_exit':        return await toolExecuteExit(input);
       case 'get_pending_events':  return toolGetPendingEvents();
@@ -202,6 +209,11 @@ async function toolGetMarketStatus(): Promise<string> {
     minutesUntilChange,
     changeLabel,
   });
+}
+
+async function toolGetMacroRegime(): Promise<string> {
+  const regime = await getRegime();
+  return JSON.stringify(regime);
 }
 
 async function toolGetAccount(): Promise<string> {
