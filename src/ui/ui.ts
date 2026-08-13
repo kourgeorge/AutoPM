@@ -152,9 +152,25 @@ class TerminalUI {
     this.screen.render();
   }
 
+  /**
+   * Timestamped like every other line, but in the alert's own colour rather than the
+   * log's gray — an alert that is dated the same way as a TOOL line reads as one.
+   *
+   * Multi-line by necessity: `router.ts` packs a whole tick's events into one call, so
+   * continuation lines are padded into the same column as the first.
+   */
   alert(msg: string): void {
+    const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+    const marker = '⚠ ALERT';
+    const gutter = ' '.repeat(ts.length + 2 + marker.length + 2);
+
     this.logBox.log('');
-    this.logBox.log(`{bold}{yellow-fg}⚠ ALERT{/}  ${this.escape(msg)}`);
+    msg.split('\n').forEach((line, i) => {
+      const prefix = i === 0
+        ? `{bold}${COLORS.warn}${ts}{/}  {bold}${COLORS.warn}${marker}{/}  `
+        : gutter;
+      this.logBox.log(`${prefix}${this.escape(line)}`);
+    });
     this.logBox.log('');
     this.screen.render();
   }
