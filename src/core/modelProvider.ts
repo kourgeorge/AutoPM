@@ -94,13 +94,224 @@ export class AnthropicProvider implements ModelProvider {
   }
 }
 
+// ── OpenAI-compatible provider (for OpenAI, Azure, Groq, Ollama, LiteLLM, etc.) ──
+
+/**
+ * Known OpenAI-compatible endpoints. A provider NOT in here needs an explicit
+ * `AI_BASE_URL` — the URL is never guessed from the provider name, because guessing sends
+ * `Authorization: Bearer <the operator's key>` to whatever domain the guess happens to
+ * spell. `api.<typo>.com` is registrable by anyone.
+ */
+const KNOWN_BASE_URLS: Record<string, string> = {
+  openai:   'https://api.openai.com/v1',
+  groq:     'https://api.groq.com/openai/v1',
+  ollama:   'http://localhost:11434/v1',
+  cohere:   'https://api.cohere.ai/v1',
+  together: 'https://api.together.xyz/v1',
+};
+
+export class OpenAICompatibleProvider implements ModelProvider {
+  private baseUrl: string;
+  private apiKey: string;
+  private model: string;
+
+  constructor(cfg: AiConfig) {
+    const known = KNOWN_BASE_URLS[cfg.provider.toLowerCase()];
+    if (!cfg.baseUrl && !known) {
+      throw new Error(
+        `Unknown AI provider "${cfg.provider}" and no AI_BASE_URL set. Either set AI_BASE_URL ` +
+        `to the endpoint explicitly, or use one of: anthropic, ${Object.keys(KNOWN_BASE_URLS).join(', ')}.`,
+      );
+    }
+    this.baseUrl = (cfg.baseUrl ?? known!).replace(/\/+$/, '');
+    this.apiKey = cfg.apiKey;
+    this.model = cfg.model;
+  }
+
+  async chat(params: {
+    systemPrompt: string;
+    messages: ChatMessage[];
+    tools: ToolDefinition[];
+    maxTokens: number;
+  }): Promise<ModelResponse> {
+    const { systemPrompt, messages, tools, maxTokens } = params;
+
+    // Translate internal ChatMessage[] (Anthropic-shaped) to OpenAI chat messages.
+    //
+    // The two formats disagree about where a tool call lives, and the disagreement is the
+    // whole difficulty here. Anthropic carries calls and results as content BLOCKS inside
+    // the assistant and user turns; OpenAI carries calls in a `tool_calls` field that is a
+    // SIBLING of `content` (whose parts are text only), and results as their own `tool`
+    // messages keyed by `tool_call_id`. Putting a call inside `content` is rejected, and a
+    // `tool` message without its id has nothing to answer — so the ids that Anthropic keeps
+    // on the blocks (`tool_use.id`, `tool_result.tool_use_id`) must be carried across, not
+    // dropped.
+    //
+    // Content is sent as a plain string rather than a parts array: every OpenAI-compatible
+    // endpoint accepts the string form, and the smaller ones do not all accept parts.
+    interface OpenAIToolCall {
+      id: string;
+      type: 'function';
+      function: { name: string; arguments: string };
+    }
+    interface OpenAIMessage {
+      role: 'system' | 'user' | 'assistant' | 'tool';
+      content: string | null;
+      tool_calls?: OpenAIToolCall[];
+      tool_call_id?: string;
+    }
+
+    const openaiMessages: OpenAIMessage[] = [{ role: 'system', content: systemPrompt }];
+
+    for (const msg of messages) {
+      const text = msg.content
+        .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+        .map(b => b.text)
+        .join('\n');
+
+      if (msg.role === 'user') {
+        // Results first: they answer the calls made by the assistant turn just pushed, and
+        // OpenAI requires each `tool` message to follow the assistant message that made it.
+        for (const block of msg.content) {
+          if (block.type === 'tool_result') {
+            openaiMessages.push({
+              role: 'tool',
+              tool_call_id: block.tool_use_id,
+              content: block.content,
+            });
+          }
+        }
+        if (text.length > 0) openaiMessages.push({ role: 'user', content: text });
+        continue;
+      }
+
+      const toolCalls: OpenAIToolCall[] = msg.content
+        .filter((b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use')
+        .map(b => ({
+          id: b.id,
+          type: 'function' as const,
+          function: { name: b.name, arguments: JSON.stringify(b.input) },
+        }));
+
+      // `content: null` with tool_calls present is the documented shape for a turn that
+      // only calls tools. Skipping the message entirely would orphan the results below it.
+      if (text.length > 0 || toolCalls.length > 0) {
+        openaiMessages.push({
+          role: 'assistant',
+          content: text.length > 0 ? text : null,
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        });
+      }
+    }
+
+    // Convert tool definitions to OpenAI format (they already match JSON Schema)
+    const openaiTools = tools.map(tool => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.input_schema,
+      },
+    }));
+
+    // Make the API request
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: openaiMessages,
+        tools: openaiTools,
+        max_tokens: maxTokens,
+        temperature: 0,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} ${error}`);
+    }
+
+    const data = await response.json() as any;
+
+    const choice = data?.choices?.[0];
+    if (!choice) {
+      throw new Error(`OpenAI API returned no choices: ${JSON.stringify(data).slice(0, 400)}`);
+    }
+
+    // Convert response back to internal format
+    const content: ContentBlock[] = [];
+
+    if (choice.message?.content) {
+      content.push({
+        type: 'text',
+        text: choice.message.content,
+      });
+    }
+
+    for (const toolCall of choice.message?.tool_calls ?? []) {
+      if (toolCall.type !== 'function') continue;
+      // A malformed `arguments` string is the model's error, not a transport failure. It
+      // must not take down the cycle: surface it as the tool's own input so the executor
+      // rejects it and the model sees why, which is what happens on the Anthropic path when
+      // a tool is called with the wrong shape.
+      let input: Record<string, unknown>;
+      try {
+        input = JSON.parse(toolCall.function.arguments || '{}');
+      } catch {
+        input = { __unparseable_arguments: toolCall.function.arguments };
+      }
+      content.push({
+        type: 'tool_use',
+        id: toolCall.id,
+        name: toolCall.function.name,
+        input,
+      });
+    }
+
+    return {
+      // Some endpoints (Ollama especially) omit `usage`. Reporting 0 is honest — it is what
+      // was reported — and beats crashing a cycle over a telemetry field.
+      stopReason: this.mapStopReason(choice.finish_reason),
+      content,
+      usage: {
+        inputTokens: data.usage?.prompt_tokens ?? 0,
+        outputTokens: data.usage?.completion_tokens ?? 0,
+      },
+    };
+  }
+
+  private mapStopReason(finishReason: string): ModelResponse['stopReason'] {
+    switch (finishReason) {
+      case 'tool_calls':
+      case 'function_call':
+        return 'tool_use';
+      // OpenAI's 'stop' is a natural finish, which is Anthropic's 'end_turn'.
+      // 'stop_sequence' would claim a custom stop sequence was hit; we send none.
+      case 'stop':
+        return 'end_turn';
+      case 'length':
+        return 'max_tokens';
+      default:
+        return 'end_turn';
+    }
+  }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
+/**
+ * `anthropic` uses the SDK; everything else speaks the OpenAI chat-completions dialect.
+ *
+ * An unrecognised provider is accepted ONLY with an explicit `AI_BASE_URL` — that is what
+ * makes a LiteLLM proxy or a self-hosted endpoint work without a case here. Without one the
+ * constructor throws, because the alternative is inventing a URL for a name that may simply
+ * be a typo and posting the API key to it.
+ */
 export function createModelProvider(cfg: AiConfig): ModelProvider {
-  switch (cfg.provider) {
-    case 'anthropic':
-      return new AnthropicProvider(cfg);
-    default:
-      throw new Error(`Unknown AI provider: "${cfg.provider}". Supported: anthropic`);
-  }
+  if (cfg.provider.toLowerCase() === 'anthropic') return new AnthropicProvider(cfg);
+  return new OpenAICompatibleProvider(cfg);
 }

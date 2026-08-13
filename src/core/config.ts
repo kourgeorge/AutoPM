@@ -39,7 +39,14 @@ export const config = {
     provider: process.env.AI_PROVIDER ?? 'anthropic',
     model: process.env.AI_MODEL ?? 'claude-sonnet-4-6',
     apiKey: requireEnv('AI_API_KEY'),
-    // Optional: point to a LiteLLM proxy or any OpenAI-compatible endpoint
+    // Any OpenAI-compatible endpoint. Optional for the providers with a known URL
+    // (openai, groq, ollama, cohere, together) and REQUIRED for anything else — an
+    // unrecognised provider without this throws rather than guessing a domain to send the
+    // API key to. Examples:
+    // - OpenAI: https://api.openai.com/v1
+    // - Azure: https://{resource}.openai.azure.com/v1
+    // - Ollama: http://localhost:11434/v1
+    // - LiteLLM proxy: http://localhost:8000/v1
     baseUrl: process.env.AI_BASE_URL,
     maxTokensPerTurn: parseInt(process.env.AI_MAX_TOKENS ?? '4096'),
     maxToolRounds: parseInt(process.env.AI_MAX_TOOL_ROUNDS ?? '10'),
