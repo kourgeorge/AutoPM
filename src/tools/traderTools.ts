@@ -15,6 +15,10 @@ import {
 } from './alpacaDataTools';
 import { getRegime } from '../macro/regime';
 import { volatilityScaledQty, correlationGate } from '../strategy/portfolioRisk';
+import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
+import { isPresent } from '../collect/types';
+import { atr } from '../strategy/indicators';
+import { computeSignals, signalSummary } from '../strategy/signals';
 import {
   getState,
   openPositionSnapshot,
@@ -128,6 +132,17 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_signals',
+    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 (strongly bearish) to +1 (strongly bullish), plus ATR and the last close. This is the SAME deterministic computation that fills the signal evidence on an entry_signal event, run on demand: use it for a candidate that has not fired an event, so a signal breakdown you report is one you actually measured. Never state which signals are bullish or bearish without this tool or get_pending_events.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol to score.' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'get_correlation',
     description: 'Check how correlated a candidate entry is with current holdings. Returns the max pairwise correlation and a sizing recommendation. Call this BEFORE execute_entry to assess diversification.',
     input_schema: {
@@ -173,6 +188,7 @@ export async function executeTraderTool(
       case 'get_positions':       return await toolGetPositions();
       case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'get_position_size':   return await toolGetPositionSize(input);
+      case 'get_signals':         return await toolGetSignals(input);
       case 'get_correlation':     return await toolGetCorrelation(input);
       case 'execute_entry':       return await toolExecuteEntry(input);
       case 'execute_exit':        return await toolExecuteExit(input);
@@ -264,6 +280,71 @@ async function toolGetPositionSize(input: Record<string, unknown>): Promise<stri
     totalDollarRisk: parseFloat(dollarRisk.toFixed(2)),
     notional: parseFloat((recommendedQty * price).toFixed(2)),
     equity: account.equity,
+  });
+}
+
+/**
+ * The five signal scores for one symbol, on demand.
+ *
+ * Until this existed, signals could ONLY reach the trader as `evidence.signals` on an
+ * `entry_signal` event — which fires on an EMA cross, not on being asked about. A
+ * discretionary scan ("enter the best setup on the watchlist") therefore had no way to
+ * obtain them, and the rationale it wrote named signals it had never seen, using the
+ * five names POLICY.md lists.
+ *
+ * Same bar request and same `minBars` floor as `collectAndCompute`, so a scan and an
+ * event cannot report different scores for the same symbol at the same moment.
+ */
+async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
+  const symbol = String(input.symbol ?? '').toUpperCase();
+  const policy = getPolicy();
+
+  const bars = await collectBars(
+    symbol,
+    DEFAULT_COLLECT_REQUEST.barLimit,
+    DEFAULT_COLLECT_REQUEST.timeframe,
+  );
+
+  if (!isPresent(bars)) {
+    return JSON.stringify({
+      symbol,
+      error: `no bars from ${bars.source}: ${bars.error}`,
+      signals: [],
+    });
+  }
+
+  // Staleness is refusal, not a caveat: `buildWatchlistData` declines to score a stale
+  // series, and a tool that scored one anyway would be a second opinion on what
+  // "scoreable" means.
+  if (bars.stale) {
+    return JSON.stringify({
+      symbol,
+      error: `bars are stale (asOf ${bars.asOf}) — not scoring`,
+      signals: [],
+    });
+  }
+
+  if (bars.value.length < policy.strategy.minBars) {
+    return JSON.stringify({
+      symbol,
+      error: `insufficient history: ${bars.value.length} bars, need ${policy.strategy.minBars}`,
+      signals: [],
+    });
+  }
+
+  const signals = computeSignals(bars.value, policy);
+  const atrSeries = atr(bars.value, policy.strategy.atrPeriod);
+  const lastBar = bars.value[bars.value.length - 1];
+
+  return JSON.stringify({
+    symbol,
+    asOf: bars.asOf,
+    timeframe: DEFAULT_COLLECT_REQUEST.timeframe,
+    bars: bars.value.length,
+    lastClose: lastBar.c,
+    atr: atrSeries.length > 0 ? parseFloat(atrSeries[atrSeries.length - 1].toFixed(2)) : null,
+    signals,
+    summary: signalSummary(signals),
   });
 }
 
