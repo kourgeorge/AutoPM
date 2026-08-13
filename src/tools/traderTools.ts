@@ -14,6 +14,7 @@ import {
   executeAlpacaDataTool,
 } from './alpacaDataTools';
 import { getRegime } from '../macro/regime';
+import { volatilityScaledQty, correlationGate } from '../strategy/portfolioRisk';
 import {
   getState,
   openPositionSnapshot,
@@ -114,6 +115,30 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'get_position_size',
+    description: 'Compute a volatility-scaled position size for a symbol. Uses inverse-ATR sizing so high-volatility names get fewer shares (equal risk per position). Call this BEFORE execute_entry to determine qty.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol.' },
+        price: { type: 'number', description: 'Current/expected entry price.' },
+        atr: { type: 'number', description: 'Current ATR for the symbol.' },
+      },
+      required: ['symbol', 'price', 'atr'],
+    },
+  },
+  {
+    name: 'get_correlation',
+    description: 'Check how correlated a candidate entry is with current holdings. Returns the max pairwise correlation and a sizing recommendation. Call this BEFORE execute_entry to assess diversification.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Candidate ticker to check against existing positions.' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'sleep',
     description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240.',
     input_schema: {
@@ -147,6 +172,8 @@ export async function executeTraderTool(
       case 'get_account':         return await toolGetAccount();
       case 'get_positions':       return await toolGetPositions();
       case 'get_macro_regime':    return await toolGetMacroRegime();
+      case 'get_position_size':   return await toolGetPositionSize(input);
+      case 'get_correlation':     return await toolGetCorrelation(input);
       case 'execute_entry':       return await toolExecuteEntry(input);
       case 'execute_exit':        return await toolExecuteExit(input);
       case 'get_pending_events':  return toolGetPendingEvents();
@@ -214,6 +241,43 @@ async function toolGetMarketStatus(): Promise<string> {
 async function toolGetMacroRegime(): Promise<string> {
   const regime = await getRegime();
   return JSON.stringify(regime);
+}
+
+async function toolGetPositionSize(input: Record<string, unknown>): Promise<string> {
+  const { symbol, price, atr } = input as { symbol: string; price: number; atr: number };
+  const account = await broker.getAccountInfo();
+  const policy = getPolicy();
+
+  const recommendedQty = volatilityScaledQty(account.equity, price, atr);
+  const flatQty = Math.floor(account.equity * policy.risk.positionSizePct / price);
+  const riskPerShare = atr * policy.risk.stopLossAtrMult;
+  const dollarRisk = recommendedQty * riskPerShare;
+
+  return JSON.stringify({
+    symbol,
+    recommendedQty,
+    flatQty,
+    reason: recommendedQty < flatQty
+      ? `Vol-scaled: ATR $${atr.toFixed(2)} is high → fewer shares for equal risk`
+      : `Vol-scaled: ATR $${atr.toFixed(2)} is low → more shares within budget`,
+    riskPerShare: parseFloat(riskPerShare.toFixed(2)),
+    totalDollarRisk: parseFloat(dollarRisk.toFixed(2)),
+    notional: parseFloat((recommendedQty * price).toFixed(2)),
+    equity: account.equity,
+  });
+}
+
+async function toolGetCorrelation(input: Record<string, unknown>): Promise<string> {
+  const { symbol } = input as { symbol: string };
+  const result = await correlationGate(symbol);
+  return JSON.stringify({
+    symbol,
+    maxCorrelation: parseFloat(result.maxCorrelation.toFixed(3)),
+    mostCorrelatedWith: result.mostCorrelatedWith,
+    recommendation: !result.allowed ? 'SKIP' : result.sizeMultiplier < 1.0 ? 'REDUCE' : 'OK',
+    sizeMultiplier: result.sizeMultiplier,
+    detail: result.detail,
+  });
 }
 
 async function toolGetAccount(): Promise<string> {
