@@ -12,7 +12,7 @@
 import axios from 'axios';
 import { config } from '../core/config';
 import { marketSession } from '../core/time';
-import { getQuoteRaw } from '../prices/yahoo';
+import { getQuoteRaw } from './yahoo';
 import { DEFAULT_MAX_AGE_MS, Maybe, missingFrom, observe } from './types';
 
 /**

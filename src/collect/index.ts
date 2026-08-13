@@ -8,7 +8,7 @@
 
 import type { AccountInfo, OpenOrder, Position } from '../broker/IBroker';
 import type { Bar } from '../core/types';
-import type { Timeframe } from '../prices/yahoo';
+import type { Timeframe } from './yahoo';
 import { collectBars, DEFAULT_MAX_BAR_AGE_MS } from './barSource';
 import { collectAccount, collectOpenOrders, collectPositions } from './brokerSource';
 import { collectPrices } from './priceSource';

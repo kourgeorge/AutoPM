@@ -6,7 +6,7 @@
  */
 
 import type { Bar } from '../core/types';
-import { getBarsRaw, Timeframe } from '../prices/yahoo';
+import { getBarsRaw, Timeframe } from './yahoo';
 import { Maybe, missingFrom, observe } from './types';
 
 const SOURCE = 'yahoo' as const;
