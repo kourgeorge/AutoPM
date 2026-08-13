@@ -26,6 +26,7 @@ import { marketSession, type MarketSession } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { atr, crossedAbove, ema, rsi } from '../strategy/indicators';
+import { computeSignals, signalSummary, type SignalScore } from '../strategy/signals';
 import { getState, patchPositionSnapshot, type PositionSnapshot } from '../state/state';
 
 // ── Output types ──────────────────────────────────────────────────────────────
@@ -68,6 +69,9 @@ export interface WatchlistData {
   emaCrossedUp: boolean | null;
   rsi: number | null;
   atr: number | null;
+  /** Multi-signal scores for judge-style synthesis by the trader LLM. */
+  signals: SignalScore[];
+  signalSummary: string;
 }
 
 export interface AccountData {
@@ -222,12 +226,17 @@ function buildPositionData(
 function buildWatchlistData(
   symbol: string,
   price: Maybe<number>,
-  bars: Maybe<Bar[]>,
+  rawBars: Maybe<Bar[]>,
   p: Policy,
 ): WatchlistData {
-  const ind = indicatorsFor(bars, p);
+  const ind = indicatorsFor(rawBars, p);
   const { value, stale, reason: staleReason } = resolve(price);
   const haveSeries = ind.emaFastSeries.length > 0 && ind.emaSlowSeries.length > 0;
+
+  // Multi-signal scoring for the trader LLM to judge
+  const barsArray = isUsable(rawBars) ? rawBars.value : [];
+  const signals = barsArray.length >= p.strategy.minBars ? computeSignals(barsArray, p) : [];
+  const summary = signals.length > 0 ? signalSummary(signals) : 'insufficient data';
 
   return {
     symbol,
@@ -239,6 +248,8 @@ function buildWatchlistData(
     emaCrossedUp: haveSeries ? crossedAbove(ind.emaFastSeries, ind.emaSlowSeries) : null,
     rsi: ind.rsi,
     atr: ind.atr,
+    signals,
+    signalSummary: summary,
   };
 }
 

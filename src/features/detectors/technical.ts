@@ -13,6 +13,7 @@
  */
 
 import { boolCrossing, type Detector, type DetectorHit } from '../eventBus';
+import { getCachedRegime } from '../../macro/regime';
 import { bandOf, pctText } from './util';
 
 export const emaCrossDownDetector: Detector = {
@@ -88,25 +89,39 @@ export const entrySignalDetector: Detector = {
   evaluate(data, policy) {
     const hits: DetectorHit[] = [];
 
+    // Regime-conditioned RSI minimum (Ang et al. 2026: regime as first-class pipeline stage).
+    // Falls back to policy.strategy.rsiEntryMin if regime not yet fetched.
+    const regime = getCachedRegime();
+    const effectiveRsiMin = regime
+      ? policy.regime[regime.regime].rsiEntryMin
+      : policy.strategy.rsiEntryMin;
+
     for (const f of Object.values(data.watchlist)) {
       // No entry off a stale price, and none at all until the series is long enough to say
       // whether a cross happened.
       if (f.price === null || f.stale || f.emaCrossedUp === null || f.rsi === null) continue;
 
-      const armed = f.emaCrossedUp && f.rsi >= policy.strategy.rsiEntryMin;
+      const armed = f.emaCrossedUp && f.rsi >= effectiveRsiMin;
+
+      // Multi-signal summary for the headline (paper: "LLM-as-judge" pattern)
+      const signalNote = f.signals.length > 0 ? ` (${f.signalSummary})` : '';
 
       hits.push({
         symbol: f.symbol,
         cooldownKey: `entry_signal:${f.symbol}`,
         severity: 'urgent',
-        headline: `${f.symbol} entry signal — EMA${policy.strategy.emaFast} crossed above EMA${policy.strategy.emaSlow}, RSI ${f.rsi.toFixed(1)} at ${f.price.toFixed(2)}`,
+        headline: `${f.symbol} entry signal — EMA${policy.strategy.emaFast} crossed above EMA${policy.strategy.emaSlow}, RSI ${f.rsi.toFixed(1)} at ${f.price.toFixed(2)}${signalNote}`,
         evidence: {
           price: f.price,
           emaFast: f.emaFast ?? 'n/a',
           emaSlow: f.emaSlow ?? 'n/a',
           rsi: f.rsi,
-          rsiEntryMin: policy.strategy.rsiEntryMin,
+          rsiEntryMin: effectiveRsiMin,
+          regime: regime?.regime ?? 'unknown',
           atr: f.atr ?? 'n/a',
+          // Multi-signal evidence for the trader LLM to judge (Ang et al. 2026 pattern)
+          signals: f.signals as any,
+          signalSummary: f.signalSummary,
         },
         // Research, not entry: position limits and daily-loss halts are L4's to enforce,
         // and this detector deliberately knows nothing about them.

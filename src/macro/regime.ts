@@ -246,6 +246,16 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
   return result;
 }
 
+/**
+ * Synchronous access to the last fetched regime. Returns null if never fetched.
+ * Use this in synchronous code paths (e.g., detectors) where await is not possible.
+ * The async getRegime() is called by the scheduler/trader on each cycle, so this
+ * will be populated after the first cycle.
+ */
+export function getCachedRegime(): RegimeClassification | null {
+  return _cache;
+}
+
 /** Clear cache (for testing or forced refresh). */
 export function clearRegimeCache(): void {
   _cache = null;

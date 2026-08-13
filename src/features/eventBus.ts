@@ -99,12 +99,15 @@ export function boolCrossing(condition: boolean): Crossing {
  * `crossing` (heartbeat) is a one-shot — it reports only when it wants to fire, and is
  * paced by the cooldown alone.
  */
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+export type EvidenceValue = number | string | boolean | EvidenceValue[] | { [k: string]: EvidenceValue };
+
 export interface DetectorHit {
   symbol: string | null;
   cooldownKey: string;
   severity: Severity;
   headline: string;
-  evidence: Record<string, number | string | boolean>;
+  evidence: Record<string, EvidenceValue>;
   suggestedAction?: SuggestedAction | null;
   crossing?: Crossing;
   /**
@@ -130,7 +133,7 @@ export interface TriggerEvent {
 
   /** One line, rendered verbatim to both the LLM and the user. */
   headline: string;
-  evidence: Record<string, number | string | boolean>;
+  evidence: Record<string, EvidenceValue>;
   /** Which policy version set the threshold that fired this. */
   policyVersion: number;
 
