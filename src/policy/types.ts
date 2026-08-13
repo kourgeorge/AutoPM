@@ -38,6 +38,21 @@ export interface TriggerPolicy {
   maxQuoteAgeMs: number;
 }
 
+/** Per-regime behavioural overrides. Applied deterministically by the guard layer. */
+export interface RegimeOverride {
+  /** Multiplier on positionSizePct (1.0 = no change, 0.5 = half size). */
+  sizeMult: number;
+  /** Minimum RSI required for entry signal to arm. Overrides strategy.rsiEntryMin per regime. */
+  rsiEntryMin: number;
+}
+
+export interface RegimePolicy {
+  expansion: RegimeOverride;
+  recovery: RegimeOverride;
+  late_cycle: RegimeOverride;
+  recession: RegimeOverride;
+}
+
 /** Hard ceilings. Never proposable, always enforced at load. */
 export interface ImmutablePolicy {
   maxPositionsCeiling: number;
@@ -53,6 +68,7 @@ export interface Policy {
   risk: RiskPolicy;
   strategy: StrategyPolicy;
   triggers: TriggerPolicy;
+  regime: RegimePolicy;
   immutable: ImmutablePolicy;
 }
 

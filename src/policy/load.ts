@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { logger } from '../core/logger';
-import type { Policy, PolicyLoadResult, PolicyMeta } from './types';
+import type { Policy, PolicyLoadResult, PolicyMeta, RegimeOverride, RegimePolicy } from './types';
 
 export const POLICY_DIR = path.join(process.cwd(), 'policy');
 export const POLICY_FILE = path.join(POLICY_DIR, 'policy.yaml');
@@ -128,6 +128,30 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     errs.push(`strategy: emaFast (${strategy.emaFast}) must be < emaSlow (${strategy.emaSlow})`);
   }
 
+  // Regime overrides — optional with sensible defaults
+  const DEFAULT_REGIME: RegimePolicy = {
+    expansion:  { sizeMult: 1.0, rsiEntryMin: strategy.rsiEntryMin },
+    recovery:   { sizeMult: 1.0, rsiEntryMin: strategy.rsiEntryMin },
+    late_cycle: { sizeMult: 0.75, rsiEntryMin: Math.min(strategy.rsiEntryMin + 5, 100) },
+    recession:  { sizeMult: 0.5, rsiEntryMin: Math.min(strategy.rsiEntryMin + 10, 100) },
+  };
+
+  const regimeRaw = isRecord(root.regime) ? root.regime : {};
+  const parseOverride = (key: string): RegimeOverride => {
+    const raw = isRecord(regimeRaw[key]) ? regimeRaw[key] as Record<string, unknown> : {};
+    return {
+      sizeMult: typeof raw.sizeMult === 'number' ? raw.sizeMult : (DEFAULT_REGIME as any)[key].sizeMult,
+      rsiEntryMin: typeof raw.rsiEntryMin === 'number' ? raw.rsiEntryMin : (DEFAULT_REGIME as any)[key].rsiEntryMin,
+    };
+  };
+
+  const regime: RegimePolicy = {
+    expansion: parseOverride('expansion'),
+    recovery: parseOverride('recovery'),
+    late_cycle: parseOverride('late_cycle'),
+    recession: parseOverride('recession'),
+  };
+
   const t = block(root, 'triggers', errs);
   const triggers = {
     tickIntervalMs: num(t, 'triggers', 'tickIntervalMs', errs, { int: true, min: immutable.minTickIntervalMs }),
@@ -142,7 +166,7 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     maxQuoteAgeMs: num(t, 'triggers', 'maxQuoteAgeMs', errs, { int: true, min: 0 }),
   };
 
-  return { policy: { version, risk, strategy, triggers, immutable }, errors: errs };
+  return { policy: { version, risk, strategy, triggers, regime, immutable }, errors: errs };
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────────
