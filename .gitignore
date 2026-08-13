@@ -6,4 +6,5 @@ dist/
 .DS_Store
 data/state.json
 data/journal.jsonl
+data/fills.jsonl
 package-lock.json

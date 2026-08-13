@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { config } from '../core/config';
-import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder } from './IBroker';
+import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
 import { BrokerRejection } from './errors';
 
 function makeClient(baseURL: string): AxiosInstance {
@@ -80,6 +80,59 @@ export class AlpacaBroker implements IBroker {
 
   async cancelOrder(id: string): Promise<void> {
     await trading.delete(`/v2/orders/${id}`);
+  }
+
+  /**
+   * FILL activities, oldest-first, following pagination to the end.
+   *
+   * `activity_type=FILL` covers both `fill` and `partial_fill` — Alpaca reports the type
+   * per activity but emits one row per execution either way, so both are fills and both
+   * are kept. Summing `qty` reconstructs the order; `cum_qty` would double-count.
+   *
+   * The page loop is bounded, not `while (true)`: an `after` filter Alpaca interprets
+   * differently than we expect would otherwise spin forever on the same first page.
+   */
+  async getFills(since?: Date): Promise<Fill[]> {
+    const PAGE_SIZE = 100;
+    const MAX_PAGES = 50;
+
+    const fills: Fill[] = [];
+    let pageToken: string | undefined;
+
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const res = await trading.get('/v2/account/activities', {
+        params: {
+          activity_types: 'FILL',
+          direction:      'asc',
+          page_size:      PAGE_SIZE,
+          after:          since?.toISOString(),
+          page_token:     pageToken,
+        },
+      });
+      const rows = res.data as any[];
+      if (rows.length === 0) break;
+
+      for (const a of rows) {
+        fills.push({
+          execId:  a.id,
+          orderId: a.order_id,
+          permId:  null,
+          symbol:  a.symbol,
+          side:    a.side === 'buy' ? 'buy' : 'sell',
+          qty:     parseFloat(a.qty),
+          price:   parseFloat(a.price),
+          // Equity commissions are zero but regulatory fees (SEC, TAF) arrive as separate
+          // FEE activities, so what this fill cost is not knowable from this row.
+          fee:     null,
+          at:      new Date(a.transaction_time).toISOString(),
+        });
+      }
+
+      if (rows.length < PAGE_SIZE) break;
+      pageToken = rows[rows.length - 1].id;
+    }
+
+    return fills;
   }
 
   async isMarketOpen(): Promise<boolean> {

@@ -21,13 +21,23 @@
 import { collectAccount } from '../collect';
 import { isPresent, isUsable } from '../collect/types';
 import { logger } from '../core/logger';
-import { etDate } from '../core/time';
+import { etDate, type MarketSession } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { getState, resetDailyState } from '../state/state';
+import { reconcileFills } from '../review/reconcile';
 import { collectAndCompute } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, type Detector, type TriggerEvent } from './eventBus';
+
+/**
+ * How often to copy the broker's recent fills into the durable ledger.
+ *
+ * Slow relative to `tickIntervalMs` because nothing acts on the result within a session:
+ * the ledger feeds review, not trading. Not in policy.yaml, which holds numbers an operator
+ * tunes to change how the system TRADES — this changes only how often it writes things down.
+ */
+const RECONCILE_INTERVAL_MS = 5 * 60_000;
 
 /** What to do with a tick's events. Injected so the scheduler can run observe-only. */
 export type EventRouter = (events: TriggerEvent[]) => void;
@@ -77,6 +87,8 @@ export class FeatureScheduler {
   private readonly detectors: Detector[];
   private readonly route: EventRouter;
   private readonly policyOf: () => Policy;
+  private lastReconcileAt = 0;
+  private lastSession: MarketSession | null = null;
 
   constructor(opts: SchedulerOptions) {
     this.route = opts.route;
@@ -112,7 +124,29 @@ export class FeatureScheduler {
     const data = await collectAndCompute(policy);
     const events = publishTick(this.detectors, data, policy);
     if (events.length > 0) this.route(events);
+    // After routing, never before: reconciliation feeds review and must not delay a
+    // critical event by the length of a broker call. `reconcileFills` swallows its own
+    // errors, so this cannot cost the tick either.
+    await this.maybeReconcile(data.session);
     return events;
+  }
+
+  /**
+   * Reconcile on a slow cadence, and unconditionally the moment the session leaves `open`.
+   *
+   * The session-close run is the one that matters: IBKR clears its execution list overnight,
+   * so a fill from the final minutes has until roughly midnight to be copied and no second
+   * chance after that. Waiting out a 5-minute timer at exactly that moment is the one time
+   * the cadence is not good enough.
+   */
+  private async maybeReconcile(session: MarketSession): Promise<void> {
+    const closing = this.lastSession === 'open' && session !== 'open';
+    this.lastSession = session;
+
+    if (!closing && Date.now() - this.lastReconcileAt < RECONCILE_INTERVAL_MS) return;
+    this.lastReconcileAt = Date.now();
+    if (closing) logger.info('[Scheduler] Session closed — reconciling fills');
+    await reconcileFills();
   }
 
   private async runTick(): Promise<void> {

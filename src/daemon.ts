@@ -5,6 +5,7 @@ import { ConciergeAgent } from './agents/concierge';
 import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
+import { reconcileOnStartup } from './review/reconcile';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -28,6 +29,11 @@ const scheduler = new FeatureScheduler({
   }),
 });
 scheduler.start();
+
+// Not awaited, and deliberately not blocking the scheduler: this reaches back a month to
+// catch fills that landed while the daemon was down, and a slow or unreachable broker at
+// boot must delay reviewing yesterday, not trading today.
+void reconcileOnStartup();
 
 trader.start().catch((err) => {
   logger.error('Trader fatal error', err.message ?? err);

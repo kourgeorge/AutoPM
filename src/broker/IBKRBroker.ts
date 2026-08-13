@@ -2,10 +2,78 @@ import { IBApiNext } from '@stoqey/ib';
 import { firstValueFrom } from 'rxjs';
 import { config } from '../core/config';
 import { etNow } from '../core/time';
-import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder } from './IBroker';
+import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
 import { BrokerRejection } from './errors';
+import { logger } from '../core/logger';
 
 const API_TIMEOUT_MS = 10_000;
+
+/**
+ * What UTC instant a wall-clock reading in `timeZone` corresponds to.
+ *
+ * Two passes: the first offset is measured at the wrong instant (we guessed UTC), which is
+ * only wrong across a DST boundary — the second pass, measured at the corrected instant,
+ * lands on the right side of it.
+ */
+function zonedToUtc(parts: number[], timeZone: string): number {
+  const [y, mo, d, h, mi, s] = parts;
+  const naive = Date.UTC(y, mo - 1, d, h, mi, s);
+
+  let guess = naive;
+  for (let pass = 0; pass < 2; pass++) {
+    const seen = new Intl.DateTimeFormat('en-US', {
+      timeZone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(new Date(guess));
+
+    const f = (type: string) => parseInt(seen.find(p => p.type === type)!.value, 10);
+    // `hour12: false` renders midnight as hour 24 in some ICU versions.
+    const asUtc = Date.UTC(f('year'), f('month') - 1, f('day'), f('hour') % 24, f('minute'), f('second'));
+    guess = naive - (asUtc - guess);
+  }
+  return guess;
+}
+
+/**
+ * TWS execution timestamps, in the three shapes the API has used.
+ *
+ * The stakes are silent rather than loud: an unparsed or mis-zoned timestamp does not
+ * throw, it produces a holding period wrong by hours, which then reads as a strategy
+ * finding. So an unrecognised shape is logged and reported as unknown rather than guessed.
+ *
+ * - `1755106176`                        — epoch seconds (TWS 10.2+ for some fields)
+ * - `20260813  15:29:36 US/Eastern`     — wall clock plus IANA zone (v10.10+)
+ * - `20260813  15:29:36`                — wall clock in the account's DISPLAY timezone,
+ *                                         which this process has no way to know; the local
+ *                                         zone is the only available reading of it.
+ */
+function parseIbTime(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const t = raw.trim();
+
+  if (/^\d{9,11}$/.test(t)) return new Date(parseInt(t, 10) * 1000).toISOString();
+
+  const m = /^(\d{4})(\d{2})(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})(?:\s+(\S+))?$/.exec(t);
+  if (!m) {
+    logger.warn(`[IBKR] Unrecognised execution timestamp "${raw}" — fill time recorded as unknown`);
+    return null;
+  }
+
+  const parts = m.slice(1, 7).map(Number);
+  const zone = m[7];
+
+  if (zone) {
+    try {
+      return new Date(zonedToUtc(parts, zone)).toISOString();
+    } catch {
+      logger.warn(`[IBKR] Unknown timezone "${zone}" in execution timestamp "${raw}" — falling back to local time`);
+    }
+  }
+
+  const [y, mo, d, h, mi, s] = parts;
+  return new Date(y, mo - 1, d, h, mi, s).toISOString();
+}
 
 function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
   return Promise.race([
@@ -122,6 +190,62 @@ export class IBKRBroker implements IBroker {
 
   async cancelOrder(id: string): Promise<void> {
     this.api.cancelOrder(parseInt(id, 10));
+  }
+
+  /**
+   * Executions TWS still holds, which is the CURRENT TRADING DAY ONLY.
+   *
+   * That is the reason `data/fills.jsonl` exists. This method is a tap on a window that
+   * closes every evening, not a history endpoint, and `since` is therefore ignored: the
+   * filter takes `yyyymmdd hh:mm:ss` in the account's display timezone, so passing a
+   * boundary we cannot express correctly could silently drop fills inside the window —
+   * whereas over-fetching the whole day costs one call and is deduped by the ledger.
+   *
+   * Commissions arrive on a separate stream keyed by `execId` and are the only place the
+   * fee is stated; a missing report leaves `fee` null rather than zero.
+   */
+  async getFills(_since?: Date): Promise<Fill[]> {
+    const filter = this.account ? { acctCode: this.account } : {};
+
+    const [details, commissions] = await Promise.all([
+      withTimeout(this.api.getExecutionDetails(filter), 'getExecutionDetails'),
+      // Fees are a nice-to-have; a fill with an unknown fee is still a fill, and losing
+      // the whole reconciliation because the commission stream stalled would be worse.
+      withTimeout(this.api.getCommissionReport(filter), 'getCommissionReport')
+        .catch((err: any) => {
+          logger.warn(`[IBKR] Commission report unavailable — fees recorded as unknown: ${err?.error?.message ?? err.message}`);
+          return [];
+        }),
+    ]);
+
+    const feeByExecId = new Map<string, number>();
+    for (const c of commissions) {
+      if (c.execId != null && c.commission != null) feeByExecId.set(c.execId, c.commission);
+    }
+
+    const ingestedAt = new Date().toISOString();
+
+    return details
+      .filter(d => d.execution.execId != null)
+      .map(({ contract, execution: e }) => {
+        const side = (e.side ?? '').toUpperCase();
+        return {
+          execId:  e.execId!,
+          // Non-durable across client sessions, which is why `permId` is carried too.
+          orderId: e.orderId != null ? String(e.orderId) : '',
+          // 0 means the trade originated outside IB and has no TWS id.
+          permId:  e.permId ? String(e.permId) : null,
+          symbol:  contract.symbol ?? '',
+          side:    (side === 'BOT' || side === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell',
+          qty:     e.shares ?? 0,
+          price:   e.price ?? 0,
+          fee:     feeByExecId.get(e.execId!) ?? null,
+          // Ingest time on a parse failure, not a dropped fill: a fill missing from the
+          // ledger corrupts every FIFO match after it, while a wrong timestamp only
+          // corrupts the holding period of one — and `parseIbTime` has already warned.
+          at:      parseIbTime(e.time) ?? ingestedAt,
+        };
+      });
   }
 
   /** US market hours only; does not account for early closes. */

@@ -25,6 +25,7 @@ import {
   removePositionSnapshot,
 } from '../state/state';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
+import { scorecard } from '../review/metrics';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
 import { logger } from '../core/logger';
@@ -50,7 +51,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_entry',
-    description: 'Place a bracket buy order. Risk rules (max positions, buying power, daily loss limit) are enforced and return an error if violated.',
+    description: 'Buy at market. The stop and target are recorded as YOUR baselines and watched by this system, not sent to the venue as bracket legs — nothing exits the position but an execute_exit call. Risk rules (max positions, buying power, daily loss limit) are enforced and return an error if violated. The filled qty may be smaller than requested if the macro regime caps it; the result reports what was actually bought.',
     input_schema: {
       type: 'object',
       properties: {
@@ -109,6 +110,18 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         symbol: { type: 'string', description: 'Optional — filter to one symbol.' },
         limit: { type: 'integer', description: 'Most recent N records (default 20).', minimum: 1, maximum: 200 },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_scorecard',
+    description: 'Measured performance over COMPLETED round trips, computed from venue fills joined to the journal — win rate, expectancy in dollars, percent and R multiples, hold times split by winners and losers, drawdown, stop discipline, and breakdowns by symbol and policy version. Every number is arithmetic, not an estimate; never state your win rate, expectancy or stop-respect rate without calling this. Read `caveats` first — it states what the sample cannot support. Open positions are excluded, because half a trade has no outcome.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Optional — one symbol only.' },
+        days: { type: 'integer', description: 'Optional lookback on EXIT date. Omit for all history.', minimum: 1, maximum: 3650 },
       },
       required: [],
     },
@@ -195,6 +208,7 @@ export async function executeTraderTool(
       case 'get_pending_events':  return toolGetPendingEvents();
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
+      case 'get_scorecard':       return toolGetScorecard(input);
       case 'sleep':               return JSON.stringify({ ok: true, nextCycleIn: `${input.minutes} min` });
       default:
         if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
@@ -466,9 +480,12 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
 
   // Every risk rule now lives inside `enterPosition`, below this tool, where no caller
   // can skip it.
+  // `filledQty`, not `qty`: the guard's regime sizing can cut the request, and journalling
+  // the number the model asked for would record a position that was never opened.
   let orderId: string;
+  let filledQty: number;
   try {
-    ({ orderId } = await enterPosition(signal, qty));
+    ({ orderId, qty: filledQty } = await enterPosition(signal, qty));
   } catch (err) {
     const refusal = journalRefusal(err, {
       symbol,
@@ -491,7 +508,7 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
     rationale: reason,
     triggerEventId,
     executed: true,
-    qty,
+    qty: filledQty,
     price,
     intendedStop: stopLoss,
     intendedTarget: takeProfit,
@@ -510,7 +527,10 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
     entryDecisionId: record.id,
   });
 
-  return JSON.stringify({ ok: true, symbol, qty, price, stopLoss, takeProfit, decisionId: record.id });
+  return JSON.stringify({
+    ok: true, symbol, qty: filledQty, requestedQty: qty,
+    price, stopLoss, takeProfit, decisionId: record.id,
+  });
 }
 
 /**
@@ -626,4 +646,15 @@ function toolGetJournal(input: Record<string, unknown>): string {
   const limit = (input.limit as number | undefined) ?? 20;
   const records = readDecisions({ symbol, limit });
   return JSON.stringify({ count: records.length, decisions: records });
+}
+
+/**
+ * Reads only. No network: both inputs are local append-only files, so this costs nothing
+ * and can be called mid-cycle without a market-data budget.
+ */
+function toolGetScorecard(input: Record<string, unknown>): string {
+  return JSON.stringify(scorecard({
+    symbol: input.symbol as string | undefined,
+    days: input.days as number | undefined,
+  }));
 }

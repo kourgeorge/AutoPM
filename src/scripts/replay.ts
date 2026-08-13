@@ -45,6 +45,7 @@ import {
   useEphemeralJournal,
 } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
+import { useEphemeralFillsLedger } from '../review/fillsLedger';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
@@ -66,6 +67,10 @@ const SOURCE: SourceId = 'alpaca';
  * and the only defence is that it is impossible to reach a scenario without passing here.
  */
 useEphemeralJournal();
+// Nothing here reconciles fills yet. It is here for the moment something does — a scenario
+// that reaches `tickOnce` would otherwise splice synthetic executions into the operator's
+// real ledger, and the FIFO matcher would report round trips that never happened.
+useEphemeralFillsLedger();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

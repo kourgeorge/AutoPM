@@ -38,10 +38,16 @@ function reject(rule: string, message: string): never {
   throw new GuardRejection(rule, message);
 }
 
+/**
+ * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
+ * that was asked for: `applyRegimeSizing` may cut it. The caller journals what it is
+ * given, so returning the requested number here would record a position size that never
+ * existed.
+ */
 export async function enterPosition(
   signal: SignalResult,
   qty: number,
-): Promise<{ orderId: string }> {
+): Promise<{ orderId: string; qty: number }> {
   const { symbol, price, stopLoss, takeProfit, atr } = signal;
 
   // Local and free, so first: a NaN qty must be reported as a malformed intent, not as
@@ -92,7 +98,7 @@ export async function enterPosition(
   logger.trade(`Entering ${symbol}: qty=${regimeQty} @ ~$${price.toFixed(2)}, SL=$${stopLoss.toFixed(2)}, TP=$${takeProfit.toFixed(2)}`);
   const { id } = await broker.placeOrder({ symbol, side: 'buy', qty: regimeQty, type: 'market' });
   logger.trade(`Order ${id} submitted for ${symbol}`);
-  return { orderId: id };
+  return { orderId: id, qty: regimeQty };
 }
 
 /**
