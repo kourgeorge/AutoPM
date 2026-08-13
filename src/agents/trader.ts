@@ -157,7 +157,7 @@ export class Trader {
             const minutes = (block.input.minutes as number) ?? 10;
             scheduledSleepMs = minutes * 60_000;
             sleepCalled = true;
-            logger.info(`[Orchestrator] Next cycle in ${minutes} min — ${block.input.reason}`);
+            logger.info(`[Trader] Next cycle in ${minutes} min — ${block.input.reason}`);
             results.push({
               type: 'tool_result',
               tool_use_id: block.id,
