@@ -12,6 +12,7 @@
  */
 
 import * as blessed from 'blessed';
+import { InputEditor } from './inputEditor';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ const LEVEL_LABEL: Record<string, string> = {
 class TerminalUI {
   private screen: blessed.Widgets.Screen;
   private logBox: blessed.Widgets.Log;
-  private inputBox: blessed.Widgets.TextboxElement;
+  private input: InputEditor;
   private statusBar: blessed.Widgets.BoxElement;
   private onSubmit?: (line: string) => void;
 
@@ -84,12 +85,12 @@ class TerminalUI {
       height: 1,
       style: { bg: 'blue', fg: 'white' },
       tags: true,
-      content: ' {bold}AutoTrade{/}  |  Type a message and press Enter  |  Tab/Esc → input  |  Ctrl+C to quit',
+      content: ' {bold}AutoTrade{/}  |  Enter send  |  ←/→ ⌥←/→ edit  |  ↑/↓ history  |  Esc clear  |  PgUp/PgDn scroll  |  Ctrl+C quit',
       padding: { left: 1 },
     });
 
     // ── Input area ────────────────────────────────────────────────────────────
-    this.inputBox = blessed.textbox({
+    this.input = new InputEditor({
       parent: this.screen,
       bottom: 0,
       left: 0,
@@ -99,39 +100,28 @@ class TerminalUI {
       style: {
         border: { fg: 'blue' },
         focus: { border: { fg: 'cyan' } },
+        label: { fg: 'cyan' },
       },
-      label: ' {cyan-fg}Operator{/} ',
-      tags: true,
-      inputOnFocus: true,
-      keys: true,
+      label: ' Operator ',
       padding: { left: 1 },
     });
 
     // ── Key bindings ─────────────────────────────────────────────────────────
     this.screen.key(['C-c'], () => process.exit(0));
 
-    // Re-focus input from anywhere (Tab or Escape returns to the prompt)
-    this.screen.key(['tab', 'escape'], () => {
-      this.inputBox.focus();
-      this.screen.render();
-    });
+    // Tab returns focus to the prompt from anywhere (e.g. after log scrolling)
+    this.screen.key('tab', () => this.input.focus());
 
-    this.inputBox.key('enter', () => {
-      const value = (this.inputBox.getValue() as string).trim();
-      if (value) {
-        this.appendUserMessage(value);
-        this.onSubmit?.(value);
-      }
-      this.inputBox.clearValue();
-      this.inputBox.focus();
-      this.screen.render();
+    this.input.onSubmit((line) => {
+      this.appendUserMessage(line);
+      this.onSubmit?.(line);
     });
 
     // Scroll log with Page Up/Down even when input is focused
-    this.inputBox.key('pageup',   () => { this.logBox.scroll(-this.logBox.height as number); this.screen.render(); });
-    this.inputBox.key('pagedown', () => { this.logBox.scroll(this.logBox.height as number);  this.screen.render(); });
+    this.input.el.key('pageup',   () => { this.logBox.scroll(-this.logBox.height as number); this.screen.render(); });
+    this.input.el.key('pagedown', () => { this.logBox.scroll(this.logBox.height as number);  this.screen.render(); });
 
-    this.inputBox.focus();
+    this.input.focus();
     this.screen.render();
   }
 
@@ -142,9 +132,12 @@ class TerminalUI {
   }
 
   log(level: 'INFO' | 'WARN' | 'ERROR' | 'TRADE' | 'TOOL', msg: string): void {
-    const ts   = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+    const ts    = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
     const label = LEVEL_LABEL[level] ?? level;
-    this.logBox.log(`{gray-fg}${ts}{/}  ${label}  ${this.escape(msg)}`);
+    const line  = level === 'TRADE'
+      ? `{gray-fg}${ts}{/}  ${label}  {bold}{green-fg}${this.escape(msg)}{/}`
+      : `{gray-fg}${ts}{/}  ${label}  ${this.escape(msg)}`;
+    this.logBox.log(line);
     this.screen.render();
   }
 
@@ -166,8 +159,9 @@ class TerminalUI {
     this.screen.render();
   }
 
+
   setStatus(text: string): void {
-    this.statusBar.setContent(` {bold}AutoTrade{/}  |  ${text}  |  PgUp/PgDn scroll  |  Tab/Esc → input  |  Ctrl+C quit`);
+    this.statusBar.setContent(` {bold}AutoTrade{/}  |  ${text}  |  ↑/↓ history  |  PgUp/PgDn scroll  |  Ctrl+C quit`);
     this.screen.render();
   }
 
