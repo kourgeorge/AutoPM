@@ -38,6 +38,19 @@ export const isUsable = <T>(m: Maybe<T>): m is Observation<T> => isPresent(m) &&
  */
 export const DEFAULT_MAX_AGE_MS = 90_000;
 
+/**
+ * How far into the future an `asOf` may sit before we stop believing it.
+ *
+ * Exchange timestamps are stamped against the exchange's clock, so on a machine whose
+ * own clock lags — NTP drift of a few seconds is routine, and unremarkable enough that
+ * nothing else notices — the freshest possible quote arrives dated in the future. Read
+ * as an age that is a negative number, which is precisely the opposite of stale.
+ *
+ * The tolerance is generous because the direction is the safe one: a future `asOf`
+ * cannot describe old data. Beyond it, the timestamp is not drift but nonsense.
+ */
+export const MAX_CLOCK_SKEW_MS = 30_000;
+
 export function observe<T>(
   value: T,
   source: SourceId,
@@ -52,7 +65,8 @@ export function observe<T>(
     asOf,
     fetchedAt,
     // NaN age (unparseable asOf) counts as stale — an unknown age is not a fresh one.
-    stale: !(ageMs >= 0) || ageMs > maxAgeMs,
+    // Kept distinct from a negative age: that one is clock skew, not a dead feed.
+    stale: Number.isNaN(ageMs) || ageMs < -MAX_CLOCK_SKEW_MS || ageMs > maxAgeMs,
   };
 }
 
