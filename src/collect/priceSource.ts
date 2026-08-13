@@ -39,6 +39,52 @@ function effectiveAsOf(dataAsOf: string): string {
 const ALPACA_SOURCE = 'alpaca' as const;
 const YAHOO_SOURCE  = 'yahoo'  as const;
 
+/** A price and the timestamp that price itself carries. The pair never splits. */
+interface Candidate {
+  price: number;
+  asOf: string;
+}
+
+function tradeCandidate(snap: any): Candidate | null {
+  const price = snap?.latestTrade?.p;
+  const asOf = snap?.latestTrade?.t;
+  return typeof price === 'number' && Number.isFinite(price) && typeof asOf === 'string'
+    ? { price, asOf }
+    : null;
+}
+
+function quoteCandidate(snap: any): Candidate | null {
+  const q = snap?.latestQuote;
+  if (q?.ap == null || q?.bp == null || typeof q?.t !== 'string') return null;
+  const mid = (q.ap + q.bp) / 2;
+  return Number.isFinite(mid) && mid > 0 ? { price: mid, asOf: q.t } : null;
+}
+
+/** Unparseable timestamps sort oldest, so they lose to anything readable. */
+function stamp(c: Candidate): number {
+  const t = Date.parse(toMs(c.asOf));
+  return Number.isNaN(t) ? -Infinity : t;
+}
+
+/**
+ * Whichever candidate is newer.
+ *
+ * On IEX the last *trade* is the sparse half: a liquid name can go minutes between
+ * prints at midday — AMD's entire IEX session is a few thousand prints on ~2% of
+ * consolidated volume — while its quote keeps updating every second. Preferring the
+ * trade unconditionally therefore stamped a usable price with a minutes-old timestamp,
+ * and `observe()` read that as a dead feed: one `data_stale` warn per quiet symbol,
+ * for a feed that was answering fine.
+ *
+ * Price and `asOf` travel together by construction. Stamping a trade price with the
+ * quote's clock would leave the freshness gate measuring an age its value never had.
+ */
+function freshest(a: Candidate | null, b: Candidate | null): Candidate | null {
+  if (!a) return b;
+  if (!b) return a;
+  return stamp(b) > stamp(a) ? b : a;
+}
+
 const alpacaData = axios.create({
   baseURL: config.alpaca.dataUrl,
   headers: {
@@ -61,18 +107,10 @@ async function fetchAlpacaSnapshots(
 
   const out = new Map<string, { price: number; asOf: string }>();
   for (const [symbol, snap] of Object.entries(res.data ?? {})) {
-    // Prefer latest trade price; fall back to mid of latest quote bid/ask.
-    const price: number | undefined =
-      snap?.latestTrade?.p ??
-      (snap?.latestQuote?.ap != null && snap?.latestQuote?.bp != null
-        ? (snap.latestQuote.ap + snap.latestQuote.bp) / 2
-        : undefined);
-
-    const asOf: string | undefined =
-      snap?.latestTrade?.t ?? snap?.latestQuote?.t;
-
-    if (typeof price === 'number' && Number.isFinite(price) && asOf) {
-      out.set(symbol, { price, asOf: effectiveAsOf(asOf) });
+    // Last print, or the mid of the current bid/ask — whichever is more recent.
+    const pick = freshest(tradeCandidate(snap), quoteCandidate(snap));
+    if (pick) {
+      out.set(symbol, { price: pick.price, asOf: effectiveAsOf(pick.asOf) });
     }
   }
   return out;
