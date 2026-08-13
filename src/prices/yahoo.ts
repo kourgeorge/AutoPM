@@ -3,7 +3,7 @@ import { Bar } from '../core/types';
 // yahoo-finance2 v4 requires instantiation
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const YahooFinance = require('yahoo-finance2').default;
-const yf = new YahooFinance({ suppressNotices: ['ripHistorical'] });
+const yf = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
 export interface RawQuote {
   price: number;
@@ -16,7 +16,10 @@ export interface RawQuote {
  * Use this from `src/collect/` where the error must be preserved as provenance.
  */
 export async function getQuoteRaw(symbol: string): Promise<RawQuote> {
-  const quote = await yf.quote(symbol) as any;
+  // validateResult:false — Yahoo's response shape drifts per symbol; a schema
+  // miss otherwise logs a wall of text and throws even when the price is fine.
+  // The checks below are the real validation.
+  const quote = await yf.quote(symbol, {}, { validateResult: false }) as any;
   const price = quote?.regularMarketPrice ?? quote?.postMarketPrice ?? quote?.preMarketPrice;
   if (typeof price !== 'number' || !Number.isFinite(price)) {
     throw new Error(`${symbol}: no usable price in quote response`);
@@ -100,7 +103,7 @@ export async function getBarsRaw(
     period1: period1.toISOString().split('T')[0],
     period2: period2.toISOString().split('T')[0],
     interval,
-  }) as any;
+  }, { validateResult: false }) as any;
 
   const quotes: any[] = result?.quotes ?? [];
   const bars = quotes
