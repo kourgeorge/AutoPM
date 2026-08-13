@@ -1,6 +1,6 @@
-version: 4
+version: 3
 risk:
-  maxPositions: 6
+  maxPositions: 5
   positionSizePct: 0.05
   stopLossAtrMult: 2
   takeProfitAtrMult: 6
