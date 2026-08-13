@@ -11,6 +11,9 @@ import { broker } from '../broker';
 import { logger } from '../core/logger';
 import { getState } from '../state/state';
 import { SignalResult } from '../core/types';
+import { getPolicy } from '../policy/load';
+import { getRegime } from '../macro/regime';
+import type { Regime } from '../macro/regime';
 import {
   hasEnoughBuyingPower,
   isAtMaxPositions,
@@ -76,14 +79,41 @@ export async function enterPosition(
   if (positions.some((p) => p.symbol === symbol)) {
     reject('already_holding', `Already holding ${symbol} — exit first, or size the original entry correctly`);
   }
+
   if (!hasEnoughBuyingPower(account, signal, qty)) {
     reject('insufficient_buying_power', `Insufficient buying power for ${qty} × $${price} (have $${account.buyingPower.toFixed(2)})`);
   }
 
-  logger.trade(`Entering ${symbol}: qty=${qty} @ ~$${price.toFixed(2)}, SL=$${stopLoss.toFixed(2)}, TP=$${takeProfit.toFixed(2)}`);
-  const { id } = await broker.placeOrder({ symbol, side: 'buy', qty, type: 'market' });
+  // Regime enforcement: cap qty by regime sizeMult (Ang et al. 2026 pattern).
+  // The trader LLM calculates qty at full size; the guard applies the regime multiplier
+  // so late_cycle/recession positions are automatically smaller.
+  const regimeQty = await applyRegimeSizing(qty);
+
+  logger.trade(`Entering ${symbol}: qty=${regimeQty} @ ~$${price.toFixed(2)}, SL=$${stopLoss.toFixed(2)}, TP=$${takeProfit.toFixed(2)}`);
+  const { id } = await broker.placeOrder({ symbol, side: 'buy', qty: regimeQty, type: 'market' });
   logger.trade(`Order ${id} submitted for ${symbol}`);
   return { orderId: id };
+}
+
+/**
+ * Apply regime-based position sizing. Reduces qty in late_cycle/recession.
+ * Never increases qty (multiplier capped at 1.0). Fails open (returns original qty if regime unavailable).
+ */
+async function applyRegimeSizing(qty: number): Promise<number> {
+  try {
+    const regime = await getRegime();
+    const policy = getPolicy();
+    const override = policy.regime[regime.regime];
+    const mult = Math.min(override.sizeMult, 1.0); // never increase
+    const adjusted = Math.floor(qty * mult);
+    if (adjusted < qty) {
+      logger.info(`[Guard] Regime ${regime.regime} — size reduced from ${qty} to ${adjusted} (×${mult})`);
+    }
+    return Math.max(adjusted, 1); // at least 1 share
+  } catch {
+    // Fail open: if regime fetch fails, use original qty
+    return qty;
+  }
 }
 
 export async function exitPosition(
