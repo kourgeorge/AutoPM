@@ -14,3 +14,6 @@ package-lock.json
 # ts-node resolves against rootDir; kept out of git because each one answers a
 # single question about live data and is worthless the day after.
 tmp/
+
+data/policy/
+policy/history/

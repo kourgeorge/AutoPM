@@ -1,7 +1,7 @@
-version: 2
+version: 6
 risk:
-  maxPositions: 5
-  positionSizePct: 0.05
+  maxPositions: 10
+  positionSizePct: 0.1
   stopLossAtrMult: 2
   takeProfitAtrMult: 6
   maxDailyLossPct: 0.03
@@ -23,6 +23,8 @@ strategy:
     - SQ
     - COIN
     - SPCX
+    - ORCL
+    - MBIS
   emaFast: 9
   emaSlow: 21
   rsiPeriod: 14
@@ -31,10 +33,18 @@ strategy:
   atrPeriod: 14
   minBars: 50
 regime:
-  expansion:   { sizeMult: 1.0,  rsiEntryMin: 50 }
-  recovery:    { sizeMult: 1.0,  rsiEntryMin: 50 }
-  late_cycle:  { sizeMult: 0.75, rsiEntryMin: 55 }
-  recession:   { sizeMult: 0.5,  rsiEntryMin: 60 }
+  expansion:
+    sizeMult: 1
+    rsiEntryMin: 50
+  recovery:
+    sizeMult: 1
+    rsiEntryMin: 50
+  late_cycle:
+    sizeMult: 0.75
+    rsiEntryMin: 55
+  recession:
+    sizeMult: 0.5
+    rsiEntryMin: 60
 triggers:
   tickIntervalMs: 60000
   positionDropPct: 2

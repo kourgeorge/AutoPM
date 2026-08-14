@@ -1,8 +1,13 @@
 /**
  * L0 — the policy loader.
  *
- * Parses policy/policy.yaml, validates it against its own `immutable` ceilings,
+ * Parses data/policy/policy.yaml, validates it against its own `immutable` ceilings,
  * hashes the raw text, and holds it in memory. Edits are hot-reloaded.
+ *
+ * The project ships a read-only default at policy/default.yaml. On first run,
+ * if no live policy exists yet, it is copied to data/policy/policy.yaml. All
+ * subsequent reads and writes go through data/policy/ — which is gitignored so
+ * user edits and version history are never committed.
  *
  * Failure semantics differ deliberately by phase:
  *  - the FIRST load throws. There is nothing to fall back to, so a broken policy
@@ -18,10 +23,23 @@ import { load as parseYaml } from 'js-yaml';
 import { logger } from '../core/logger';
 import type { Policy, PolicyLoadResult, PolicyMeta, RegimeOverride, RegimePolicy } from './types';
 
-export const POLICY_DIR = path.join(process.cwd(), 'policy');
-export const POLICY_FILE = path.join(POLICY_DIR, 'policy.yaml');
-export const TEMPLATE_FILE = path.join(POLICY_DIR, 'POLICY.md');
-export const HISTORY_DIR = path.join(POLICY_DIR, 'history');
+/** Read-only default shipped with the project source. */
+export const DEFAULT_POLICY_FILE = path.join(process.cwd(), 'policy', 'default.yaml');
+export const TEMPLATE_FILE = path.join(process.cwd(), 'policy', 'POLICY.md');
+
+/** Live (user-managed) policy and its history — gitignored data directory. */
+export const DATA_POLICY_DIR = path.join(process.cwd(), 'data', 'policy');
+export const POLICY_FILE = path.join(DATA_POLICY_DIR, 'policy.yaml');
+export const HISTORY_DIR = path.join(DATA_POLICY_DIR, 'history');
+
+/** Ensure data/policy/policy.yaml exists, seeding from the project default if not. */
+function ensureLivePolicy(): void {
+  if (!fs.existsSync(POLICY_FILE)) {
+    fs.mkdirSync(DATA_POLICY_DIR, { recursive: true });
+    fs.copyFileSync(DEFAULT_POLICY_FILE, POLICY_FILE);
+    logger.info(`[Policy] Seeded data/policy/policy.yaml from policy/default.yaml`);
+  }
+}
 
 let _policy: Policy | null = null;
 let _meta: PolicyMeta | null = null;
@@ -197,6 +215,7 @@ export function parsePolicy(text: string, source = POLICY_FILE): PolicyLoadResul
 
 /** First load. Throws — there is no previous policy to keep. */
 export function loadPolicy(): Policy {
+  ensureLivePolicy();
   const text = fs.readFileSync(POLICY_FILE, 'utf8');
   const result = parsePolicy(text);
   if (!result.ok) {
