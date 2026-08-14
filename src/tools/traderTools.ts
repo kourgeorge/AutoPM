@@ -115,7 +115,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
           enum: ['acting', 'acknowledged', 'ignoring'],
           description: 'acting = you are placing an order about it now; acknowledged = seen, no action needed; ignoring = deliberately declining to act.',
         },
-        note: { type: 'string', description: 'One sentence: why this disposition.' },
+        note: { type: 'string', description: 'One sentence: why this disposition. Required when disposition is "ignoring". For "acknowledged": supply a note only when you have reasoning worth preserving across cycles — e.g. why you are holding despite a warning. Omit for routine feed events on symbols you do not hold; those produce no journal entry.' },
       },
       required: ['id', 'disposition'],
     },
@@ -767,14 +767,25 @@ function toolAckEvent(input: Record<string, unknown>): string {
   }
 
   // `acting` writes nothing: the entry or exit that follows records the same
-  // `triggerEventId`, and journalling here too would count one decision twice. The other
-  // two dispositions ARE the decision — a deliberate choice not to act, which is the
-  // hardest thing to reconstruct later and the easiest to lose.
-  if (disposition !== 'acting') {
+  // `triggerEventId`, and journalling here too would count one decision twice.
+  //
+  // `ignoring` always writes — skipping a signal or overriding a stop is a consequential
+  // non-action and must survive cycle boundaries.
+  //
+  // `acknowledged` only writes when the trader supplied a note. No note means "nothing to
+  // preserve" — the event was seen and required no reasoning. The typical case is
+  // data_stale on a symbol with no position: recording it produces a hold entry whose only
+  // content is "no position, no action needed", which tells no future cycle anything it
+  // could not derive for itself and crowds out the decisions that matter.
+  const shouldJournal =
+    disposition === 'ignoring' ||
+    (disposition === 'acknowledged' && note != null && note.trim() !== '');
+
+  if (shouldJournal) {
     recordDecision(decision('hold', 'trader', {
       symbol,
       triggerEventId: id,
-      rationale: note ?? `event ${disposition} with no note`,
+      rationale: note!,
     }));
   }
 
