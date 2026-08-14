@@ -712,24 +712,32 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
 
   // `exitPosition` throws `no_position` when there is nothing to sell, so reaching here
   // means the position existed and the order was accepted.
-  const pos = held!;
-  const exitPrice = (pos.marketValue ?? pos.avgCost * pos.qty) / pos.qty;
+  //
+  // `held` was read before the sell and is the best source for qty, P&L and exit price.
+  // In the rare race where a fill beat the pre-read (position already gone from the
+  // broker's book), fall back to the snapshot for qty and mark price/pnl as unknown —
+  // the record still lands and the snapshot is still removed.
+  const qty       = held?.qty ?? null;
+  const pnl       = held?.unrealizedPnL ?? null;
+  const exitPrice = held
+    ? (held.marketValue ?? held.avgCost * held.qty) / held.qty
+    : null;
 
   const record = recordDecision(decision('exit', 'trader', {
     symbol,
     rationale: reason,
     triggerEventId,
     executed: true,
-    qty: pos.qty,
+    qty,
     price: exitPrice,
-    pnl: pos.unrealizedPnL ?? null,
+    pnl,
     orderId,
   }));
   removePositionSnapshot(symbol);
 
   return JSON.stringify({
-    ok: true, symbol, qty: pos.qty, price: exitPrice,
-    pnl: pos.unrealizedPnL, reason, decisionId: record.id,
+    ok: true, symbol, qty, price: exitPrice,
+    pnl, reason, decisionId: record.id,
   });
 }
 
