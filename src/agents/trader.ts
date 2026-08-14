@@ -7,7 +7,7 @@ import { getState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
-import { exposure, type Exposure } from '../strategy/exposure';
+import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
 import type { PositionSnapshot } from '../state/state';
 import { ui } from '../ui/ui';
 import {
@@ -226,7 +226,7 @@ function signed(pct: number): string {
 }
 
 /**
- * The book, as measured.
+ * The book, as measured. VENUE-FIRST.
  *
  * Three things the model cannot otherwise obtain, and each was previously ASKED for by the
  * prompt without being supplied:
@@ -235,17 +235,25 @@ function signed(pct: number): string {
  *    rather than about the P&L — resolved through `entryDecisionId`, never reconstructed;
  *  - MFE/MAE, because "+0.4% now, +6.1% at best" and "+0.4% and never higher" are different
  *    decisions that used to render identically.
+ *
+ * The row set is driven by the VENUE, with `state.positionSnapshots` joined in — not the
+ * other way round. This used to iterate the snapshot map behind an `entries.length === 0`
+ * early return, which meant an empty or unrecognised snapshot map rendered NOTHING: measured
+ * against a live account holding six positions and 29.5% of equity, the whole block vanished,
+ * taking the "held at the venue with nothing recorded here" warning with it. A fresh install,
+ * a new account, or a state file the operator moved aside is exactly the case where the model
+ * most needs to be told what it is holding, and silence reads as flat.
+ *
+ * So the venue can never be invisible, and the two silences are kept distinct: an empty book
+ * that exposure CONFIRMED renders nothing, while a book nobody could read says so.
  */
 async function buildPortfolioContext(
   snapshots: Record<string, PositionSnapshot>,
 ): Promise<string> {
-  const entries = Object.values(snapshots);
-  if (entries.length === 0) return '';
-
-  const lines = ['=== PORTFOLIO CONTEXT ==='];
-
-  // Exposure is a live read and may fail. A context builder must never take down a cycle:
-  // on a throw the block renders without the measured columns and says so.
+  // Read before the empty check, not after: what the venue holds is the question, and the
+  // snapshot map is only this system's memory of it. Costs one read on a flat book.
+  // A live read may fail, and a context builder must never take down a cycle — on a throw
+  // the block renders without the measured columns and says so.
   let exp: Exposure | null = null;
   let exposureError: string | null = null;
   try {
@@ -254,11 +262,43 @@ async function buildPortfolioContext(
     exposureError = err.message;
     logger.warn(`[Trader] Exposure unavailable for cycle context: ${err.message}`);
   }
+
   // Joined on a normalized symbol: the snapshot is keyed as the order was placed (`BTC/USD`)
   // while the venue reports `BTCUSD`, and an unjoined row silently renders as "sector unknown"
   // for a position whose sector is known one line further down.
-  const bySymbol = new Map(exp?.positions.map(p => [normalizeSymbol(p.symbol), p]) ?? []);
-  const matched = new Set<string>();
+  const snapByKey = new Map(
+    Object.values(snapshots).map(s => [normalizeSymbol(s.symbol), s] as const),
+  );
+
+  // Venue positions first, then any snapshot the venue did not confirm. A row with no
+  // snapshot is a holding this system has no baselines for; a row with no venue position is
+  // a leftover. Both have to be visible, and neither may be inferred into the other.
+  const rows: Array<{ label: string; snap?: PositionSnapshot; e?: ExposurePosition }> = [];
+  const claimed = new Set<string>();
+  for (const e of exp?.positions ?? []) {
+    const snap = snapByKey.get(normalizeSymbol(e.symbol));
+    if (snap) claimed.add(normalizeSymbol(e.symbol));
+    rows.push({ label: snap?.symbol ?? e.symbol, snap, e });
+  }
+  for (const snap of Object.values(snapshots)) {
+    if (claimed.has(normalizeSymbol(snap.symbol))) continue;
+    rows.push({ label: snap.symbol, snap });
+  }
+
+  if (rows.length === 0) {
+    // Nothing recorded and nothing to join it against. If exposure ANSWERED, the book really
+    // is empty and there is nothing to say. If it threw, "no positions" and "no answer" are
+    // not the same fact, and the second one has to be stated.
+    if (exp) return '';
+    return [
+      '=== PORTFOLIO CONTEXT ===',
+      `Nothing recorded here, and the venue could not be read this cycle (${exposureError}).`,
+      'This is NOT a claim that the book is empty — call get_positions before acting.',
+      '=== END PORTFOLIO CONTEXT ===',
+    ].join('\n');
+  }
+
+  const lines = ['=== PORTFOLIO CONTEXT ==='];
 
   // Resolved by id, not from a recent window. A `limit` would buy nothing — `readDecisions`
   // parses the whole file either way and only slices the tail — while costing exactly the
@@ -266,7 +306,7 @@ async function buildPortfolioContext(
   // records, so a 200-record page rendered its thesis as "not recorded" while the link was
   // sitting in the journal. Read once per cycle, and not at all when nothing is linked.
   const needed = new Set(
-    entries.map(s => s.entryDecisionId).filter((id): id is string => id != null),
+    rows.map(r => r.snap?.entryDecisionId).filter((id): id is string => id != null),
   );
   const theses = new Map(
     needed.size === 0
@@ -274,25 +314,29 @@ async function buildPortfolioContext(
       : readDecisions().filter(r => needed.has(r.id)).map(r => [r.id, r] as const),
   );
 
-  for (const snap of entries) {
-    const entry = snap.entryPrice != null ? ` entry $${snap.entryPrice.toFixed(2)}` : '';
-    const stop = snap.stopLevel != null ? ` SL $${snap.stopLevel.toFixed(2)}` : '';
-    const tp = snap.takeProfitLevel != null ? ` TP $${snap.takeProfitLevel.toFixed(2)}` : '';
+  for (const { label, snap, e } of rows) {
+    const entry = snap?.entryPrice != null ? ` entry $${snap.entryPrice.toFixed(2)}` : '';
+    const stop = snap?.stopLevel != null ? ` SL $${snap.stopLevel.toFixed(2)}` : '';
+    const tp = snap?.takeProfitLevel != null ? ` TP $${snap.takeProfitLevel.toFixed(2)}` : '';
 
-    const e = bySymbol.get(normalizeSymbol(snap.symbol));
-    if (e) matched.add(e.symbol);
     const weight = e ? `  ${e.weightPct.toFixed(1)}%` : '';
     const sector = e ? `  ${e.sector ?? '(sector unknown)'}` : '';
-    const age = snap.openedAt ? ageOf(snap.openedAt) : null;
-    // A snapshot with no venue position is a leftover, and rendering it like a holding invites
-    // an exit for something that is already gone. Only claimed when exposure actually answered.
-    const orphan = exp && !e ? '  NO LIVE POSITION AT THE VENUE' : '';
-    lines.push(`  ${snap.symbol.padEnd(8)}${entry}${stop}${tp}${weight}${sector}${age ? `  age ${age}` : ''}${orphan}`);
+    const age = snap?.openedAt ? ageOf(snap.openedAt) : null;
+    // Rendering a leftover like a holding invites an exit for something already gone; rendering
+    // an unstopped holding like a normal row hides that no stop exists to measure against.
+    // Keyed on the MISSING STOP, not on a missing snapshot: `stopBreachDetector` skips on
+    // `stopLevel === null` regardless of whether a snapshot exists, so a snapshot that predates
+    // entry baselines (measured: NVDA, a live holding) is exactly as unwatched as one with no
+    // snapshot at all (XLF) and used to render as a clean row.
+    const flag = e && snap?.stopLevel == null
+      ? '  NO STOP RECORDED HERE'
+      : exp && !e ? '  NO LIVE POSITION AT THE VENUE' : '';
+    lines.push(`  ${label.padEnd(8)}${entry}${stop}${tp}${weight}${sector}${age ? `  age ${age}` : ''}${flag}`);
 
     // MFE/MAE from the same three fields `compute.ts` uses, so the numbers agree. A missing
     // baseline omits the clause rather than printing NaN.
     const parts: string[] = [];
-    if (snap.entryPrice != null && snap.entryPrice > 0) {
+    if (snap?.entryPrice != null && snap.entryPrice > 0) {
       const mfe = snap.sessionHigh != null
         ? signed(((snap.sessionHigh - snap.entryPrice) / snap.entryPrice) * 100) : null;
       const mae = snap.sessionLow != null
@@ -301,7 +345,7 @@ async function buildPortfolioContext(
         parts.push(`MFE ${mfe ?? 'n/a'} / MAE ${mae ?? 'n/a'}`);
       }
     }
-    const thesis = snap.entryDecisionId ? theses.get(snap.entryDecisionId) : undefined;
+    const thesis = snap?.entryDecisionId ? theses.get(snap.entryDecisionId) : undefined;
     parts.push(
       thesis ? `"${truncate(thesis.rationale, MAX_RATIONALE_CHARS)}"` : 'rationale not recorded',
     );
@@ -312,15 +356,16 @@ async function buildPortfolioContext(
   // a leftover snapshot, or a holding opened before this system recorded baselines — and the
   // snapshot count is what produced "-2 slots remaining" for a book of six. The guard in
   // `enterPosition` counts broker positions, so this is also the number that will be enforced.
-  const count = exp ? exp.positions.length : entries.length;
+  const count = exp ? exp.positions.length : rows.length;
   const slotsLeft = Math.max(0, getPolicy().risk.maxPositions - count);
   lines.push(`${count} open position${count !== 1 ? 's' : ''}${exp ? ' at the venue' : ''} — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining. Call get_positions for live qty and P&L.`);
 
-  // A holding with no snapshot has no entry price and no stop recorded anywhere, so it renders
-  // in no row above. Saying nothing would make it invisible to the one reader who could act.
-  const unsnapshotted = exp?.positions.filter(p => !matched.has(p.symbol)).map(p => p.symbol) ?? [];
-  if (unsnapshotted.length > 0) {
-    lines.push(`Held at the venue with nothing recorded here — no entry price, no stop: ${unsnapshotted.join(', ')}.`);
+  // Restated as a list, because a per-row flag is easy to read past and this is the one
+  // condition where a stop detector has no level to compare against — it measures nothing
+  // and reports nothing, which is indistinguishable from a position behaving well.
+  const unstopped = rows.filter(r => r.e && r.snap?.stopLevel == null).map(r => r.label);
+  if (unstopped.length > 0) {
+    lines.push(`Held at the venue with no stop recorded here — the stop detector has no level to compare against and will report nothing: ${unstopped.join(', ')}.`);
   }
 
   if (exp) {
