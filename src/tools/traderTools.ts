@@ -780,20 +780,23 @@ function toolAckEvent(input: Record<string, unknown>): string {
   // `ignoring` always writes — skipping a signal or overriding a stop is a consequential
   // non-action and must survive cycle boundaries.
   //
-  // `acknowledged` only writes when the trader supplied a note. No note means "nothing to
-  // preserve" — the event was seen and required no reasoning. The typical case is
-  // data_stale on a symbol with no position: recording it produces a hold entry whose only
-  // content is "no position, no action needed", which tells no future cycle anything it
-  // could not derive for itself and crowds out the decisions that matter.
+  // `acknowledged` only writes when the trader supplied a note AND the event has a symbol.
+  // Two classes are always silent even with a note:
+  //  - heartbeat events (symbol: null) — portfolio state summaries repeat the cycle
+  //    context verbatim and are derived fresh every cycle; nothing to preserve.
+  //  - feed/infrastructure events (data_stale, data_health) on symbols with no position —
+  //    the only content is "we don't hold this", derivable from get_positions.
+  // `ignoring` requires a note — fall back to a schema-valid sentinel if none supplied.
+  const isHeartbeat = id.startsWith('heartbeat:');
   const shouldJournal =
     disposition === 'ignoring' ||
-    (disposition === 'acknowledged' && note != null && note.trim() !== '');
+    (disposition === 'acknowledged' && !isHeartbeat && symbol != null && note != null && note.trim() !== '');
 
   if (shouldJournal) {
     recordDecision(decision('hold', 'trader', {
       symbol,
       triggerEventId: id,
-      rationale: note!,
+      rationale: note ?? `${disposition}: no note supplied`,
     }));
   }
 
