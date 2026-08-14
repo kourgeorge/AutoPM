@@ -53,11 +53,33 @@ function tradeCandidate(snap: any): Candidate | null {
     : null;
 }
 
+/**
+ * The midpoint of the book — but only when there IS a book on both sides.
+ *
+ * BOTH sides must be above zero, and the guard that used to read `ap == null || bp == null`
+ * was not enough: after the close the ask side of an IEX book empties and Alpaca reports the
+ * missing side as `0` rather than omitting it. Zero is not null, so it passed, and the
+ * midpoint of a real price and a blank is HALF the real price. Measured 2026-08-13 20:00Z:
+ *
+ *   TSLA  bid 324.20  ask 0  ->  mid 162.100
+ *   NVDA  bid 213.75  ask 0  ->  mid 106.875
+ *
+ * Both of those are exactly the `sessionLow` values that reached `state.json`, because the
+ * `mid > 0` check downstream cannot tell half a price from a price. Worse, the emptied book
+ * is stamped SECONDS AFTER the closing print (NVDA: trade 19:59:59.998, quote 20:00:04.976),
+ * so the halved figure also won the freshness comparison and displaced the genuine close.
+ * `sessionLow` is monotonic with a single writer, so it then rendered "MAE -52.2%" into every
+ * subsequent cycle, which the model correctly rejected as impossible three times over.
+ *
+ * One side is not a market. Returning null lets the last real trade stand, which is the
+ * right price for a closed session anyway.
+ */
 function quoteCandidate(snap: any): Candidate | null {
   const q = snap?.latestQuote;
-  if (q?.ap == null || q?.bp == null || typeof q?.t !== 'string') return null;
+  if (typeof q?.t !== 'string') return null;
+  if (!(q.bp > 0) || !(q.ap > 0)) return null;
   const mid = (q.ap + q.bp) / 2;
-  return Number.isFinite(mid) && mid > 0 ? { price: mid, asOf: q.t } : null;
+  return Number.isFinite(mid) ? { price: mid, asOf: q.t } : null;
 }
 
 /** Unparseable timestamps sort oldest, so they lose to anything readable. */
