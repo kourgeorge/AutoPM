@@ -16,6 +16,8 @@ import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState } from '../state/state';
 import { executeTraderTool } from '../tools/traderTools';
+import { ALPACA_DATA_TOOL_DEFINITIONS } from '../tools/alpacaDataTools';
+import { RESEARCH_TOOL_DEFINITIONS } from '../tools/researchTools';
 import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
 
 const SYSTEM_PROMPT = `You are the operator concierge for an autonomous momentum trading system called AutoTrade.
@@ -35,6 +37,19 @@ WHAT YOU HAVE ACCESS TO
 - get_pending_events: machine events that have fired and the trader has not yet answered
 - get_journal(symbol?, limit?): every past decision — entries, exits, holds, guard vetoes, venue rejections — with its rationale
 - send_to_trader(message): send an instruction to the trader and wake it
+- get_macro_regime: current macro regime (expansion, late_cycle, recession, recovery)
+- get_position_size(symbol, price, atr): volatility-scaled share count for a symbol
+- get_signals(symbol): the five entry signal scores plus ATR and last close
+- get_correlation(symbol): max pairwise correlation with current holdings
+- get_exposure: full book shape — weights, sectors, concentration, held-vs-held correlations
+- get_stock_bars(symbols, timeframe?, limit?): historical OHLCV bars
+- get_stock_snapshot(symbols): latest quote, trade, and bars in one call
+- get_stock_latest_quote(symbols): current bid/ask
+- get_most_active_stocks(by?, top?): most active stocks by volume or trade count
+- get_market_movers(top?): top gainers and losers for the session
+- get_news(symbols?, limit?): recent news articles via Alpaca
+- get_portfolio_history(period?, timeframe?): account equity and P&L over a historical period
+- web_search(query): general web search for news or analysis not covered by the above
 
 WHEN TO USE send_to_trader
 - Operator wants to change trading behavior ("stop trading", "exit all positions", "research TSLA")
@@ -96,6 +111,55 @@ const CONCIERGE_TOOLS: ToolDefinition[] = [
       required: ['message'],
     },
   },
+  // ── Informational tools (read-only, same as trader) ──────────────────────────
+  {
+    name: 'get_macro_regime',
+    description: 'Classify the current macro regime (expansion, late_cycle, recession, recovery) based on GDP growth, unemployment, CPI, yield curve, and VIX from FRED. Cached for 6h.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_position_size',
+    description: 'Compute a volatility-scaled position size for a symbol. Uses inverse-ATR sizing so high-volatility names get fewer shares.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol.' },
+        price:  { type: 'number', description: 'Current/expected entry price.' },
+        atr:    { type: 'number', description: 'Current ATR for the symbol.' },
+      },
+      required: ['symbol', 'price', 'atr'],
+    },
+  },
+  {
+    name: 'get_signals',
+    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 to +1, plus ATR and the last close.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol to score.' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_correlation',
+    description: 'Check how correlated a candidate symbol is with current holdings. Returns the max pairwise correlation and a sizing recommendation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Candidate ticker to check against existing positions.' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_exposure',
+    description: 'Full book shape: per-position weight, sector, gross deployed, cash, largest single-name and sector weights, Herfindahl concentration index, and held-vs-held correlation pairs.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  ...ALPACA_DATA_TOOL_DEFINITIONS,
+  ...RESEARCH_TOOL_DEFINITIONS,
+  // ── Policy mutation ───────────────────────────────────────────────────────────
   {
     name: 'update_policy',
     description: 'Persistently change trading behaviour: add/remove watchlist symbols, adjust position sizing, risk limits, or stop/target multipliers. Changes are validated and hot-reloaded — the trader sees them on its next cycle. Immutable safety ceilings are always enforced.',
