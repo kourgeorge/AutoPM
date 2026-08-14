@@ -15,6 +15,7 @@ import {
 } from './alpacaDataTools';
 import { getRegime } from '../macro/regime';
 import { volatilityScaledQty, correlationGate } from '../strategy/portfolioRisk';
+import { exposure } from '../strategy/exposure';
 import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
 import { isPresent } from '../collect/types';
 import { atr } from '../strategy/indicators';
@@ -25,6 +26,7 @@ import {
   removePositionSnapshot,
 } from '../state/state';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
+import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
@@ -127,6 +129,20 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'write_lesson',
+    description: 'Record ONE changed rule of thumb, in prose, for every future cycle to read. This is the only thing you can say that outlives this cycle — the context you are given is rebuilt from scratch next time, so a conclusion you do not write here is lost. Write one only when something actually taught you a rule: "XLE gapped on an OPEC headline nobody checked, so energy entries need a scheduled-events check" is a lesson; "the tape was choppy" is noise, and restating a rule already in your policy is noise. Most cycles must add nothing, and that is the correct outcome. Name the evidence inside the text — a scorecard number, a round trip, a veto you hit.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        lesson: {
+          type: 'string',
+          description: 'The lesson in prose: what happened, what it generalizes to, and what you will do differently. Markdown is fine.',
+        },
+      },
+      required: ['lesson'],
+    },
+  },
+  {
     name: 'get_macro_regime',
     description: 'Classify the current macro regime (expansion, late_cycle, recession, recovery) based on GDP growth, unemployment, CPI, yield curve, and VIX from FRED. Cached for 6h. Use this to condition entry aggressiveness: tighten in late_cycle/recession, widen in expansion/recovery.',
     input_schema: { type: 'object', properties: {}, required: [] },
@@ -167,6 +183,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_exposure',
+    description: 'Measure the shape of the book: per-position weight as a percentage of equity, sector, gross deployed, cash, the largest single-name and sector weights, a Herfindahl concentration index, and every held-vs-held correlation pair. This is the ONLY source of a sector or a weight in this system — a sector weight you did not read from here is a fabricated one. Sectors are null where the venue reports none (normal for ETFs) and the caveats name which.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
     name: 'sleep',
     description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240.',
     input_schema: {
@@ -203,12 +224,14 @@ export async function executeTraderTool(
       case 'get_position_size':   return await toolGetPositionSize(input);
       case 'get_signals':         return await toolGetSignals(input);
       case 'get_correlation':     return await toolGetCorrelation(input);
+      case 'get_exposure':        return await toolGetExposure();
       case 'execute_entry':       return await toolExecuteEntry(input);
       case 'execute_exit':        return await toolExecuteExit(input);
       case 'get_pending_events':  return toolGetPendingEvents();
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
       case 'get_scorecard':       return toolGetScorecard(input);
+      case 'write_lesson':        return toolWriteLesson(input);
       case 'sleep':               return JSON.stringify({ ok: true, nextCycleIn: `${input.minutes} min` });
       default:
         if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
@@ -372,6 +395,38 @@ async function toolGetCorrelation(input: Record<string, unknown>): Promise<strin
     recommendation: !result.allowed ? 'SKIP' : result.sizeMultiplier < 1.0 ? 'REDUCE' : 'OK',
     sizeMultiplier: result.sizeMultiplier,
     detail: result.detail,
+  });
+}
+
+/** Thin: the arithmetic lives in `strategy/exposure.ts`, rounding is the only thing done here. */
+async function toolGetExposure(): Promise<string> {
+  const e = await exposure();
+  const r = (n: number, dp = 2) => parseFloat(n.toFixed(dp));
+
+  return JSON.stringify({
+    at: e.at,
+    equity: r(e.equity),
+    positions: e.positions.map(p => ({
+      symbol: p.symbol,
+      qty: p.qty,
+      marketValue: r(p.marketValue),
+      weightPct: r(p.weightPct),
+      sector: p.sector,
+    })),
+    grossDeployedPct: r(e.grossDeployedPct),
+    cashPct: r(e.cashPct),
+    maxWeightPct: r(e.maxWeightPct),
+    maxWeightSymbol: e.maxWeightSymbol,
+    hhi: r(e.hhi, 3),
+    bySector: Object.fromEntries(
+      Object.entries(e.bySector).map(([k, v]) => [k, { symbols: v.symbols, weightPct: r(v.weightPct) }]),
+    ),
+    maxSectorWeightPct: r(e.maxSectorWeightPct),
+    maxSectorName: e.maxSectorName,
+    correlations: e.correlations.map(c => ({ a: c.a, b: c.b, corr: r(c.corr, 3) })),
+    maxHeldCorrelation: r(e.maxHeldCorrelation, 3),
+    maxHeldPair: e.maxHeldPair,
+    caveats: e.caveats,
   });
 }
 
@@ -657,4 +712,23 @@ function toolGetScorecard(input: Record<string, unknown>): string {
     symbol: input.symbol as string | undefined,
     days: input.days as number | undefined,
   }));
+}
+
+/**
+ * The write half of the adaptation loop, and the only tool whose effect is on a FUTURE
+ * cycle rather than this one.
+ *
+ * Deliberately unguarded beyond "not empty": there is no rate limit and no dedup, so the
+ * bar is prose in POLICY.md and the tool description. A mechanical gate here would have to
+ * decide when a conclusion is allowed to occur, and the moment a lesson is worth writing is
+ * the moment its evidence is in context — not a time of day. If the file starts growing
+ * every cycle that is visible in `data/LESSONS.md` on the first read.
+ */
+function toolWriteLesson(input: Record<string, unknown>): string {
+  const lesson = recordLesson(String(input.lesson ?? ''));
+  return JSON.stringify({
+    ok: true,
+    stored: lesson,
+    note: 'Every future cycle will read this until an operator deletes it.',
+  });
 }

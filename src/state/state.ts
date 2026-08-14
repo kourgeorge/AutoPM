@@ -37,6 +37,17 @@ export interface SystemState {
 
   eventCooldowns: Record<string, string>;  // cooldownKey -> ISO lastFiredAt
   armedTriggers: string[];                 // cooldownKeys currently armed
+
+  /**
+   * `exitAt` of the newest round trip the trader has already been told about.
+   *
+   * The watermark that makes `review_ready` fire once per closed trade rather than once per
+   * reconcile: round trips are recomputed from the whole fills ledger every time, so without
+   * this each run would re-announce all of history. Empty means never watched, and the first
+   * run adopts the newest existing exit instead of firing — a backlog nobody has context for
+   * is noise, not a lesson.
+   */
+  lastReviewedExitAt: string;
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -51,6 +62,7 @@ const DEFAULT_STATE: SystemState = {
   positionSnapshots: {},
   eventCooldowns: {},
   armedTriggers: [],
+  lastReviewedExitAt: '',
 };
 
 let _state: SystemState = { ...DEFAULT_STATE };

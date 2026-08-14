@@ -310,6 +310,27 @@ function enqueue(event: TriggerEvent): void {
 }
 
 /**
+ * Publish an event that is ALREADY an edge, bypassing all four gates.
+ *
+ * The gates exist to turn a level sampled on a 60s loop into at most one event per crossing.
+ * Some facts are not levels: a round trip closes once, at a knowable instant, identified by
+ * the orders that closed it. There is nothing to recross, so `isArmed` would let it fire
+ * exactly once ever, and nothing to flutter, so hysteresis has no meaning. Running such a
+ * fact through `processHits` would also write a `cooldowns` entry per occurrence, and keying
+ * those by identity is an unbounded leak in `state.json`.
+ *
+ * THE CALLER OWNS DEDUPLICATION. Nothing here can tell a second announcement of the same
+ * fact from a first, so a caller that recomputes its source from a growing file must carry a
+ * watermark — see `publishReviewReady`. Do not reach for this for anything a detector can
+ * express as a level.
+ */
+export function publishDiscrete(kind: EventKind, hit: DetectorHit, policy: Policy): TriggerEvent {
+  const event = makeEvent(kind, hit, new Date().toISOString(), policy.version, 1);
+  enqueue(event);
+  return event;
+}
+
+/**
  * Run one detector's hits through the four gates.
  *
  * Returns only the events that actually fired this tick — suppressed hits produce

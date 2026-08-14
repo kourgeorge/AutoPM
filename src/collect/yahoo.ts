@@ -33,6 +33,30 @@ export async function getQuoteRaw(symbol: string): Promise<RawQuote> {
   return { price, asOf };
 }
 
+/**
+ * Fetch the GICS-style sector for a symbol, or `null` when Yahoo does not report one.
+ *
+ * `null` is a legitimate answer, not an error: ETFs have no `assetProfile.sector`, and a
+ * book that is mostly ETFs must read as "sector unknown" rather than as a failed call.
+ * A throw is also `null` — never a guess from the ticker.
+ *
+ * validateResult:false for the reason in `getQuoteRaw` — `assetProfile` is one of the
+ * shapes that drifts most, and a schema miss would throw away a sector that is present.
+ */
+export async function getSectorRaw(symbol: string): Promise<string | null> {
+  try {
+    const r = await yf.quoteSummary(
+      symbol,
+      { modules: ['assetProfile'] },
+      { validateResult: false },
+    ) as any;
+    const sector = r?.assetProfile?.sector;
+    return typeof sector === 'string' && sector.length > 0 ? sector : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getPrice(symbol: string): Promise<number | undefined> {
   try {
     return (await getQuoteRaw(symbol)).price;

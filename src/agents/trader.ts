@@ -5,7 +5,9 @@ import { renderPolicy } from '../policy/render';
 import { getPolicy } from '../policy/load';
 import { getState } from '../state/state';
 import { readDecisions } from '../journal/journal';
+import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
+import { exposure, type Exposure } from '../strategy/exposure';
 import type { PositionSnapshot } from '../state/state';
 import { ui } from '../ui/ui';
 import {
@@ -126,7 +128,7 @@ export class Trader {
     const messages: ChatMessage[] = [
       {
         role: 'user',
-        content: [{ type: 'text', text: buildCycleContext(state, pendingMessages) }],
+        content: [{ type: 'text', text: await buildCycleContext(state, pendingMessages) }],
       },
     ];
 
@@ -190,24 +192,155 @@ export class Trader {
 
 // ── Context builder ───────────────────────────────────────────────────────────
 
-function buildPortfolioContext(
+/** Beyond this a rationale stops being a reminder and starts being the block. */
+const MAX_RATIONALE_CHARS = 140;
+
+function truncate(s: string, max: number): string {
+  return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '…';
+}
+
+/** "3d" / "4h" / "12m". Coarse on purpose — the decision turns on the order of magnitude. */
+function ageOf(openedAt: string): string | null {
+  const ms = Date.now() - Date.parse(openedAt);
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const mins = ms / 60_000;
+  if (mins < 60) return `${Math.round(mins)}m`;
+  const hours = mins / 60;
+  if (hours < 24) return `${Math.round(hours)}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+/**
+ * Join key between a position snapshot and a venue position.
+ *
+ * Crypto is the whole reason: an order placed as `BTC/USD` comes back from Alpaca as `BTCUSD`.
+ * Deliberately not exported — this is a rendering convenience for one block, not a claim that
+ * the system has a canonical symbol form.
+ */
+function normalizeSymbol(s: string): string {
+  return s.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+}
+
+function signed(pct: number): string {
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+}
+
+/**
+ * The book, as measured.
+ *
+ * Three things the model cannot otherwise obtain, and each was previously ASKED for by the
+ * prompt without being supplied:
+ *  - weight and sector, so "avoid sector concentration" is a judgment about numbers;
+ *  - the entry rationale, so "exit when the thesis is done" is a judgment about the thesis
+ *    rather than about the P&L — resolved through `entryDecisionId`, never reconstructed;
+ *  - MFE/MAE, because "+0.4% now, +6.1% at best" and "+0.4% and never higher" are different
+ *    decisions that used to render identically.
+ */
+async function buildPortfolioContext(
   snapshots: Record<string, PositionSnapshot>,
-): string {
+): Promise<string> {
   const entries = Object.values(snapshots);
   if (entries.length === 0) return '';
 
   const lines = ['=== PORTFOLIO CONTEXT ==='];
 
+  // Exposure is a live read and may fail. A context builder must never take down a cycle:
+  // on a throw the block renders without the measured columns and says so.
+  let exp: Exposure | null = null;
+  let exposureError: string | null = null;
+  try {
+    exp = await exposure();
+  } catch (err: any) {
+    exposureError = err.message;
+    logger.warn(`[Trader] Exposure unavailable for cycle context: ${err.message}`);
+  }
+  // Joined on a normalized symbol: the snapshot is keyed as the order was placed (`BTC/USD`)
+  // while the venue reports `BTCUSD`, and an unjoined row silently renders as "sector unknown"
+  // for a position whose sector is known one line further down.
+  const bySymbol = new Map(exp?.positions.map(p => [normalizeSymbol(p.symbol), p]) ?? []);
+  const matched = new Set<string>();
+
+  // Resolved by id, not from a recent window. A `limit` would buy nothing — `readDecisions`
+  // parses the whole file either way and only slices the tail — while costing exactly the
+  // theses that matter most: a two-day-old position sits behind a busy day's ~100 hold
+  // records, so a 200-record page rendered its thesis as "not recorded" while the link was
+  // sitting in the journal. Read once per cycle, and not at all when nothing is linked.
+  const needed = new Set(
+    entries.map(s => s.entryDecisionId).filter((id): id is string => id != null),
+  );
+  const theses = new Map(
+    needed.size === 0
+      ? []
+      : readDecisions().filter(r => needed.has(r.id)).map(r => [r.id, r] as const),
+  );
+
   for (const snap of entries) {
     const entry = snap.entryPrice != null ? ` entry $${snap.entryPrice.toFixed(2)}` : '';
     const stop = snap.stopLevel != null ? ` SL $${snap.stopLevel.toFixed(2)}` : '';
     const tp = snap.takeProfitLevel != null ? ` TP $${snap.takeProfitLevel.toFixed(2)}` : '';
-    lines.push(`  ${snap.symbol.padEnd(8)}${entry}${stop}${tp}`);
+
+    const e = bySymbol.get(normalizeSymbol(snap.symbol));
+    if (e) matched.add(e.symbol);
+    const weight = e ? `  ${e.weightPct.toFixed(1)}%` : '';
+    const sector = e ? `  ${e.sector ?? '(sector unknown)'}` : '';
+    const age = snap.openedAt ? ageOf(snap.openedAt) : null;
+    // A snapshot with no venue position is a leftover, and rendering it like a holding invites
+    // an exit for something that is already gone. Only claimed when exposure actually answered.
+    const orphan = exp && !e ? '  NO LIVE POSITION AT THE VENUE' : '';
+    lines.push(`  ${snap.symbol.padEnd(8)}${entry}${stop}${tp}${weight}${sector}${age ? `  age ${age}` : ''}${orphan}`);
+
+    // MFE/MAE from the same three fields `compute.ts` uses, so the numbers agree. A missing
+    // baseline omits the clause rather than printing NaN.
+    const parts: string[] = [];
+    if (snap.entryPrice != null && snap.entryPrice > 0) {
+      const mfe = snap.sessionHigh != null
+        ? signed(((snap.sessionHigh - snap.entryPrice) / snap.entryPrice) * 100) : null;
+      const mae = snap.sessionLow != null
+        ? signed(((snap.sessionLow - snap.entryPrice) / snap.entryPrice) * 100) : null;
+      if (mfe || mae) {
+        parts.push(`MFE ${mfe ?? 'n/a'} / MAE ${mae ?? 'n/a'}`);
+      }
+    }
+    const thesis = snap.entryDecisionId ? theses.get(snap.entryDecisionId) : undefined;
+    parts.push(
+      thesis ? `"${truncate(thesis.rationale, MAX_RATIONALE_CHARS)}"` : 'rationale not recorded',
+    );
+    lines.push(`          ${parts.join(' — ')}`);
   }
 
-  const slotsLeft = getPolicy().risk.maxPositions - entries.length;
-  lines.push(`${entries.length} open position${entries.length !== 1 ? 's' : ''} — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining. Call get_positions for live qty and P&L.`);
-  lines.push('Avoid sector concentration — assess the sectors of open positions before adding a new entry.');
+  // Counted at the VENUE when exposure answered, not from the snapshot map. The two can differ —
+  // a leftover snapshot, or a holding opened before this system recorded baselines — and the
+  // snapshot count is what produced "-2 slots remaining" for a book of six. The guard in
+  // `enterPosition` counts broker positions, so this is also the number that will be enforced.
+  const count = exp ? exp.positions.length : entries.length;
+  const slotsLeft = Math.max(0, getPolicy().risk.maxPositions - count);
+  lines.push(`${count} open position${count !== 1 ? 's' : ''}${exp ? ' at the venue' : ''} — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining. Call get_positions for live qty and P&L.`);
+
+  // A holding with no snapshot has no entry price and no stop recorded anywhere, so it renders
+  // in no row above. Saying nothing would make it invisible to the one reader who could act.
+  const unsnapshotted = exp?.positions.filter(p => !matched.has(p.symbol)).map(p => p.symbol) ?? [];
+  if (unsnapshotted.length > 0) {
+    lines.push(`Held at the venue with nothing recorded here — no entry price, no stop: ${unsnapshotted.join(', ')}.`);
+  }
+
+  if (exp) {
+    lines.push(
+      `Deployed ${exp.grossDeployedPct.toFixed(1)}% of equity.` +
+      (exp.maxWeightSymbol ? ` Max weight ${exp.maxWeightSymbol} ${exp.maxWeightPct.toFixed(1)}%.` : '') +
+      (exp.maxSectorName ? ` Max sector ${exp.maxSectorName} ${exp.maxSectorWeightPct.toFixed(1)}%.` : '') +
+      ` HHI ${exp.hhi.toFixed(2)}.`,
+    );
+    if (exp.maxHeldPair) {
+      lines.push(`Max held correlation ${exp.maxHeldCorrelation.toFixed(2)} (${exp.maxHeldPair[0]}/${exp.maxHeldPair[1]}).`);
+    }
+    if (exp.caveats.length > 0) {
+      lines.push(`Caveats: ${exp.caveats.join('; ')}.`);
+    }
+    lines.push('get_exposure for the full breakdown.');
+  } else {
+    lines.push(`Exposure unavailable this cycle (${exposureError}) — weights, sectors and concentration are unknown. Retry with get_exposure.`);
+  }
+
   lines.push('=== END PORTFOLIO CONTEXT ===');
   return lines.join('\n');
 }
@@ -293,10 +426,49 @@ function buildDecisionHistory(): string {
   return lines.join('\n');
 }
 
-function buildCycleContext(
+/**
+ * Beyond this the block stops being a standing memory and starts being an archive. Nothing
+ * reaches past it on purpose: there is no `get_lessons` tool, so the model cannot claim to
+ * have read a lesson it was not shown — the same trap `get_signals` was added to close, where
+ * naming a vocabulary without a way to populate it invited the model to fill it in.
+ */
+const MAX_LESSONS = 20;
+
+/**
+ * What this system concluded, and still believes.
+ *
+ * The only edge in the loop that survives a cycle boundary. RECENT DECISIONS says what was
+ * done, `get_scorecard` measures how it turned out, and both are re-derived from files every
+ * cycle — but an INFERENCE drawn from them existed only inside the cycle that drew it. These
+ * are those inferences, in the model's own words, carried forward.
+ *
+ * Rendered in full rather than summarized, unlike events and decisions: a lesson compressed
+ * to a headline is a slogan, and the reasoning is the part that makes it applicable.
+ */
+function buildLessons(): string {
+  const all = readLessons();
+  if (all.length === 0) return '';
+
+  const shown = all.slice(-MAX_LESSONS);
+  const lines = [`=== LESSONS (${shown.length}${all.length > shown.length ? ` of ${all.length}` : ''}) ===`];
+  lines.push('Written by earlier cycles of this system. They are standing rules of thumb, not history — treat them as binding unless this cycle produces evidence against one, in which case write the correction with write_lesson.');
+  for (const lesson of shown) {
+    lines.push('');
+    lines.push(lesson);
+  }
+  lines.push('=== END LESSONS ===');
+  return lines.join('\n');
+}
+
+/**
+ * Exported as a probe seam. `verify:policy` renders the system half of the prompt without a
+ * daemon; this is the user half, and every block in it is prose the model will read as fact —
+ * so it has to be readable without starting a trading loop to see it.
+ */
+export async function buildCycleContext(
   state: ReturnType<typeof getState>,
   pendingMessages: string[],
-): string {
+): Promise<string> {
   const lines: string[] = [`=== CYCLE: ${new Date().toISOString()} ===`];
 
   // First, before any of the standing bookkeeping: the events are the reason this cycle
@@ -313,11 +485,14 @@ function buildCycleContext(
     }`,
   );
 
-  const portfolioCtx = buildPortfolioContext(state.positionSnapshots);
+  const portfolioCtx = await buildPortfolioContext(state.positionSnapshots);
   if (portfolioCtx) { lines.push(''); lines.push(portfolioCtx); }
 
   const historyCtx = buildDecisionHistory();
   if (historyCtx) { lines.push(''); lines.push(historyCtx); }
+
+  const lessonsCtx = buildLessons();
+  if (lessonsCtx) { lines.push(''); lines.push(lessonsCtx); }
 
   if (pendingMessages.length > 0) {
     lines.push('');

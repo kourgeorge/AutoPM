@@ -26,6 +26,7 @@ import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { getState, resetDailyState } from '../state/state';
 import { reconcileFills } from '../review/reconcile';
+import { publishReviewReady } from '../review/reviewReady';
 import { collectAndCompute } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, type Detector, type TriggerEvent } from './eventBus';
@@ -138,6 +139,10 @@ export class FeatureScheduler {
    * so a fill from the final minutes has until roughly midnight to be copied and no second
    * chance after that. Waiting out a 5-minute timer at exactly that moment is the one time
    * the cadence is not good enough.
+   *
+   * `publishReviewReady` runs only after a reconcile, and only here: this is the one place
+   * that knows the ledger may have changed, and a round trip cannot close without a fill
+   * landing first.
    */
   private async maybeReconcile(session: MarketSession): Promise<void> {
     const closing = this.lastSession === 'open' && session !== 'open';
@@ -147,6 +152,9 @@ export class FeatureScheduler {
     this.lastReconcileAt = Date.now();
     if (closing) logger.info('[Scheduler] Session closed — reconciling fills');
     await reconcileFills();
+
+    const reviewEvents = publishReviewReady(this.policyOf());
+    if (reviewEvents.length > 0) this.route(reviewEvents);
   }
 
   private async runTick(): Promise<void> {

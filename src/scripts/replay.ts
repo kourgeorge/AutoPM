@@ -44,6 +44,7 @@ import {
   recordDecision,
   useEphemeralJournal,
 } from '../journal/journal';
+import { useEphemeralLessons } from '../journal/lessons';
 import type { DecisionRecord } from '../journal/types';
 import { useEphemeralFillsLedger } from '../review/fillsLedger';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
@@ -71,6 +72,10 @@ useEphemeralJournal();
 // that reaches `tickOnce` would otherwise splice synthetic executions into the operator's
 // real ledger, and the FIFO matcher would report round trips that never happened.
 useEphemeralFillsLedger();
+// No scenario drives the trader agent, so nothing here can call `write_lesson` today. Same
+// reasoning as the ledger above: the cost of the line is nothing, and the cost of the first
+// scenario that does reach it is a synthetic rule of thumb the live trader then obeys.
+useEphemeralLessons();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

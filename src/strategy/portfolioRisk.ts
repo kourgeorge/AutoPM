@@ -172,8 +172,14 @@ export async function correlationGate(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Compute daily log returns from a bar series. */
-function dailyReturns(bars: { c: number }[]): number[] {
+/**
+ * Compute daily log returns from a bar series.
+ *
+ * Exported for `strategy/exposure.ts`. Held-vs-held correlation and the entry
+ * correlation gate MUST share this arithmetic: two implementations would report
+ * two different numbers for the same pair, and the model would get two truths.
+ */
+export function dailyReturns(bars: { c: number }[]): number[] {
   const returns: number[] = [];
   for (let i = 1; i < bars.length; i++) {
     if (bars[i - 1].c > 0) {
@@ -183,8 +189,8 @@ function dailyReturns(bars: { c: number }[]): number[] {
   return returns;
 }
 
-/** Pearson correlation coefficient between two equal-length arrays. */
-function pearsonCorrelation(x: number[], y: number[]): number {
+/** Pearson correlation coefficient between two equal-length arrays. See `dailyReturns` for why this is exported. */
+export function pearsonCorrelation(x: number[], y: number[]): number {
   const n = x.length;
   if (n === 0) return 0;
 

@@ -7,4 +7,6 @@ dist/
 data/state.json
 data/journal.jsonl
 data/fills.jsonl
+data/LESSONS.md
+data/sectors.json
 package-lock.json
