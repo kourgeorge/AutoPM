@@ -24,7 +24,7 @@ import { logger } from '../core/logger';
 import { etDate, type MarketSession } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
-import { getState, resetDailyState } from '../state/state';
+import { getState, resetDailyState, updateState } from '../state/state';
 import { reconcileFills } from '../review/reconcile';
 import { publishReviewReady } from '../review/reviewReady';
 import { collectAndCompute } from './compute';
@@ -78,6 +78,32 @@ export async function ensureDailyReset(now: Date = new Date()): Promise<boolean>
 
   resetDailyState(account.value.equity, today);
   logger.info(`[Scheduler] Daily reset for ${today} — start equity $${account.value.equity.toFixed(2)}`);
+
+  // Release every trigger latch, because the day it was measured against is over.
+  //
+  // A fired key stays quiet until price RECROSSES its threshold (eventBus gate 1). Correct
+  // inside a session — it is what stops one wobble alerting all afternoon — but the recross
+  // is a live-price event, so a threshold that un-breached overnight, or while the daemon was
+  // down, or before the position was even opened, never happens and the key is muted forever.
+  // Measured 2026-08-14: 13 of 35 keys latched, among them `trailing_drawdown:NVDA`,
+  // `position_drop:SPCX` and `ema_cross_down:TSLA` — all live positions, all silenced — plus
+  // GOOGL and SQ keys for symbols long sold, which would have pre-muted a genuine breach on
+  // any re-entry.
+  //
+  // A day is the right lifetime: drawdown-from-session-high, position drop and data staleness
+  // are all day-scoped ideas, so at most one alert per condition per DAY replaces at most one
+  // per condition EVER. Arming still persists across a restart within the same day, which is
+  // what gate 1 was written for. Wholesale, because a key surviving this is a key nobody can
+  // see is stuck; the cost of releasing one that did not need it is a single duplicate alert
+  // at the open, and this also caps the unbounded growth of both maps at one day's keys.
+  const stale = Object.keys(getState().eventCooldowns).length;
+  if (stale > 0) {
+    updateState({ eventCooldowns: {}, armedTriggers: [] });
+    logger.info(
+      `[Scheduler] Released ${stale} trigger latch(es) for the new day — every condition ` +
+        `may report once more, measured against today's prices.`,
+    );
+  }
   return true;
 }
 
