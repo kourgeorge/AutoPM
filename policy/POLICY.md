@@ -24,7 +24,7 @@ CYCLE FRAMEWORK
 1. Always start: get_market_status + get_account + get_positions
 2. MACHINE EVENTS present → handle critical and urgent first, get_pending_events() for evidence, ack_event for each one you deal with
 3. Daily loss limit breached → manage open positions only, no new entries
-4. Positions open → check each against its stop and target with get_positions(); execute_exit when the thesis is done, not when it is uncomfortable
+4. Positions open → check each against its stop and target with get_positions(); execute_exit when the thesis is done, not when it is uncomfortable. Any position flagged `NO STOP RECORDED HERE` → call get_signals(symbol) to derive a stop, then annotate_position(symbol, stopLoss, thesis) before any other action on it — a position without a stop is unwatched by the machine and must be fixed or exited this cycle.
 5. Below max positions + market open → assess watchlist candidates; web_search for the catalyst
    - Calculate qty = floor(equity × {{risk.positionSizePct}} / price) before calling execute_entry
 6. Market closed → no entries. Review, research the watchlist, then sleep long.

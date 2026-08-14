@@ -23,6 +23,7 @@ import { computeSignals, signalSummary } from '../strategy/signals';
 import {
   getState,
   openPositionSnapshot,
+  patchPositionSnapshot,
   removePositionSnapshot,
 } from '../state/state';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
@@ -67,6 +68,21 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
         eventId: { type: 'string', description: 'Optional — the MACHINE EVENTS id this entry answers, verbatim. Links the decision to what prompted it.' },
       },
       required: ['symbol', 'qty', 'price', 'stopLoss', 'takeProfit', 'atr', 'reason'],
+    },
+  },
+  {
+    name: 'annotate_position',
+    description: 'Retrofit baselines (stop, target, thesis) onto a position that was opened without them — legacy positions, externally opened positions, or any holding where NO STOP RECORDED HERE appears. Writes the stop into the state so the stop detector begins watching it immediately. Records a hold decision in the journal so the thesis survives cycle boundaries. Call this before reasoning further about any unstopped position.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol:       { type: 'string', description: 'Ticker exactly as it appears in the portfolio.' },
+        stopLoss:     { type: 'number', description: 'Absolute stop-loss price. Must be below entryPrice.' },
+        takeProfit:   { type: 'number', description: 'Absolute take-profit price. Must be above entryPrice.' },
+        entryPrice:   { type: 'number', description: 'Original entry price. Required only when not already recorded (legacy positions). Ignored if the snapshot already has one.' },
+        thesis:       { type: 'string', description: 'One-sentence holding thesis: why you are still in, and what would invalidate it.' },
+      },
+      required: ['symbol', 'stopLoss', 'thesis'],
     },
   },
   {
@@ -226,6 +242,7 @@ export async function executeTraderTool(
       case 'get_correlation':     return await toolGetCorrelation(input);
       case 'get_exposure':        return await toolGetExposure();
       case 'execute_entry':       return await toolExecuteEntry(input);
+      case 'annotate_position':   return await toolAnnotatePosition(input);
       case 'execute_exit':        return await toolExecuteExit(input);
       case 'get_pending_events':  return toolGetPendingEvents();
       case 'ack_event':           return toolAckEvent(input);
@@ -522,6 +539,75 @@ function journalRefusal(
   }
 
   return null;
+}
+
+/**
+ * Retrofit baselines onto a position that was opened without them.
+ *
+ * This is the only write path for `stopLevel`, `takeProfitLevel`, `entryPrice`, and
+ * `entryDecisionId` on a snapshot that already exists. `openPositionSnapshot` refuses to
+ * overwrite an existing entry, and the entry flow never runs for positions that predated
+ * this system or were opened by an external tool.
+ *
+ * The stop validation mirrors `enterPosition`'s `missing_stop` rule exactly — same
+ * invariant, same error name — so the stop detector starts watching immediately and the
+ * next cycle sees a normal managed position rather than a `NO STOP RECORDED HERE` flag.
+ */
+async function toolAnnotatePosition(input: Record<string, unknown>): Promise<string> {
+  const { symbol, stopLoss, takeProfit, thesis } = input as {
+    symbol: string; stopLoss: number; takeProfit?: number; thesis: string; entryPrice?: number;
+  };
+  const providedEntryPrice = input.entryPrice as number | undefined;
+
+  // Confirm the position is live at the venue — annotating a phantom is worse than
+  // doing nothing, because it creates a stop the detector will report on air.
+  const positions = await broker.getPositions();
+  if (!positions.some(p => p.symbol === symbol)) {
+    return JSON.stringify({ error: `No open position in ${symbol} at the venue — nothing to annotate` });
+  }
+
+  // Resolve the effective entry price: snapshot wins if already recorded, caller
+  // supplies it for legacy positions where it was never written.
+  const snap = getState().positionSnapshots[symbol];
+  const effectiveEntry = snap?.entryPrice ?? providedEntryPrice;
+  if (effectiveEntry == null) {
+    return JSON.stringify({ error: `entryPrice is not recorded for ${symbol} — supply it as entryPrice` });
+  }
+
+  // Same invariant as enterPosition's missing_stop guard.
+  if (!(stopLoss > 0 && stopLoss < effectiveEntry)) {
+    return JSON.stringify({ error: `stopLoss $${stopLoss} must be above zero and below entryPrice $${effectiveEntry}` });
+  }
+  if (takeProfit != null && takeProfit <= effectiveEntry) {
+    return JSON.stringify({ error: `takeProfit $${takeProfit} must be above entryPrice $${effectiveEntry}` });
+  }
+
+  // Record a hold decision: this becomes the entryDecisionId the portfolio context resolves
+  // as the thesis, so "rationale not recorded" is replaced by the supplied text next cycle.
+  const record = recordDecision(decision('hold', 'trader', {
+    symbol,
+    rationale: thesis,
+    triggerEventId: null,
+    executed: false,
+    qty: null,
+    price: effectiveEntry,
+    intendedStop: stopLoss,
+    intendedTarget: takeProfit ?? null,
+    atrAtEntry: null,
+    orderId: null,
+  }));
+
+  // Write baselines. entryPrice only if it was missing — the ownership invariant from
+  // openPositionSnapshot: entry baselines are written once and never overwritten.
+  const patch: Parameters<typeof patchPositionSnapshot>[1] = {
+    stopLevel: stopLoss,
+    ...(takeProfit != null && { takeProfitLevel: takeProfit }),
+    ...(snap?.entryPrice == null && { entryPrice: effectiveEntry }),
+    entryDecisionId: record.id,
+  };
+  patchPositionSnapshot(symbol, patch);
+
+  return JSON.stringify({ ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null, entryDecisionId: record.id });
 }
 
 async function toolExecuteEntry(input: Record<string, unknown>): Promise<string> {
