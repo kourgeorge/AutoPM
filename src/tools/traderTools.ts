@@ -337,9 +337,14 @@ async function toolGetPositionSize(input: Record<string, unknown>): Promise<stri
     symbol,
     recommendedQty,
     flatQty,
-    reason: recommendedQty < flatQty
-      ? `Vol-scaled: ATR $${atr.toFixed(2)} is high → fewer shares for equal risk`
-      : `Vol-scaled: ATR $${atr.toFixed(2)} is low → more shares within budget`,
+    // Three outcomes, not two. `recommendedQty === 0` means one share does not fit the
+    // risk budget at all, and the old two-branch string reported that as "ATR is low ->
+    // more shares within budget" — the exact opposite, handed to the model as a premise.
+    reason: recommendedQty === 0
+      ? `Does not fit: one share risks $${riskPerShare.toFixed(2)}, above the whole $${(account.equity * policy.risk.positionSizePct).toFixed(2)} budget for this position`
+      : recommendedQty < flatQty
+        ? `Vol-scaled: ATR $${atr.toFixed(2)} is high → fewer shares for equal risk`
+        : `Vol-scaled: ATR $${atr.toFixed(2)} is low → more shares within budget`,
     riskPerShare: parseFloat(riskPerShare.toFixed(2)),
     totalDollarRisk: parseFloat(dollarRisk.toFixed(2)),
     notional: parseFloat((recommendedQty * price).toFixed(2)),
@@ -608,7 +613,12 @@ async function toolGetPositions(): Promise<string> {
  */
 function resolveEventId(explicit: string | undefined, symbol: string): string | null {
   if (explicit) return explicit;
-  const forSymbol = getPendingEvents().filter(e => e.symbol === symbol);
+  // Canonical: events carry the VENUE's spelling (they are built from `TickData`), while the
+  // symbol here is whatever the model typed. `===` silently found no event for `BTC/USD` and
+  // returned an unlinked decision, which is the same outcome as an ambiguous match and so
+  // was indistinguishable from one.
+  const wanted = canonicalSymbol(symbol);
+  const forSymbol = getPendingEvents().filter(e => e.symbol != null && canonicalSymbol(e.symbol) === wanted);
   return forSymbol.length === 1 ? forSymbol[0].id : null;
 }
 
@@ -824,7 +834,12 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   // Read before the sell, not as a pre-check — `exitPosition`'s `no_position` guard owns
   // that — but because once the sell fills the broker stops reporting the position, and
   // the P&L the record needs goes with it.
-  const held = (await broker.getPositions()).find(p => p.symbol === symbol);
+  // Canonically, like `toolAnnotatePosition` — `===` missed a `BTCUSD` position asked for
+  // as `BTC/USD`, so the exit record carried `qty: null, price: null, pnl: null` for a sell
+  // that had gone through.
+  const held = (await broker.getPositions()).find(
+    p => canonicalSymbol(p.symbol) === canonicalSymbol(symbol),
+  );
 
   let orderId: string;
   try {
