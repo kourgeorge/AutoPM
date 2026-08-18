@@ -258,7 +258,8 @@ export async function executeTraderTool(
       case 'get_journal':         return toolGetJournal(input);
       case 'get_scorecard':       return toolGetScorecard(input);
       case 'write_lesson':        return toolWriteLesson(input);
-      case 'sleep':               return JSON.stringify({ ok: true, nextCycleIn: `${input.minutes} min` });
+      // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
+      // delay, which only the agent loop can do), and it is not a concierge tool.
       default:
         if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
         return (await executeResearchTool(name, input))

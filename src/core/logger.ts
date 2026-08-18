@@ -23,7 +23,7 @@ function write(level: LogLevel, msg: string, data?: unknown): void {
 }
 
 /** Log a tool call result. agent = e.g. 'Orchestrator', 'Monitor:AAPL', 'Research:TSLA' */
-export function logTool(agent: string, toolName: string, result: string): void {
+function logTool(agent: string, toolName: string, result: string): void {
   const summary = summarizeResult(toolName, result);
   write('TOOL', `[${agent}] ${toolName} → ${summary}`);
 }
