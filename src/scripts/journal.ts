@@ -16,6 +16,7 @@
  */
 
 import fs from 'fs';
+import { canonicalSymbol } from '../core/symbols';
 import { JOURNAL_FILE } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 
@@ -91,7 +92,12 @@ function main(): void {
     }
   });
 
-  const shown = (symbol ? records.filter((r) => r.symbol === symbol) : records).slice(-limit);
+  // Canonical, so `btc/usd` on the command line finds the `BTCUSD` records the venue wrote.
+  const wanted = symbol ? canonicalSymbol(symbol) : null;
+  const shown = (wanted
+    ? records.filter((r) => r.symbol != null && canonicalSymbol(r.symbol) === wanted)
+    : records
+  ).slice(-limit);
 
   for (const r of shown) {
     const qty = r.qty != null && r.price != null ? ` ${r.qty}sh @ $${r.price.toFixed(2)}` : '';

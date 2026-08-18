@@ -46,6 +46,11 @@ export interface GroupStats {
 }
 
 export interface Scorecard {
+  /**
+   * Coverage of the DATA, not of the request: `from` is the earliest entry and `to` the
+   * latest exit among the round trips counted. `days` echoes the requested lookback, which
+   * is applied to EXIT time — so `from` routinely predates it.
+   */
   window: { from: string | null; to: string | null; days: number | null };
 
   /** Completed round trips only. Open positions contribute nothing. */
@@ -277,10 +282,17 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
     caveats.push(`${unexplained} round trip(s) had fills that do not add up (a sell larger than the recorded position) — their numbers are a best reading, not a reconciliation.`);
   }
 
+  // The extremes of the DATA, taken as extremes rather than as the ends of the array:
+  // `outcomes` is ordered by EXIT, so `outcomes[0].entryAt` was the entry of the
+  // earliest-EXITING trade — a long hold opened months earlier and closed last reported a
+  // `from` after trades that came before it, which is a window that excludes its own contents.
+  const earliest = (a: string, b: string) => (Date.parse(a) <= Date.parse(b) ? a : b);
+  const latest = (a: string, b: string) => (Date.parse(a) >= Date.parse(b) ? a : b);
+
   return {
     window: {
-      from: outcomes[0].entryAt,
-      to: outcomes[outcomes.length - 1].exitAt,
+      from: outcomes.reduce((acc, o) => earliest(acc, o.entryAt), outcomes[0].entryAt),
+      to: outcomes.reduce((acc, o) => latest(acc, o.exitAt), outcomes[0].exitAt),
       days: opts.days ?? null,
     },
     trades: outcomes.length,

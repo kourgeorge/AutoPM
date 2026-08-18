@@ -22,6 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../core/logger';
 import type { Fill } from '../broker/IBroker';
+import { canonicalSymbol } from '../core/symbols';
 
 export const DATA_DIR = path.join(process.cwd(), 'data');
 export const FILLS_FILE = path.join(DATA_DIR, 'fills.jsonl');
@@ -98,7 +99,12 @@ export function readFills(opts: { symbol?: string; since?: Date } = {}): Fill[] 
     .sort((a, b) => a.fill.at.localeCompare(b.fill.at) || a.order - b.order)
     .map(e => e.fill);
 
-  if (opts.symbol) fills = fills.filter(f => f.symbol === opts.symbol);
+  // Canonical: an Alpaca crypto fill is recorded as `BTCUSD` while every caller asks with
+  // the spelling it placed the order under, `BTC/USD`, and `===` answered "no fills".
+  if (opts.symbol) {
+    const wanted = canonicalSymbol(opts.symbol);
+    fills = fills.filter(f => canonicalSymbol(f.symbol) === wanted);
+  }
   if (opts.since) {
     const cutoff = opts.since.toISOString();
     fills = fills.filter(f => f.at >= cutoff);
