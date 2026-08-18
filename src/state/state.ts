@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { logger } from '../core/logger';
 import { canonicalSymbol } from '../core/symbols';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
@@ -17,6 +18,16 @@ import { canonicalSymbol } from '../core/symbols';
  *    `entryDecisionId`) are written ONCE at fill and never again;
  *  - `sessionHigh` / `sessionLow` are advanced only by the L2 feature computation;
  *  - `lastPrice` is purely informational — nothing measures from it.
+ *
+ * `sessionHigh` / `sessionLow` widen and never narrow, so they have NO PATH BACK: a bad
+ * price is permanent for the life of the position. Do not add a startup pass that narrows
+ * them against daily bars — one existed (`state/repair.ts`, removed) and it could not work,
+ * because the vendor's daily series carries no bar for the current day until well after the
+ * close. Any position touched today is therefore judged against yesterday's range, and a
+ * genuine intraday extreme reads as impossible; on a live book it wanted to erase UBER's
+ * real low on the day the position opened. Bars bound these figures, they do not measure
+ * them. Fix bad prices at the source (`collect/priceSource.ts`), or derive MFE/MAE from
+ * minute bars since `openedAt` and stop storing them at all.
  */
 export interface PositionSnapshot {
   symbol: string;
@@ -165,15 +176,31 @@ export function getPositionSnapshot(symbol: string): PositionSnapshot | undefine
 }
 
 /**
- * Record a fill. Sets the entry baselines when the position is new; when one
- * already exists the quantity accumulates and every baseline is left alone —
- * they describe the original entry, and overwriting them would reset the stop.
+ * Record a fill that OPENED a position: the new entry's baselines win.
+ *
+ * It used to be the reverse — `existing ?? snap` — on the theory that a second open is an
+ * add to a live position whose original entry must not be reset. But `enterPosition`'s
+ * `already_holding` guard runs first and refuses exactly that, so by the time this is
+ * called the venue has just told us there was no position in this symbol. Any snapshot
+ * still sitting here is therefore a leftover from a CLOSED trade, and leftovers are a
+ * documented fact of this system — so the old branch silently gave the new position the
+ * previous trade's `entryPrice`, `stopLevel` and `openedAt`, and every stop, drawdown and
+ * P&L figure derived from them was wrong for as long as it was held.
+ *
+ * The narrower invariant still holds: baselines are written once per position and never
+ * overwritten *during* it. Nothing calls this mid-position — `patchPositionSnapshot` and
+ * `upsertPositionSnapshot` are the in-life write paths.
  */
 export function openPositionSnapshot(snap: PositionSnapshot): void {
   const key = canonicalSymbol(snap.symbol);
   const existing = _state.positionSnapshots[key];
-  const merged: PositionSnapshot = existing ?? snap;
-  _state.positionSnapshots = { ..._state.positionSnapshots, [key]: merged };
+  if (existing) {
+    logger.warn(
+      `[State] Replacing a stale ${key} snapshot (opened ${existing.openedAt ?? 'unknown'}, ` +
+        `entry ${existing.entryPrice ?? 'unknown'}) with the baselines of the entry just filled`,
+    );
+  }
+  _state.positionSnapshots = { ..._state.positionSnapshots, [key]: snap };
   scheduleSave();
 }
 

@@ -117,7 +117,11 @@ export async function ensureDailyReset(now: Date = new Date()): Promise<boolean>
   // what gate 1 was written for. Wholesale, because a key surviving this is a key nobody can
   // see is stuck; the cost of releasing one that did not need it is a single duplicate alert
   // at the open, and this also caps the unbounded growth of both maps at one day's keys.
-  const stale = Object.keys(getState().eventCooldowns).length;
+  // Both maps are counted, because either can be non-empty alone: `rearm` writes to
+  // `armedTriggers` without touching `eventCooldowns`, so a day whose keys all recrossed left
+  // an `armedTriggers` list that this reset skipped entirely and never truncated.
+  const st = getState();
+  const stale = Object.keys(st.eventCooldowns).length + st.armedTriggers.length;
   if (stale > 0) {
     updateState({ eventCooldowns: {}, armedTriggers: [] });
     logger.info(

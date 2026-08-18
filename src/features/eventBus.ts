@@ -227,8 +227,10 @@ function elapsedSince(iso: string | undefined, now: number): number {
 /**
  * Mutable view of the persisted trigger state for one tick.
  *
- * Collected and written once per tick rather than per event: `updateState` restarts a
- * 5s debounce, so N writes would postpone the save N times.
+ * Collected and written once per tick rather than per event: `updateState` schedules a save
+ * on a LEADING-EDGE throttle, so N writes inside one window all land in one file write and
+ * the later ones would be indistinguishable from the first — collecting here makes the
+ * single write the complete one.
  */
 interface TickState {
   cooldowns: Record<string, string>;
