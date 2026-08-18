@@ -27,7 +27,7 @@ import {
   upsertPositionSnapshot,
   removePositionSnapshot,
 } from '../state/state';
-import { canonicalSymbol } from '../core/symbols';
+import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
@@ -685,10 +685,10 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
   // Confirm the position is live at the venue — annotating a phantom is worse than
   // doing nothing, because it creates a stop the detector will report on air.
   const positions = await broker.getPositions();
-  // Canonical comparison, not `===`: the model quotes the symbol as the portfolio renders it,
-  // which for crypto is the snapshot's `BTC/USD` against the venue's `BTCUSD`. An exact match
+  // `sameSymbol`, not `===`: the model quotes the symbol as the portfolio renders it, which
+  // for crypto is the snapshot's `BTC/USD` against the venue's `BTCUSD`. An exact match
   // reported "no open position" for a position sitting right there in the same context.
-  const held = positions.find(p => canonicalSymbol(p.symbol) === canonicalSymbol(symbol));
+  const held = positions.find(p => sameSymbol(p.symbol, symbol));
   if (!held) {
     return JSON.stringify({ error: `No open position in ${symbol} at the venue — nothing to annotate` });
   }
@@ -834,12 +834,10 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   // Read before the sell, not as a pre-check — `exitPosition`'s `no_position` guard owns
   // that — but because once the sell fills the broker stops reporting the position, and
   // the P&L the record needs goes with it.
-  // Canonically, like `toolAnnotatePosition` — `===` missed a `BTCUSD` position asked for
+  // `sameSymbol`, like `toolAnnotatePosition` — `===` missed a `BTCUSD` position asked for
   // as `BTC/USD`, so the exit record carried `qty: null, price: null, pnl: null` for a sell
   // that had gone through.
-  const held = (await broker.getPositions()).find(
-    p => canonicalSymbol(p.symbol) === canonicalSymbol(symbol),
-  );
+  const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
 
   let orderId: string;
   try {

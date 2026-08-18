@@ -13,3 +13,14 @@
 export function canonicalSymbol(s: string): string {
   return s.replace(/[^A-Z0-9]/gi, '').toUpperCase();
 }
+
+/**
+ * "Are these the same instrument?" — the predicate form of `canonicalSymbol`.
+ *
+ * Open-coded as `canonicalSymbol(a) === canonicalSymbol(b)` at eight sites across six
+ * modules, each with its own comment re-deriving the `BTC/USD` vs `BTCUSD` rule. One name
+ * makes the invariant greppable, and makes the site that forgets it visible as a bare `===`.
+ */
+export function sameSymbol(a: string, b: string): boolean {
+  return canonicalSymbol(a) === canonicalSymbol(b);
+}
