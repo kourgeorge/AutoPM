@@ -1,6 +1,7 @@
 import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
 import { BrokerRejection } from './errors';
 import { alpacaTrading as trading } from './alpacaHttp';
+import { logger } from '../core/logger';
 
 /**
  * Alpaca's `type` strings, which happen to be our names already. The lookup exists so an
@@ -119,6 +120,7 @@ export class AlpacaBroker implements IBroker {
 
     const fills: Fill[] = [];
     let pageToken: string | undefined;
+    const ingestedAt = new Date().toISOString();
 
     for (let page = 0; page < MAX_PAGES; page++) {
       const res = await trading.get('/v2/account/activities', {
@@ -134,18 +136,42 @@ export class AlpacaBroker implements IBroker {
       if (rows.length === 0) break;
 
       for (const a of rows) {
+        // An unrecognised side is DROPPED, not guessed. `a.side === 'buy' ? 'buy' : 'sell'`
+        // sent a blank, absent or renamed side down the sell branch, and a fabricated sell
+        // against a real position fabricates an exit — a closed trade in the scorecard that
+        // never closed. `sell_short` is a genuine Alpaca value and is a sell.
+        const side = a.side === 'buy' ? 'buy'
+          : a.side === 'sell' || a.side === 'sell_short' ? 'sell'
+          : null;
+        if (side === null) {
+          logger.warn(`[Alpaca] Fill ${a.id} has an unrecognised side "${a.side}" — skipped`);
+          continue;
+        }
+
+        // Guarded, because `new Date(bad).toISOString()` THROWS `RangeError`, and this loop
+        // sits inside `reconcileFills`'s try/catch — so one malformed row was discarding
+        // every fill in the batch under the message "could not fetch fills". Falling back to
+        // ingest time costs the holding period of one trade; the throw cost all of them.
+        const stamped = Date.parse(a.transaction_time);
+        if (!Number.isFinite(stamped)) {
+          logger.warn(
+            `[Alpaca] Fill ${a.id} has an unparseable transaction_time "${a.transaction_time}" — ` +
+              `recorded at ingest time instead`,
+          );
+        }
+
         fills.push({
           execId:  a.id,
           orderId: a.order_id,
           permId:  null,
           symbol:  a.symbol,
-          side:    a.side === 'buy' ? 'buy' : 'sell',
+          side,
           qty:     parseFloat(a.qty),
           price:   parseFloat(a.price),
           // Equity commissions are zero but regulatory fees (SEC, TAF) arrive as separate
           // FEE activities, so what this fill cost is not knowable from this row.
           fee:     null,
-          at:      new Date(a.transaction_time).toISOString(),
+          at:      Number.isFinite(stamped) ? new Date(stamped).toISOString() : ingestedAt,
         });
       }
 
