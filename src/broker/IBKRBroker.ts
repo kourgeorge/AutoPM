@@ -98,6 +98,14 @@ function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
+/**
+ * IBKR's fill side vocabulary. `BOT`/`SLD` are what TWS reports; `BUY`/`SELL` appear from
+ * some gateway versions. Absent from the table means unrecognised, which means dropped.
+ */
+const IB_SIDE: Record<string, 'buy' | 'sell'> = {
+  BOT: 'buy', BUY: 'buy', SLD: 'sell', SELL: 'sell',
+};
+
 export class IBKRBroker implements IBroker {
   private readonly api: IBApiNext;
   private readonly account: string;
@@ -263,22 +271,25 @@ export class IBKRBroker implements IBroker {
       // scorecard as a closed trade with real prices attached to a trade that never closed.
       // A dropped fill is recoverable from the venue on the next reconciliation; an invented
       // one is not recoverable at all.
-      .filter(({ execution: e }) => {
-        const side = (e.side ?? '').toUpperCase();
-        if (side === 'BOT' || side === 'BUY' || side === 'SLD' || side === 'SELL') return true;
-        logger.warn(`[IBKR] Fill ${e.execId} has an unrecognised side "${e.side}" — skipped`);
-        return false;
-      })
-      .map(({ contract, execution: e }) => {
-        const side = (e.side ?? '').toUpperCase();
-        return {
+      //
+      // One `flatMap` rather than a filter that enumerates the vocabulary and a map that
+      // re-tests half of it: `IB_SIDE` is the only place the venue's spelling is
+      // adjudicated, so there is no second list to drift out of step with it, and `side` is
+      // typed by the lookup instead of asserted with `as`.
+      .flatMap(({ contract, execution: e }) => {
+        const side = IB_SIDE[(e.side ?? '').toUpperCase()];
+        if (!side) {
+          logger.warn(`[IBKR] Fill ${e.execId} has an unrecognised side "${e.side}" — skipped`);
+          return [];
+        }
+        return [{
           execId:  e.execId!,
           // Non-durable across client sessions, which is why `permId` is carried too.
           orderId: e.orderId != null ? String(e.orderId) : '',
           // 0 means the trade originated outside IB and has no TWS id.
           permId:  e.permId ? String(e.permId) : null,
           symbol:  contract.symbol ?? '',
-          side:    (side === 'BOT' || side === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell', // filtered above
+          side,
           qty:     e.shares ?? 0,
           price:   e.price ?? 0,
           fee:     feeByExecId.get(e.execId!) ?? null,
@@ -286,7 +297,7 @@ export class IBKRBroker implements IBroker {
           // ledger corrupts every FIFO match after it, while a wrong timestamp only
           // corrupts the holding period of one — and `parseIbTime` has already warned.
           at:      parseIbTime(e.time) ?? ingestedAt,
-        };
+        }];
       });
   }
 

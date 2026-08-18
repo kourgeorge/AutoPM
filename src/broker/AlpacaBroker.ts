@@ -24,6 +24,12 @@ function num(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * Alpaca's fill side vocabulary. `sell_short` is a genuine Alpaca value and is a sell.
+ * Absent from the table means unrecognised, which means dropped — see `getFills`.
+ */
+const ALPACA_SIDE = { buy: 'buy', sell: 'sell', sell_short: 'sell' } as const;
+
 export class AlpacaBroker implements IBroker {
   async getPositions(): Promise<Position[]> {
     const res = await trading.get('/v2/positions');
@@ -139,11 +145,10 @@ export class AlpacaBroker implements IBroker {
         // An unrecognised side is DROPPED, not guessed. `a.side === 'buy' ? 'buy' : 'sell'`
         // sent a blank, absent or renamed side down the sell branch, and a fabricated sell
         // against a real position fabricates an exit — a closed trade in the scorecard that
-        // never closed. `sell_short` is a genuine Alpaca value and is a sell.
-        const side = a.side === 'buy' ? 'buy'
-          : a.side === 'sell' || a.side === 'sell_short' ? 'sell'
-          : null;
-        if (side === null) {
+        // never closed. The vocabulary is a table (`ALPACA_SIDE`) so that "which strings are
+        // sells" is stated once rather than spread across a ternary chain.
+        const side = ALPACA_SIDE[a.side as keyof typeof ALPACA_SIDE];
+        if (!side) {
           logger.warn(`[Alpaca] Fill ${a.id} has an unrecognised side "${a.side}" — skipped`);
           continue;
         }
