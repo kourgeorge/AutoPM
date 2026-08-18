@@ -29,7 +29,7 @@ import { reconcileFills } from '../review/reconcile';
 import { publishReviewReady } from '../review/reviewReady';
 import { collectAndCompute } from './compute';
 import { DETECTORS } from './detectors';
-import { publishTick, type Detector, type TriggerEvent } from './eventBus';
+import { publishTick, releaseAllLatches, type Detector, type TriggerEvent } from './eventBus';
 
 /**
  * How often to copy the broker's recent fills into the durable ledger.
@@ -117,15 +117,13 @@ export async function ensureDailyReset(now: Date = new Date()): Promise<boolean>
   // what gate 1 was written for. Wholesale, because a key surviving this is a key nobody can
   // see is stuck; the cost of releasing one that did not need it is a single duplicate alert
   // at the open, and this also caps the unbounded growth of both maps at one day's keys.
-  // Both maps are counted, because either can be non-empty alone: `rearm` writes to
-  // `armedTriggers` without touching `eventCooldowns`, so a day whose keys all recrossed left
-  // an `armedTriggers` list that this reset skipped entirely and never truncated.
-  const st = getState();
-  const stale = Object.keys(st.eventCooldowns).length + st.armedTriggers.length;
-  if (stale > 0) {
-    updateState({ eventCooldowns: {}, armedTriggers: [] });
+  // `eventBus` owns which fields make up a latch and how many were held; this function owns
+  // only the decision that a day has turned. Counting the fields here is what let a second
+  // one (`armedTriggers`) go unreleased after it was added there.
+  const released = releaseAllLatches();
+  if (released > 0) {
     logger.info(
-      `[Scheduler] Released ${stale} trigger latch(es) for the new day — every condition ` +
+      `[Scheduler] Released ${released} trigger latch(es) for the new day — every condition ` +
         `may report once more, measured against today's prices.`,
     );
   }
