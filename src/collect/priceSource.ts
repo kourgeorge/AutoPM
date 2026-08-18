@@ -9,8 +9,7 @@
  * which feed each price came from.
  */
 
-import axios from 'axios';
-import { config } from '../core/config';
+import { alpacaData } from '../broker/alpacaHttp';
 import { marketSession } from '../core/time';
 import { getQuoteRaw } from './yahoo';
 import { DEFAULT_MAX_AGE_MS, Maybe, missingFrom, observe } from './types';
@@ -107,13 +106,6 @@ function freshest(a: Candidate | null, b: Candidate | null): Candidate | null {
   return stamp(b) > stamp(a) ? b : a;
 }
 
-const alpacaData = axios.create({
-  baseURL: config.alpaca.dataUrl,
-  headers: {
-    'APCA-API-KEY-ID':     config.alpaca.keyId,
-    'APCA-API-SECRET-KEY': config.alpaca.secretKey,
-  },
-});
 
 /**
  * Fetch latest prices for a batch of symbols from Alpaca snapshots.

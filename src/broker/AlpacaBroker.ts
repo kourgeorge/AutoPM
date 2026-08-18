@@ -1,20 +1,6 @@
-import axios, { AxiosInstance } from 'axios';
-import { config } from '../core/config';
 import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
 import { BrokerRejection } from './errors';
-
-function makeClient(baseURL: string): AxiosInstance {
-  return axios.create({
-    baseURL,
-    headers: {
-      'APCA-API-KEY-ID': config.alpaca.keyId,
-      'APCA-API-SECRET-KEY': config.alpaca.secretKey,
-    },
-  });
-}
-
-const trading = makeClient(config.alpaca.baseUrl);
-const data    = makeClient(config.alpaca.dataUrl);
+import { alpacaTrading as trading } from './alpacaHttp';
 
 /**
  * Alpaca's `type` strings, which happen to be our names already. The lookup exists so an

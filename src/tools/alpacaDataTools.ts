@@ -5,32 +5,11 @@
  * Alpaca data and trading APIs via axios, using the same credentials as the broker.
  */
 
-import axios, { AxiosInstance } from 'axios';
-import { config } from '../core/config';
 import type { ToolDefinition } from '../core/types';
-
-function makeDataClient(): AxiosInstance {
-  return axios.create({
-    baseURL: config.alpaca.dataUrl,
-    headers: {
-      'APCA-API-KEY-ID': config.alpaca.keyId,
-      'APCA-API-SECRET-KEY': config.alpaca.secretKey,
-    },
-  });
-}
-
-function makeTradingClient(): AxiosInstance {
-  return axios.create({
-    baseURL: config.alpaca.baseUrl,
-    headers: {
-      'APCA-API-KEY-ID': config.alpaca.keyId,
-      'APCA-API-SECRET-KEY': config.alpaca.secretKey,
-    },
-  });
-}
-
-const dataClient     = makeDataClient();
-const tradingClient  = makeTradingClient();
+import {
+  alpacaData as dataClient,
+  alpacaTrading as tradingClient,
+} from '../broker/alpacaHttp';
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
