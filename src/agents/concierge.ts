@@ -15,11 +15,107 @@ import { mutatePolicy } from '../policy/mutate';
 import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState } from '../state/state';
-import { executeTraderTool } from '../tools/traderTools';
+import { TRADER_TOOL_DEFINITIONS, executeTraderTool } from '../tools/traderTools';
 import { ALPACA_DATA_TOOL_DEFINITIONS } from '../tools/alpacaDataTools';
 import { RESEARCH_TOOL_DEFINITIONS } from '../tools/researchTools';
 import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
 
+/**
+ * Tools the concierge shares verbatim with the trader.
+ *
+ * Picked BY NAME out of `TRADER_TOOL_DEFINITIONS`, never restated. Every one of these is
+ * executed by `executeTraderTool` — the concierge adds no behaviour to any of them — so a
+ * second copy of the definition could differ only in its prose, and it did: the trader's
+ * `get_exposure` carries an anti-fabrication warning ("a sector weight you did not read
+ * from here is a fabricated one") that the copy here had silently dropped. One definition,
+ * one description, one place to change it.
+ */
+const SHARED_WITH_TRADER = [
+  'get_account',
+  'get_positions',
+  'get_open_orders',
+  'get_market_status',
+  'get_pending_events',
+  'get_journal',
+  'get_macro_regime',
+  'get_position_size',
+  'get_signals',
+  'get_correlation',
+  'get_exposure',
+] as const;
+
+/**
+ * Resolve the shared names against the trader's array.
+ *
+ * Throws at MODULE LOAD, not at call time: a trader tool that gets renamed must fail the
+ * next start loudly, rather than quietly leaving the concierge one capability short and
+ * the operator wondering why it claims it cannot read the book.
+ */
+function sharedTools(): ToolDefinition[] {
+  return SHARED_WITH_TRADER.map((name) => {
+    const def = TRADER_TOOL_DEFINITIONS.find((t) => t.name === name);
+    if (!def) {
+      throw new Error(
+        `Concierge expects trader tool "${name}", which is no longer in TRADER_TOOL_DEFINITIONS.`,
+      );
+    }
+    return def;
+  });
+}
+
+/** The three the concierge actually owns — nothing else here is unique to it. */
+const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
+  {
+    name: 'get_state',
+    description: 'Get internal system state: start-of-day equity, the watchlist, and the durable per-position baselines (entry, stop, target, session high/low).',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'send_to_trader',
+    description: 'Send an instruction or message to the trader. It will wake up and process it on the next cycle.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'Instruction for the trader.' },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'update_policy',
+    description: 'Persistently change trading behaviour: add/remove watchlist symbols, adjust position sizing, risk limits, or stop/target multipliers. Changes are validated and hot-reloaded — the trader sees them on its next cycle. Immutable safety ceilings are always enforced.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        addToWatchlist:      { type: 'array',  items: { type: 'string' }, description: 'Ticker symbols to add to the watchlist.' },
+        removeFromWatchlist: { type: 'array',  items: { type: 'string' }, description: 'Ticker symbols to remove from the watchlist.' },
+        setWatchlist:        { type: 'array',  items: { type: 'string' }, description: 'Replace the entire watchlist with these symbols.' },
+        maxPositions:        { type: 'integer', minimum: 1,               description: 'Maximum number of open positions.' },
+        positionSizePct:     { type: 'number',  minimum: 0,               description: 'Position size as a fraction of equity (e.g. 0.05 = 5%).' },
+        stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'Stop distance = entry \u2212 stopLossAtrMult \u00d7 ATR.' },
+        takeProfitAtrMult:   { type: 'number',  minimum: 0,               description: 'Target = entry + takeProfitAtrMult \u00d7 ATR.' },
+        maxDailyLossPct:     { type: 'number',  minimum: 0,               description: 'Daily loss limit as a fraction of equity (e.g. 0.03 = 3%).' },
+      },
+      required: [],
+    },
+  },
+];
+
+const CONCIERGE_TOOLS: ToolDefinition[] = [
+  ...sharedTools(),
+  ...CONCIERGE_OWN_TOOLS,
+  ...ALPACA_DATA_TOOL_DEFINITIONS,
+  ...RESEARCH_TOOL_DEFINITIONS,
+];
+
+/**
+ * The prompt lists tool NAMES ONLY, generated from the array above.
+ *
+ * The API already sends every description alongside the tools, so restating them here was
+ * a third copy of the same prose — and the one nothing could typecheck. Behavioural
+ * guidance that is not in a description (when to relay versus when to change policy) stays
+ * below; per-tool detail belongs in the tool.
+ */
 const SYSTEM_PROMPT = `You are the operator concierge for an autonomous momentum trading system called AutoTrade.
 
 YOUR ROLE
@@ -29,29 +125,11 @@ YOUR ROLE
 - Proactively inform the operator about alerts pushed by the system
 - Be conversational, concise, and helpful
 
-WHAT YOU HAVE ACCESS TO
-- get_account: equity, cash, buying power, daily P&L
-- get_positions: all open positions with unrealized P&L
-- get_open_orders: what is actually resting at the broker right now, next to the stop level this system has recorded for each — the only way to answer "is there a stop on X"
-- get_market_status: market open/closed, time to next open/close
-- get_state: start-of-day equity, the watchlist, and the durable per-position baselines
-- get_pending_events: machine events that have fired and the trader has not yet answered
-- get_journal(symbol?, limit?): every past decision — entries, exits, holds, guard vetoes, venue rejections — with its rationale
-- send_to_trader(message): send an instruction to the trader and wake it
-- update_policy(...): persistently change the watchlist, position sizing, risk limits, or stop/target multipliers — validated, hot-reloaded, and visible to the trader next cycle
-- get_macro_regime: current macro regime (expansion, late_cycle, recession, recovery)
-- get_position_size(symbol, price, atr): volatility-scaled share count for a symbol
-- get_signals(symbol): the five entry signal scores plus ATR and last close
-- get_correlation(symbol): max pairwise correlation with current holdings
-- get_exposure: full book shape — weights, sectors, concentration, held-vs-held correlations
-- get_stock_bars(symbols, timeframe?, limit?): historical OHLCV bars
-- get_stock_snapshot(symbols): latest quote, trade, and bars in one call
-- get_stock_latest_quote(symbols): current bid/ask
-- get_most_active_stocks(by?, top?): most active stocks by volume or trade count
-- get_market_movers(top?): top gainers and losers for the session
-- get_news(symbols?, limit?): recent news articles via Alpaca
-- get_portfolio_history(period?, timeframe?): account equity and P&L over a historical period
-- web_search(query): general web search for news or analysis not covered by the above
+YOUR TOOLS
+${CONCIERGE_TOOLS.map((t) => t.name).join(', ')}
+
+Read the description on each before using it. You have no source of a number beyond these —
+a figure you did not read out of a tool result is one you invented.
 
 WHEN TO USE send_to_trader
 - Operator wants to change trading behavior ("stop trading", "exit all positions", "research TSLA")
@@ -65,129 +143,6 @@ TONE
 - Short answers unless the operator wants detail
 - If you don't know something (e.g. why a specific trade was made, or why one wasn't), check get_journal first
 - You do NOT place trades directly — you relay to the trader`;
-
-const CONCIERGE_TOOLS: ToolDefinition[] = [
-  {
-    name: 'get_account',
-    description: 'Get account equity, cash, buying power, and daily P&L.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_positions',
-    description: 'Get all currently open positions.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_open_orders',
-    description: 'Read the orders actually resting at the broker right now, grouped by position, alongside the stop level this system has recorded for each. This system places only market orders, so any stop or trailing order at the venue was placed outside it. Answer questions about whether stops exist from this, never from assumption — and never propose re-submitting a stop this shows is already there.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_market_status',
-    description: 'Get current market status: open/closed, ET time, minutes to next open/close.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_state',
-    description: 'Get internal system state: start-of-day equity, the watchlist, and the durable per-position baselines (entry, stop, target, session high/low).',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_pending_events',
-    description: 'Get every machine event that has fired and not been acked by the trader — what the system has noticed and is waiting on.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_journal',
-    description: 'Read past decisions, oldest first: entries, exits, holds, guard vetoes and venue rejections, each with its rationale and the numbers it intended.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'Optional — filter to one symbol.' },
-        limit: { type: 'integer', description: 'Most recent N records (default 20).', minimum: 1, maximum: 200 },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'send_to_trader',
-    description: 'Send an instruction or message to the trader. It will wake up and process it on the next cycle.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        message: { type: 'string', description: 'Instruction for the trader.' },
-      },
-      required: ['message'],
-    },
-  },
-  // ── Informational tools (read-only, same as trader) ──────────────────────────
-  {
-    name: 'get_macro_regime',
-    description: 'Classify the current macro regime (expansion, late_cycle, recession, recovery) based on GDP growth, unemployment, CPI, yield curve, and VIX from FRED. Cached for 6h.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'get_position_size',
-    description: 'Compute a volatility-scaled position size for a symbol. Uses inverse-ATR sizing so high-volatility names get fewer shares.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'Ticker symbol.' },
-        price:  { type: 'number', description: 'Current/expected entry price.' },
-        atr:    { type: 'number', description: 'Current ATR for the symbol.' },
-      },
-      required: ['symbol', 'price', 'atr'],
-    },
-  },
-  {
-    name: 'get_signals',
-    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 to +1, plus ATR and the last close.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'Ticker symbol to score.' },
-      },
-      required: ['symbol'],
-    },
-  },
-  {
-    name: 'get_correlation',
-    description: 'Check how correlated a candidate symbol is with current holdings. Returns the max pairwise correlation and a sizing recommendation.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'Candidate ticker to check against existing positions.' },
-      },
-      required: ['symbol'],
-    },
-  },
-  {
-    name: 'get_exposure',
-    description: 'Full book shape: per-position weight, sector, gross deployed, cash, largest single-name and sector weights, Herfindahl concentration index, and held-vs-held correlation pairs.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  ...ALPACA_DATA_TOOL_DEFINITIONS,
-  ...RESEARCH_TOOL_DEFINITIONS,
-  // ── Policy mutation ───────────────────────────────────────────────────────────
-  {
-    name: 'update_policy',
-    description: 'Persistently change trading behaviour: add/remove watchlist symbols, adjust position sizing, risk limits, or stop/target multipliers. Changes are validated and hot-reloaded — the trader sees them on its next cycle. Immutable safety ceilings are always enforced.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        addToWatchlist:      { type: 'array',  items: { type: 'string' }, description: 'Ticker symbols to add to the watchlist.' },
-        removeFromWatchlist: { type: 'array',  items: { type: 'string' }, description: 'Ticker symbols to remove from the watchlist.' },
-        setWatchlist:        { type: 'array',  items: { type: 'string' }, description: 'Replace the entire watchlist with these symbols.' },
-        maxPositions:        { type: 'integer', minimum: 1,               description: 'Maximum number of open positions.' },
-        positionSizePct:     { type: 'number',  minimum: 0,               description: 'Position size as a fraction of equity (e.g. 0.05 = 5%).' },
-        stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'Stop distance = entry − stopLossAtrMult × ATR.' },
-        takeProfitAtrMult:   { type: 'number',  minimum: 0,               description: 'Target = entry + takeProfitAtrMult × ATR.' },
-        maxDailyLossPct:     { type: 'number',  minimum: 0,               description: 'Daily loss limit as a fraction of equity (e.g. 0.03 = 3%).' },
-      },
-      required: [],
-    },
-  },
-];
 
 export class ConciergeAgent {
   private readonly provider = createModelProvider(config.ai);
