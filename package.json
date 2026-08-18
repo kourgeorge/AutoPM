@@ -19,12 +19,11 @@
     "blessed": "^0.1.81",
     "dotenv": "^16.4.0",
     "js-yaml": "^5.2.3",
-    "node-cron": "^3.0.3",
+    "rxjs": "^7.8.2",
     "yahoo-finance2": "^4.0.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/node-cron": "^3.0.11",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0"
   }

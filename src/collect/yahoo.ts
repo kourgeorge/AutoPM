@@ -57,27 +57,6 @@ export async function getSectorRaw(symbol: string): Promise<string | null> {
   }
 }
 
-export async function getPrice(symbol: string): Promise<number | undefined> {
-  try {
-    return (await getQuoteRaw(symbol)).price;
-  } catch {
-    return undefined;
-  }
-}
-
-export async function getPrices(symbols: string[]): Promise<Map<string, number>> {
-  const results = await Promise.allSettled(
-    symbols.map(async (s) => ({ symbol: s, price: await getPrice(s) })),
-  );
-  const map = new Map<string, number>();
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value.price !== undefined) {
-      map.set(r.value.symbol, r.value.price);
-    }
-  }
-  return map;
-}
-
 export type Timeframe = '1Min' | '5Min' | '15Min' | '1Hour' | '1Day';
 
 // Yahoo interval + trading bars per calendar day (used to estimate lookback range)
@@ -88,23 +67,6 @@ const TF_MAP: Record<Timeframe, { interval: string; barsPerDay: number }> = {
   '1Hour': { interval: '60m', barsPerDay: 7   },
   '1Day':  { interval: '1d',  barsPerDay: 1   },
 };
-
-/**
- * Fetch OHLCV bars for a symbol.
- * @param limit  Number of bars to return (sliced from the most recent end).
- * @param timeframe  Bar interval; defaults to '1Day'.
- */
-export async function getBars(
-  symbol: string,
-  limit = 60,
-  timeframe: Timeframe = '1Day',
-): Promise<Bar[]> {
-  try {
-    return await getBarsRaw(symbol, limit, timeframe);
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Fetch bars, THROWING on failure and on an empty series.
