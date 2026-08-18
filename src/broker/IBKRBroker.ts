@@ -257,6 +257,18 @@ export class IBKRBroker implements IBroker {
 
     return details
       .filter(d => d.execution.execId != null)
+      // An unrecognised side is DROPPED, not guessed. The old ternary sent everything that
+      // was not BOT/BUY down the `sell` branch, so a blank or renamed side became a sell —
+      // and a fabricated sell against a real position fabricates an EXIT, which enters the
+      // scorecard as a closed trade with real prices attached to a trade that never closed.
+      // A dropped fill is recoverable from the venue on the next reconciliation; an invented
+      // one is not recoverable at all.
+      .filter(({ execution: e }) => {
+        const side = (e.side ?? '').toUpperCase();
+        if (side === 'BOT' || side === 'BUY' || side === 'SLD' || side === 'SELL') return true;
+        logger.warn(`[IBKR] Fill ${e.execId} has an unrecognised side "${e.side}" — skipped`);
+        return false;
+      })
       .map(({ contract, execution: e }) => {
         const side = (e.side ?? '').toUpperCase();
         return {
@@ -266,7 +278,7 @@ export class IBKRBroker implements IBroker {
           // 0 means the trade originated outside IB and has no TWS id.
           permId:  e.permId ? String(e.permId) : null,
           symbol:  contract.symbol ?? '',
-          side:    (side === 'BOT' || side === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell',
+          side:    (side === 'BOT' || side === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell', // filtered above
           qty:     e.shares ?? 0,
           price:   e.price ?? 0,
           fee:     feeByExecId.get(e.execId!) ?? null,
