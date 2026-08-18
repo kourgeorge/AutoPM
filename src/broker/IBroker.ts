@@ -30,14 +30,33 @@ export interface OrderRequest {
   limitPrice?: number;
 }
 
+/**
+ * An order resting at the venue, as the venue describes it.
+ *
+ * This system never places anything but a market order (`enterPosition`/`exitPosition`), so
+ * everything here beyond `market` was placed outside it. That is exactly why the shape has to
+ * be able to say so: `type` used to be `'market' | 'limit'` and both mappers coerced into it,
+ * which reported a live stop as a limit order and threw its trigger price away.
+ */
 export interface OpenOrder {
   id: string;
   symbol: string;
   side: 'buy' | 'sell';
   qty: number;
   filled: number;
-  type: 'market' | 'limit';
+  type: 'market' | 'limit' | 'stop' | 'stop_limit' | 'trailing_stop' | 'other';
+  /**
+   * The venue's own word for the type, verbatim. A type this system does not recognise arrives
+   * as `other` plus this string, which is honest; coercing it into a known type is not.
+   */
+  rawType: string;
   limitPrice?: number;
+  /** Trigger price for stop and stop-limit orders. */
+  stopPrice?: number;
+  trailPercent?: number;
+  trailAmount?: number;
+  /** Time in force, verbatim ('day', 'gtc', 'DAY', 'GTC' — the venues disagree on case). */
+  tif?: string;
   status: string;
 }
 

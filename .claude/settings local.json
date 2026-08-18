@@ -1,0 +1,97 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://ete-litellm.ai-models.vpc-int.res.ibm.com",
+    "ANTHROPIC_AUTH_TOKEN": "sk-P1Be_FklwFzxCLTonCYlkQ"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(python3 /tmp/dump.py 7)",
+      "Bash(python3 /tmp/dump.py 14)",
+      "Bash(python3 -c *)",
+      "Bash(git checkout *)",
+      "Bash(.venv/bin/python -)",
+      "Bash(.venv/bin/python -c \"import json; json.load\\(open\\('data/tau2/domains/travel/db.json'\\)\\); print\\('JSON OK'\\)\")",
+      "Bash(.venv/bin/python -m pytest tests/ -k \"travel\" -q)",
+      "Bash(cd /Users/georgekour/repositories/tau2-marvin *)",
+      "Bash(grep \"\\\\.py$\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python3 scripts/generate_stocks_json.py)",
+      "Bash(python -m compileall -q ai_engine/tradingagents/agents ai_engine/tradingagents/graph)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(python -m compileall -q backend/services/analysis_service.py backend/run_analysis_standalone.py backend/services/email_service.py ai_engine/agent/tools/platform_reports.py)",
+      "Bash(echo \"exit $?\")",
+      "Bash(python -m compileall -q ai_engine/tradingagents backend/services backend/routers backend/run_analysis_standalone.py backend/sync_major_stocks.py backend/scripts/consistency_evaluation.py backend/scripts/send_email_samples.py ai_engine/agent/tools/platform_reports.py)",
+      "Bash(echo \"compile exit $?\")",
+      "Bash(PYTHONPATH=/Users/georgekour/repositories/flowdeck python -c ' *)",
+      "Bash(npx tsc *)",
+      "Bash(python -m pytest backend/tests/test_report_resources.py -q)",
+      "Bash(./venv/bin/python -m pytest backend/tests/test_report_resources.py -q)",
+      "Bash(python -m compileall -q backend/services/analysis_service.py backend/run_analysis_standalone.py)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git merge *)",
+      "Bash(git branch *)",
+      "Bash(curl -s \"https://gamma-api.polymarket.com/events?limit=10&active=true&closed=false&order=startDate&ascending=false&title=Nvidia%20price\")",
+      "Bash(curl -s \"https://gamma-api.polymarket.com/events?limit=10&active=true&closed=false&title=Nvidia\")",
+      "Bash(env -u LLM_PROVIDER -u OPENAI_API_KEY PYTHONPATH=__TRACKED_VAR__:__TRACKED_VAR__/backend python3 -c ' *)",
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile backend/routers/tickers.py backend/models/schemas.py backend/services/admin_service.py backend/scripts/notify_report_subscribers.py)",
+      "Bash(echo \"tsc exit: $?\")",
+      "Bash(python -c \"import ai_engine.tradingagents.graph.trading_graph as t; print\\('trading_graph import OK'\\)\")"
+    ],
+    "additionalDirectories": [
+      "/Users/georgekour/.claude/projects/-Users-georgekour-repositories-tau2-marvin/951020a3-a4b7-43cc-8709-f967475963e7/tool-results"
+    ]
+  },
+  "enabledPlugins": {
+    "academic-research-skills@academic-research-skills": true
+  },
+  "extraKnownMarketplaces": {
+    "academic-research-skills": {
+      "source": {
+        "source": "github",
+        "repo": "Imbad0202/academic-research-skills"
+      }
+    }
+  },
+  "theme": "light",
+  "model": "aws/claude-opus-5",
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|agent_needs_input|agent_completed",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/georgekour/.claude/hooks/notify-slack.sh",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/georgekour/.claude/hooks/notify-slack.sh",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/georgekour/.claude/hooks/notify-slack.sh",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -4,9 +4,6 @@
  * Order is presentation only — `severity` decides who is woken, so nothing here depends on
  * the sequence. Risk-side detectors are listed first anyway, so a tick's event list reads
  * worst-first.
- *
- * `reviewDue` is absent deliberately: it fires off closed round trips, and the journal that
- * counts them does not exist yet (step 18).
  */
 
 import type { Detector } from '../eventBus';

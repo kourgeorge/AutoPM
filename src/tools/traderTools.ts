@@ -35,6 +35,7 @@ import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
 import { logger } from '../core/logger';
 import type { ToolDefinition, SignalResult } from '../core/types';
+import type { OpenOrder } from '../broker/IBroker';
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -52,6 +53,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_positions',
     description: 'Get all currently open positions with symbol, qty, avg cost, market value, and unrealized P&L.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_open_orders',
+    description: 'Read the orders actually resting at the venue right now, grouped by position. This system places only market orders, so anything else listed was placed outside it. A stop order resting at the venue is NOT what the stop detector watches — that is the stopLevel recorded here, reported alongside it. Use this to answer "is there a stop on my positions" instead of assuming either way.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -238,6 +244,7 @@ export async function executeTraderTool(
       case 'get_market_status':   return await toolGetMarketStatus();
       case 'get_account':         return await toolGetAccount();
       case 'get_positions':       return await toolGetPositions();
+      case 'get_open_orders':     return await toolGetOpenOrders();
       case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'get_position_size':   return await toolGetPositionSize(input);
       case 'get_signals':         return await toolGetSignals(input);
@@ -472,6 +479,106 @@ async function toolGetAccount(): Promise<string> {
     lossLimitPct: risk.maxDailyLossPct * 100,
     lossLimitBreached,
     maxPositions: risk.maxPositions,
+  });
+}
+
+/**
+ * What this system placed at the venue: nothing but market orders. Stated here once because
+ * both the tool and the cycle context have to say it, and it is the fact the model got wrong.
+ */
+const VENUE_STOPS_CAVEAT =
+  'This system places only market orders — it never sends a stop, bracket or trailing order to the venue. Any order listed here that is not a market order was placed outside this system. Stop coverage as this system measures it is stopLevelRecordedHere, which is what the stop detector compares the price against; a stop resting at the venue is not.';
+
+export interface BrokerOrderView {
+  /** Every order resting at the venue, ungrouped. */
+  orders: OpenOrder[];
+  byPosition: Array<{
+    symbol: string;
+    qty: number;
+    stopLevelRecordedHere: number | null;
+    orders: OpenOrder[];
+  }>;
+  /** Resting orders with no matching open position — a buy waiting to fill, or an orphan. */
+  ordersWithoutPosition: OpenOrder[];
+  /** Symbols where a stop exists in both places and the two levels differ. */
+  stopMismatches: Array<{ symbol: string; recordedHere: number; atVenue: number }>;
+}
+
+/**
+ * The join between the venue's order book, the open positions, and this system's own recorded
+ * stop levels — one implementation, because the tool and the cycle context must not be able to
+ * disagree about it. The three facts stay SEPARATE in the result: nothing here collapses "has a
+ * stop somewhere" into a single boolean, since which place the stop lives in is the whole
+ * question.
+ */
+export async function brokerOrderView(): Promise<BrokerOrderView> {
+  const [orders, positions] = await Promise.all([
+    broker.getOpenOrders(),
+    broker.getPositions(),
+  ]);
+  const snapshots = getState().positionSnapshots;
+
+  const claimed = new Set<string>();
+  const byPosition = positions.map(p => {
+    const key = canonicalSymbol(p.symbol);
+    const mine = orders.filter(o => canonicalSymbol(o.symbol) === key);
+    mine.forEach(o => claimed.add(o.id));
+
+    const snap = Object.values(snapshots).find(s => canonicalSymbol(s.symbol) === key);
+    return {
+      symbol: p.symbol,
+      qty: p.qty,
+      stopLevelRecordedHere: snap?.stopLevel ?? null,
+      orders: mine,
+    };
+  });
+
+  const stopMismatches: BrokerOrderView['stopMismatches'] = [];
+  for (const row of byPosition) {
+    if (row.stopLevelRecordedHere == null) continue;
+    const venueStop = row.orders.find(
+      o => (o.type === 'stop' || o.type === 'stop_limit') && o.stopPrice != null,
+    );
+    if (!venueStop) continue;
+    // A cent of tolerance: the same level rounded differently is not a disagreement.
+    if (Math.abs(venueStop.stopPrice! - row.stopLevelRecordedHere) > 0.01) {
+      stopMismatches.push({
+        symbol: row.symbol,
+        recordedHere: row.stopLevelRecordedHere,
+        atVenue: venueStop.stopPrice!,
+      });
+    }
+  }
+
+  return {
+    orders,
+    byPosition,
+    ordersWithoutPosition: orders.filter(o => !claimed.has(o.id)),
+    stopMismatches,
+  };
+}
+
+async function toolGetOpenOrders(): Promise<string> {
+  const view = await brokerOrderView();
+
+  const caveats = [VENUE_STOPS_CAVEAT];
+  for (const m of view.stopMismatches) {
+    caveats.push(
+      `${m.symbol}: stop recorded here is $${m.recordedHere} and a stop order rests at the venue at $${m.atVenue}. Both are real; they are different levels set by different actors.`,
+    );
+  }
+  const unrecognised = view.orders.filter(o => o.type === 'other');
+  if (unrecognised.length > 0) {
+    caveats.push(
+      `Order types this system does not model, reported verbatim: ${unrecognised.map(o => `${o.symbol} ${o.rawType}`).join(', ')}.`,
+    );
+  }
+
+  return JSON.stringify({
+    restingOrderCount: view.orders.length,
+    byPosition: view.byPosition,
+    ordersWithoutPosition: view.ordersWithoutPosition,
+    caveats,
   });
 }
 

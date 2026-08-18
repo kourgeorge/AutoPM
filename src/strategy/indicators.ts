@@ -98,12 +98,6 @@ export function crossedAbove(fast: number[], slow: number[]): boolean {
   return c !== null && c.prev <= 0 && c.curr > 0;
 }
 
-/** Returns true if fast just crossed below slow (bearish crossover). */
-export function crossedBelow(fast: number[], slow: number[]): boolean {
-  const c = tailCross(fast, slow);
-  return c !== null && c.prev >= 0 && c.curr < 0;
-}
-
 // ── ADX (Average Directional Index) ─────────────────────────────────────────
 
 /**

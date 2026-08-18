@@ -74,6 +74,11 @@ const CONCIERGE_TOOLS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'get_open_orders',
+    description: 'Read the orders actually resting at the broker right now, grouped by position, alongside the stop level this system has recorded for each. This system places only market orders, so any stop or trailing order at the venue was placed outside it. Answer questions about whether stops exist from this, never from assumption — and never propose re-submitting a stop this shows is already there.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
     name: 'get_market_status',
     description: 'Get current market status: open/closed, ET time, minutes to next open/close.',
     input_schema: { type: 'object', properties: {}, required: [] },

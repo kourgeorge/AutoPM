@@ -6,7 +6,21 @@ import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } fr
 import { BrokerRejection } from './errors';
 import { logger } from '../core/logger';
 
-const API_TIMEOUT_MS = 10_000;
+const API_TIMEOUT_MS = parseInt(process.env.IBKR_API_TIMEOUT_MS ?? '10000');
+
+/**
+ * TWS order types this system can name. Everything else reports as `'other'` with `rawType`
+ * carrying TWS's own string: the mapping this replaces was `orderType === 'MKT' ? 'market' :
+ * 'limit'`, under which a live TRAIL order read as a limit order with no limit price.
+ */
+const IB_ORDER_TYPES: Record<string, OpenOrder['type']> = {
+  'MKT':      'market',
+  'LMT':      'limit',
+  'STP':      'stop',
+  'STP LMT':  'stop_limit',
+  'TRAIL':    'trailing_stop',
+  'TRAIL LIMIT': 'trailing_stop',
+};
 
 /**
  * What UTC instant a wall-clock reading in `timeZone` corresponds to.
@@ -118,6 +132,10 @@ export class IBKRBroker implements IBroker {
       equity:      usd('NetLiquidation'),
       cash:        usd('TotalCashValue'),
       buyingPower: usd('BuyingPower'),
+      // Not reported. `PreviousDayEquityWithLoanValue` is a different quantity, and `usd()`
+      // returns 0 for a missing tag — a zero here would be read as a real previous close and
+      // silently become the baseline the daily loss limit measures against.
+      previousCloseEquity: null,
     };
   }
 
@@ -145,16 +163,28 @@ export class IBKRBroker implements IBroker {
 
   async getOpenOrders(): Promise<OpenOrder[]> {
     const orders = await withTimeout(this.api.getAllOpenOrders(), 'getOpenOrders');
-    return orders.map(o => ({
-      id:         String(o.orderId),
-      symbol:     o.contract.symbol ?? '',
-      side:       o.order.action === 'BUY' ? 'buy' : 'sell',
-      qty:        o.order.totalQuantity ?? 0,
-      filled:     o.orderStatus?.filled ?? 0,
-      type:       o.order.orderType === 'MKT' ? 'market' : 'limit',
-      limitPrice: o.order.lmtPrice ?? undefined,
-      status:     String(o.orderStatus?.status ?? 'Unknown'),
-    }));
+    return orders.map(o => {
+      const rawType = String(o.order.orderType ?? '');
+      const type = IB_ORDER_TYPES[rawType] ?? 'other';
+      // TWS overloads one field: `auxPrice` is the trigger on a stop and the trail distance
+      // on a TRAIL. Reading it as one or the other is what makes a trailing stop legible.
+      const aux = typeof o.order.auxPrice === 'number' ? o.order.auxPrice : undefined;
+      return {
+        id:           String(o.orderId),
+        symbol:       o.contract.symbol ?? '',
+        side:         (o.order.action === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell',
+        qty:          Number(o.order.totalQuantity ?? 0),
+        filled:       o.orderStatus?.filled ?? 0,
+        type,
+        rawType,
+        limitPrice:   o.order.lmtPrice ?? undefined,
+        stopPrice:    type === 'stop' || type === 'stop_limit' ? aux : undefined,
+        trailPercent: o.order.trailingPercent ?? undefined,
+        trailAmount:  type === 'trailing_stop' ? aux : undefined,
+        tif:          o.order.tif ? String(o.order.tif) : undefined,
+        status:       String(o.orderStatus?.status ?? 'Unknown'),
+      };
+    });
   }
 
   async placeOrder(req: OrderRequest): Promise<{ id: string }> {

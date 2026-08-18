@@ -255,9 +255,3 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
 export function getCachedRegime(): RegimeClassification | null {
   return _cache;
 }
-
-/** Clear cache (for testing or forced refresh). */
-export function clearRegimeCache(): void {
-  _cache = null;
-  _cacheAt = 0;
-}

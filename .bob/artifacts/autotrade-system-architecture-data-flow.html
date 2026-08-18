@@ -1,0 +1,648 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AutoTrade — System Architecture &amp; Data Flow</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1f2328;
+    background: #ffffff;
+    padding: 32px 16px 48px;
+  }
+  .page { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: #57606a; font-size: 13px; margin-bottom: 32px; }
+  h2 { font-size: 16px; font-weight: 700; margin: 36px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #e5e7eb; }
+  h3 { font-size: 14px; font-weight: 600; margin: 20px 0 8px; color: #1f2328; }
+  p { margin-bottom: 10px; }
+  ul, ol { margin: 8px 0 10px 20px; }
+  li { margin-bottom: 4px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+  pre {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    margin: 10px 0 14px;
+    line-height: 1.5;
+  }
+
+  /* Layer badges */
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 12px;
+    vertical-align: middle;
+    margin-left: 6px;
+  }
+  .badge-l0 { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+  .badge-l1 { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+  .badge-l2 { background: #f0fdf4; color: #166534; border: 1px solid #86efac; }
+  .badge-l3 { background: #fdf4ff; color: #6b21a8; border: 1px solid #e9d5ff; }
+  .badge-l4 { background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; }
+  .badge-l5 { background: #f0f9ff; color: #0c4a6e; border: 1px solid #bae6fd; }
+
+  /* File cards */
+  .file-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0 20px; }
+  .file-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 14px;
+    background: #f7f8fa;
+  }
+  .file-card .fname {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #3b82d4;
+    margin-bottom: 6px;
+  }
+  .file-card .ftype {
+    font-size: 11px;
+    font-weight: 600;
+    color: #57606a;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+  }
+  .file-card p { font-size: 13px; margin: 0; }
+
+  /* Flow diagram */
+  .flow {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px 20px;
+    background: #f7f8fa;
+    margin: 14px 0 20px;
+  }
+  .flow-row {
+    display: flex;
+    align-items: center;
+    margin: 6px 0;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .flow-box {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .flow-box.agent { border-color: #7c5cd8; color: #6b21a8; }
+  .flow-box.file  { border-color: #3b82d4; color: #1e40af; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .flow-box.det   { border-color: #059669; color: #065f46; }
+  .flow-box.note  { border-color: #d97706; color: #92400e; font-weight: 400; max-width: 320px; }
+  .arrow { color: #57606a; font-size: 14px; font-weight: 700; }
+
+  /* Writer/reader tables */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 13px; }
+  th { background: #f7f8fa; text-align: left; padding: 7px 10px; font-weight: 600; border: 1px solid #e5e7eb; }
+  td { padding: 6px 10px; border: 1px solid #e5e7eb; vertical-align: top; }
+  tr:nth-child(even) td { background: #f7f8fa; }
+
+  /* Callout blocks */
+  .callout {
+    border-left: 4px solid #3b82d4;
+    background: #eff6ff;
+    border-radius: 0 6px 6px 0;
+    padding: 10px 14px;
+    margin: 12px 0 18px;
+    font-size: 13px;
+  }
+  .callout.warn { border-color: #d97706; background: #fffbeb; }
+  .callout.ok   { border-color: #059669; background: #f0fdf4; }
+  .callout strong { font-weight: 700; }
+
+  /* Section divider */
+  .divider { border: none; border-top: 1px solid #e5e7eb; margin: 32px 0; }
+
+  /* Roadmap steps */
+  .steps { counter-reset: step; margin: 12px 0; }
+  .step {
+    counter-increment: step;
+    display: flex;
+    gap: 14px;
+    margin-bottom: 16px;
+    align-items: flex-start;
+  }
+  .step-num {
+    min-width: 28px;
+    height: 28px;
+    background: #3b82d4;
+    color: #fff;
+    border-radius: 50%;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .step-body h4 { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .step-body p  { font-size: 13px; margin: 0; color: #374151; }
+
+  footer {
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+    text-align: center;
+    font-size: 12px;
+    color: #57606a;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>AutoTrade — System Architecture &amp; Data Flow</h1>
+  <p class="subtitle">How every file is written, who reads it, and what it means for building a self-improving portfolio health loop.</p>
+
+  
+  <h2>1 · The Architecture in One Picture</h2>
+
+  <p>The system is organised into five numbered <strong>layers</strong> (L0–L5). Each layer knows only about the layers below it. The LLM never touches the broker directly; it always acts through tools, and tools write structured records that outlive any single cycle.</p>
+
+  <div class="flow">
+    <div class="flow-row">
+      <span class="flow-box">L0 <code>policy.yaml</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box note">All behavioural numbers live here — immutable ceilings enforced at load, never in code.</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-box det">L1 Broker / Market Data</span>
+      <span class="arrow">→</span>
+      <span class="flow-box det">L2 FeatureScheduler + Detectors</span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">state.json</span>
+      <span class="arrow">+</span>
+      <span class="flow-box det">EventBus (in-memory)</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-box det">L2 EventBus</span>
+      <span class="arrow">→</span>
+      <span class="flow-box agent">L3 Trader Agent</span>
+      <span class="arrow">→ tools →</span>
+      <span class="flow-box file">journal.jsonl</span>
+      <span class="arrow">+</span>
+      <span class="flow-box file">fills.jsonl</span>
+      <span class="arrow">+</span>
+      <span class="flow-box file">LESSONS.md</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-box agent">Trader</span>
+      <span class="arrow">→ guard →</span>
+      <span class="flow-box">L4 Risk Guard</span>
+      <span class="arrow">→ broker →</span>
+      <span class="flow-box det">L1 Venue (Alpaca / IBKR)</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-box agent">ConciergeAgent</span>
+      <span class="arrow">reads</span>
+      <span class="flow-box file">state.json</span>
+      <span class="arrow">+</span>
+      <span class="flow-box file">journal.jsonl</span>
+      <span class="arrow">; sends messages →</span>
+      <span class="flow-box agent">Trader</span>
+    </div>
+  </div>
+
+  
+  <h2>2 · The Data Files — Exact Roles</h2>
+
+  <div class="file-grid">
+    <div class="file-card">
+      <div class="fname">data/state.json</div>
+      <div class="ftype">Mutable durable state <span class="badge badge-l2">L2</span></div>
+      <p>The only file the scheduler's deterministic layer writes. Holds today's start-of-day equity, per-position baselines (entry price, stop, target, session high/low), and the event-bus trigger ledger (cooldowns + armed keys). Debounced 5 s on write — coalescing many writes per tick is intentional.</p>
+    </div>
+    <div class="file-card">
+      <div class="fname">data/journal.jsonl</div>
+      <div class="ftype">Append-only decision log <span class="badge badge-l5">L5</span></div>
+      <p>One JSON object per line, written <em>synchronously</em> (no debounce). Every decision the Trader makes — entry, exit, hold, veto by guard, rejection by venue — lands here with its rationale, intended stop/target, ATR at entry, and policy version. Torn on kill; a torn line is skipped on read, never thrown.</p>
+    </div>
+    <div class="file-card">
+      <div class="fname">data/LESSONS.md</div>
+      <div class="ftype">Standing rules of thumb <span class="badge badge-l5">L5</span></div>
+      <p>Free-text markdown, appended synchronously, never rewritten by the system. The <em>only</em> edge that carries an inference from one cycle into the next. The Trader reads up to 20 recent lessons at cycle start; the operator can hand-edit or delete lessons that turned out wrong.</p>
+    </div>
+    <div class="file-card">
+      <div class="fname">data/fills.jsonl</div>
+      <div class="ftype">Durable fills ledger <span class="badge badge-l4">L4</span></div>
+      <p>Broker fills copied here by the reconciler every 5 min and at every session close. Deduplicated by fill-id. IBKR discards fills overnight — this is the only record that survives. Feeds <code>computeOutcomes()</code> → <code>scorecard()</code> for the metrics the Trader reads.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>Why state.json is debounced but journal.jsonl is synchronous.</strong><br />
+    <code>state.json</code> holds <em>current status</em> — coalescing 30 writes in one tick is a feature, a final write is all that matters. <code>journal.jsonl</code> holds <em>what happened</em> — a record that was sitting in a timer when the process died is worthless precisely when it was needed most. The fills ledger follows the same rule.
+  </div>
+
+  
+  <h2>3 · state.json — Field-by-Field</h2>
+
+  <table>
+    <tr><th>Field</th><th>Written by</th><th>Read by</th><th>Purpose</th></tr>
+    <tr>
+      <td><code>startOfDayEquity</code></td>
+      <td>Scheduler (<code>resetDailyState</code>) on first tick of each ET trading day</td>
+      <td>Detectors: <code>dailyLossDetector</code></td>
+      <td>The denominator for the daily-loss-limit check. Only updated when the account read succeeds — a stale baseline is safer than a wrong one.</td>
+    </tr>
+    <tr>
+      <td><code>lastResetDate</code></td>
+      <td>Same as above</td>
+      <td>Scheduler (<code>ensureDailyReset</code>)</td>
+      <td>Guards against a double-reset on the same ET date. ET date, not UTC — rolling at midnight ET not UTC prevents a mid-evening re-baseline.</td>
+    </tr>
+    <tr>
+      <td><code>positionSnapshots</code></td>
+      <td>Trader (on fill via <code>openPositionSnapshot</code>); L2 scheduler (<code>patchPositionSnapshot</code> for sessionHigh/Low)</td>
+      <td>Trader cycle context; stop/drawdown detectors; Concierge <code>get_state</code></td>
+      <td>Durable baselines: <code>entryPrice</code> set once at fill and never overwritten. <code>sessionHigh</code>/<code>sessionLow</code> monotonically updated each tick. <code>entryDecisionId</code> links back to the journal record that holds the entry rationale.</td>
+    </tr>
+    <tr>
+      <td><code>eventCooldowns</code></td>
+      <td>EventBus (<code>disarm</code>) on each event that fires</td>
+      <td>EventBus gate 3 (cooldown check) on every detector hit</td>
+      <td>Maps <code>cooldownKey</code> → ISO last-fired timestamp. Prevents a continuous breach from generating a wake storm. Cleared wholesale on daily reset so the new session is measured fresh.</td>
+    </tr>
+    <tr>
+      <td><code>armedTriggers</code></td>
+      <td>EventBus (<code>rearm</code> / <code>disarm</code>) on every tick that sees a threshold recross</td>
+      <td>EventBus gate 1 (edge gate) on every detector hit</td>
+      <td>The set of keys that have recrossed their threshold band and are ready to fire again. Persisted so a restart doesn't re-announce everything the previous process already handled.</td>
+    </tr>
+    <tr>
+      <td><code>lastReviewedExitAt</code></td>
+      <td>Scheduler (<code>publishReviewReady</code>) after each reconcile</td>
+      <td>Same function — it's a watermark</td>
+      <td>ISO timestamp of the newest exit the Trader has already been shown a <code>review_ready</code> event for. Prevents re-announcing the whole history on every reconcile run.</td>
+    </tr>
+  </table>
+
+  
+  <h2>4 · journal.jsonl — Field-by-Field</h2>
+
+  <p>Every record is a <code>DecisionRecord</code>. Its <code>id</code> is <code>${kind}:${symbol}:${iso}</code> — greppable and symmetric with event IDs so a veto can be matched to the event that triggered it.</p>
+
+  <table>
+    <tr><th>Field</th><th>Values</th><th>Purpose</th></tr>
+    <tr>
+      <td><code>kind</code></td>
+      <td><code>entry</code> | <code>exit</code> | <code>hold</code> | <code>veto</code> | <code>rejected</code></td>
+      <td>What happened. <code>hold</code> records deliberate decisions NOT to act — a trade list can never show these, but they are the decisions that explain a flat book.</td>
+    </tr>
+    <tr>
+      <td><code>actor</code></td>
+      <td><code>trader</code> | <code>guard</code> | <code>broker</code></td>
+      <td>Who stopped it. <code>veto</code> = guard refused before the venue. <code>rejected</code> = guard allowed it, broker said no.</td>
+    </tr>
+    <tr>
+      <td><code>triggerEventId</code></td>
+      <td>Event <code>id</code> or null</td>
+      <td>Links a decision back to the machine event that prompted it. Enables "how many stop-breach events were acted on vs ignored."</td>
+    </tr>
+    <tr>
+      <td><code>rationale</code></td>
+      <td>Free text (140 chars in cycle context)</td>
+      <td>The model's stated reason. Shown verbatim in the cycle context for open positions so a later cycle reads the original thesis, not a reconstruction.</td>
+    </tr>
+    <tr>
+      <td><code>intendedStop</code> / <code>intendedTarget</code></td>
+      <td>Absolute price or null</td>
+      <td>What was intended, recorded even on vetoes. A veto with no intended stop is indistinguishable from one with a bad stop unless these are here. Also powers <code>expectancyR</code> in the scorecard.</td>
+    </tr>
+    <tr>
+      <td><code>atrAtEntry</code></td>
+      <td>Number or null</td>
+      <td>The ATR the stop was sized against. Lives here (not in state) because it is the <em>moment of entry</em> ATR, not the current one.</td>
+    </tr>
+    <tr>
+      <td><code>vetoRule</code></td>
+      <td>Rule name or null</td>
+      <td>Which guard rule refused the intent — enables "what fraction of entries are blocked by the position-count ceiling vs the daily-loss ceiling."</td>
+    </tr>
+    <tr>
+      <td><code>policyVersion</code></td>
+      <td>Integer</td>
+      <td>Which policy was active at decision time. The scorecard's <code>byPolicyVersion</code> breakdown uses this to isolate whether a rule change moved performance.</td>
+    </tr>
+  </table>
+
+  <div class="callout ok">
+    <strong>Journal is a witness, not a participant.</strong><br />
+    A write failure in <code>recordDecision</code> is logged and swallowed. A full disk must not turn a filled order into a thrown exception the model reads as a failed one. The order goes through regardless; the record might not. This is the correct trade-off.
+  </div>
+
+  
+  <h2>5 · How the Trader Agent Interacts with Both Files</h2>
+
+  <h3>5a · At cycle start — reading</h3>
+  <p>Every cycle builds a <em>fresh</em> context object (<code>buildCycleContext</code>) from scratch. Nothing is remembered between cycles except what is persisted to disk. The context includes:</p>
+
+  <table>
+    <tr><th>Context block</th><th>Source</th></tr>
+    <tr><td><code>=== PORTFOLIO CONTEXT ===</code></td><td><code>state.json → positionSnapshots</code> joined with live venue positions. Each row shows entry price, stop, target, sector weight, MFE/MAE, and the verbatim entry rationale retrieved by <code>entryDecisionId</code> from <code>journal.jsonl</code>.</td></tr>
+    <tr><td><code>=== MACHINE EVENTS ===</code></td><td>EventBus in-memory pending queue (backed by <code>state.json → armedTriggers</code> and <code>eventCooldowns</code> for deduplication). Shows severity-sorted events with their IDs.</td></tr>
+    <tr><td><code>=== RECENT DECISIONS ===</code></td><td><code>journal.jsonl</code> — last 8 records. Shows kind, symbol, qty/price, P&amp;L, and rationale or veto rule.</td></tr>
+    <tr><td><code>=== LESSONS ===</code></td><td><code>LESSONS.md</code> — last 20 lessons, rendered in full. The only cross-cycle inference memory.</td></tr>
+  </table>
+
+  <h3>5b · During a cycle — writing</h3>
+  <p>The Trader calls tools. Every tool that acts writes records:</p>
+
+  <div class="flow">
+    <div class="flow-row">
+      <span class="flow-box agent">Trader calls <code>execute_entry</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">journal.jsonl</span>
+      <span class="arrow">(entry record + entryDecisionId)</span>
+    </div>
+    <div class="flow-row" style="margin-top:4px">
+      <span class="flow-box note" style="margin-left:0">+ <code>state.json → positionSnapshots</code> gets entryPrice, stopLevel, takeProfitLevel, openedAt set ONCE and never overwritten</span>
+    </div>
+    <div class="flow-row" style="margin-top:10px">
+      <span class="flow-box agent">Trader calls <code>execute_exit</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">journal.jsonl</span>
+      <span class="arrow">(exit record with P&amp;L)</span>
+    </div>
+    <div class="flow-row" style="margin-top:4px">
+      <span class="flow-box note" style="margin-left:0">+ <code>state.json → positionSnapshots</code> entry for that symbol is removed</span>
+    </div>
+    <div class="flow-row" style="margin-top:10px">
+      <span class="flow-box agent">Trader calls <code>ack_event</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box note">EventBus marks event acked in-memory. State updated (cooldowns). A hold/veto may also be written to <code>journal.jsonl</code>.</span>
+    </div>
+    <div class="flow-row" style="margin-top:10px">
+      <span class="flow-box agent">Trader calls <code>write_lesson</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">LESSONS.md</span>
+      <span class="arrow">appended synchronously with timestamp and policy version</span>
+    </div>
+    <div class="flow-row" style="margin-top:10px">
+      <span class="flow-box agent">Trader calls <code>sleep(minutes, reason)</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box note">Cycle ends. Next cycle will be woken in N minutes unless a critical event fires first.</span>
+    </div>
+  </div>
+
+  
+  <h2>6 · How the Concierge Agent Interacts with Both Files</h2>
+
+  <p>The Concierge is the <strong>operator-facing layer only</strong> — it never places orders directly. Its interactions with the data files are all read-only, except for one relay path:</p>
+
+  <table>
+    <tr><th>Tool</th><th>What it reads / does</th></tr>
+    <tr>
+      <td><code>get_state</code></td>
+      <td>Reads <code>state.json</code>: <code>startOfDayEquity</code>, <code>lastResetDate</code>, <code>positionSnapshots</code> (entry, stop, target, MFE/MAE). Also reads <code>policy.yaml</code> watchlist.</td>
+    </tr>
+    <tr>
+      <td><code>get_journal(symbol?, limit?)</code></td>
+      <td>Reads <code>journal.jsonl</code> via <code>readDecisions()</code>. Returns up to 200 records, filtered by symbol if provided. The Concierge uses this to explain <em>why</em> a trade was or wasn't taken.</td>
+    </tr>
+    <tr>
+      <td><code>get_pending_events</code></td>
+      <td>Reads the in-memory EventBus pending queue. Cooldown state is backed by <code>state.json</code> but events themselves are in-memory.</td>
+    </tr>
+    <tr>
+      <td><code>send_to_trader(message)</code></td>
+      <td>Calls <code>trader.wake(message)</code>. The message is queued in <code>pendingMessages[]</code> and appears in the Trader's next cycle context under <code>=== OPERATOR INSTRUCTIONS ===</code>. No file write.</td>
+    </tr>
+    <tr>
+      <td><code>update_policy</code></td>
+      <td>Mutates <code>policy.yaml</code> via <code>mutatePolicy()</code>. The Trader hot-reloads policy at the start of each cycle, so changes take effect on the next cycle with no restart required.</td>
+    </tr>
+  </table>
+
+  
+  <h2>7 · The Event Bus and state.json Trigger Ledger</h2>
+
+  <p>The EventBus is the most subtle interaction between <code>state.json</code> and the agents. It applies four gates to every detector hit before waking anyone:</p>
+
+  <ol>
+    <li><strong>Edge gate</strong> — fires only on <em>false → true</em> transitions. Armed state persisted in <code>state.json → armedTriggers</code> so a restart doesn't re-fire everything.</li>
+    <li><strong>Hysteresis</strong> — re-arming requires recrossing the threshold by a configurable band (in <code>policy.yaml → triggers.hysteresisPct</code>). Kills boundary flutter.</li>
+    <li><strong>Cooldown</strong> — even a freshly re-armed key stays quiet inside <code>defaultCooldownMs</code>. Last-fired timestamps stored in <code>state.json → eventCooldowns</code>.</li>
+    <li><strong>Escalation</strong> — a <code>critical</code> event still breaching and still unacked re-fires at <code>criticalCooldownMs</code> with <code>wakeCount++</code>. This is what enforces attention: ignore a stop breach and wakes get louder.</li>
+  </ol>
+
+  <div class="callout warn">
+    <strong>Daily reset clears all trigger latches.</strong><br />
+    At the start of each ET trading day the scheduler empties both <code>eventCooldowns</code> and <code>armedTriggers</code> wholesale. This prevents a key that fired yesterday from being silenced forever when its threshold un-breaches overnight (measured in production: 13 of 35 keys were permanently muted before this fix). Each new day, every condition can report once, measured against that day's prices.
+  </div>
+
+  
+  <h2>8 · The Learning Loop — How the System Improves</h2>
+
+  <p>The system has a structured, multi-layer feedback loop. Each layer feeds the next:</p>
+
+  <div class="flow">
+    <div class="flow-row">
+      <span class="flow-box file">fills.jsonl</span>
+      <span class="arrow">→</span>
+      <span class="flow-box det"><code>computeOutcomes()</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box det"><code>scorecard()</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box agent">Trader reads via <code>get_scorecard</code></span>
+    </div>
+    <div class="flow-row" style="margin-top:8px">
+      <span class="flow-box agent">Trader infers conclusion from scorecard</span>
+      <span class="arrow">→</span>
+      <span class="flow-box agent">calls <code>write_lesson</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">LESSONS.md</span>
+      <span class="arrow">→</span>
+      <span class="flow-box note">shown to the Trader on every future cycle</span>
+    </div>
+    <div class="flow-row" style="margin-top:8px">
+      <span class="flow-box agent">Operator / Concierge</span>
+      <span class="arrow">→</span>
+      <span class="flow-box agent"><code>update_policy</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">policy.yaml</span>
+      <span class="arrow">→</span>
+      <span class="flow-box note">hot-reloaded next cycle; version stamped on every journal record thereafter</span>
+    </div>
+    <div class="flow-row" style="margin-top:8px">
+      <span class="flow-box det">Reconciler (every 5 min + session close)</span>
+      <span class="arrow">→</span>
+      <span class="flow-box det"><code>publishReviewReady</code></span>
+      <span class="arrow">→</span>
+      <span class="flow-box agent">Trader woken with <code>review_ready</code> event</span>
+      <span class="arrow">→</span>
+      <span class="flow-box file">journal.jsonl</span>
+    </div>
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>9 · Roadmap: Making the System Semi-Automatic &amp; Self-Improving</h2>
+
+  <p>The architecture already has all the wiring needed. The gaps are in <strong>portfolio health assessment</strong> and <strong>closed-loop policy mutation</strong>. Below is a concrete phased roadmap.</p>
+
+  <h3>Phase 1 — Portfolio Health Score (observable today)</h3>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h4>Add a <code>get_portfolio_health</code> tool</h4>
+        <p>Combines <code>scorecard()</code>, <code>exposure()</code>, and stop discipline into a single JSON object. Grade each dimension (P&amp;L vs benchmark, concentration risk, stop compliance rate, win rate trend over last 30 vs 90 days). The Trader calls this at every <code>review_ready</code> event and writes a lesson if any dimension degrades by a threshold.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h4>Emit a <code>health_degraded</code> event from a new detector</h4>
+        <p>A new <code>portfolioHealthDetector</code> runs in the scheduler tick, reads the fills ledger, and fires an <code>urgent</code> event when rolling 14-day expectancy drops below a configurable floor. The event wakes the Trader without operator input. Gate it with a 6-hour cooldown so one bad stretch doesn't flood the queue.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h4>Surface health to the Concierge as a push alert</h4>
+        <p>The router already calls <code>concierge.pushAlert(msg)</code> for critical events. Route <code>health_degraded</code> through this path so the operator sees a plain-language summary without asking.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Phase 2 — Automated Policy Suggestions (semi-automatic)</h3>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h4>Give the Trader a <code>propose_policy_change</code> tool (dry-run only)</h4>
+        <p>The Trader can call this to write a <em>proposed</em> change to a staging file (<code>data/policy_proposal.json</code>) with full rationale and scorecard evidence. It never mutates <code>policy.yaml</code> directly. The proposal lands in the journal as a <code>hold</code> record with kind <code>policy_proposal</code>.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <h4>Concierge reviews proposals on operator request</h4>
+        <p>Add a <code>get_policy_proposals</code> tool to the Concierge that reads <code>data/policy_proposal.json</code> and presents the rationale. The operator approves or rejects via <code>send_to_trader("apply proposal")</code> or <code>send_to_trader("reject proposal: reason")</code>. The Trader then calls <code>update_policy</code> or records a rejection in the journal.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">6</div>
+      <div class="step-body">
+        <h4>Auto-approve low-risk proposals after a confirmation window</h4>
+        <p>If a proposal has been sitting for 24 hours with no rejection and the change is within a safe band (e.g. ±10% on position size, no watchlist removals), the Trader can auto-apply it on the next morning cycle. Record it as an <code>entry</code>-kind journal record with actor <code>trader</code> and rationale citing the proposal.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Phase 3 — Watchlist Self-Management (autonomous)</h3>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">7</div>
+      <div class="step-body">
+        <h4>Promote <code>ideaCandidates</code> and <code>shadowWatch</code> from state</h4>
+        <p><code>state.json</code> already has <code>ideaCandidates</code>, <code>watchlistExtension</code>, and <code>shadowWatch</code> fields (currently empty arrays). Populate them: <code>shadowWatch</code> = symbols that have passed signal scoring but not yet on the watchlist; <code>ideaCandidates</code> = symbols under research. The Trader manages these lists as part of the research cycle.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">8</div>
+      <div class="step-body">
+        <h4>Auto-graduate shadow-watched symbols to the watchlist</h4>
+        <p>A symbol that has scored positively on all five entry signals for N consecutive ticks, passes correlation check, and fits sector exposure budget is promoted via <code>update_policy({ addToWatchlist: [symbol] })</code> automatically. The journal records the promotion with the signal evidence. No operator action needed.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">9</div>
+      <div class="step-body">
+        <h4>Auto-remove consistently poor performers from the watchlist</h4>
+        <p>A symbol with ≥ 5 completed round trips, negative expectancy, and no open position is proposed for removal from the watchlist. The Trader calls <code>propose_policy_change</code> with scorecard evidence. This closes the portfolio health loop: the system stops allocating attention to symbols that have repeatedly failed.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3>Phase 4 — Resilience &amp; Observability</h3>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">10</div>
+      <div class="step-body">
+        <h4>Add a <code>data/health_log.jsonl</code> file</h4>
+        <p>A structured record written by the scheduler every day at reset time: equity, positions count, deployed %, daily P&amp;L, open event count. Lets the Concierge answer "how has the portfolio been doing over the last 30 days?" without replaying the fills ledger. One line per day = ~1 KB/year.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">11</div>
+      <div class="step-body">
+        <h4>Repair missing position snapshots automatically</h4>
+        <p>On startup <code>repairSessionExtremes</code> already restores MFE/MAE. Extend it to detect holdings at the venue with no snapshot at all (currently flagged "NO STOP RECORDED HERE") and attempt to reconstruct them from the fills ledger. Write a warning lesson if reconstruction is needed — the system should not silently hold an unmonitored position.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout ok">
+    <strong>The architecture supports all of this today.</strong><br />
+    Every step above uses only mechanisms that already exist: journal records, state patches, tool calls, event publication, and policy hot-reload. No structural changes are required — only new detectors, new tools, and new decision paths for the Trader and Concierge to walk.
+  </div>
+
+  <hr class="divider" />
+
+  
+  <h2>10 · Quick Reference — Who Writes What</h2>
+
+  <table>
+    <tr><th>File</th><th>Primary writer</th><th>Write mechanism</th><th>Primary readers</th></tr>
+    <tr>
+      <td><code>state.json</code></td>
+      <td>Scheduler (daily reset, trigger latches), Trader (position snapshots via tools)</td>
+      <td>Debounced 5 s; in-memory always authoritative</td>
+      <td>Trader cycle context, all detectors, Concierge <code>get_state</code></td>
+    </tr>
+    <tr>
+      <td><code>journal.jsonl</code></td>
+      <td>Trader (every decision — entry, exit, hold, veto, rejected)</td>
+      <td>Synchronous <code>appendFileSync</code></td>
+      <td>Trader cycle context (last 8), portfolio context (by entryDecisionId), Concierge <code>get_journal</code>, scorecard (entryRationale, stop, policyVersion)</td>
+    </tr>
+    <tr>
+      <td><code>LESSONS.md</code></td>
+      <td>Trader (<code>write_lesson</code> tool)</td>
+      <td>Synchronous <code>appendFileSync</code></td>
+      <td>Trader cycle context (last 20); operator by hand</td>
+    </tr>
+    <tr>
+      <td><code>fills.jsonl</code></td>
+      <td>Reconciler (every 5 min + session close + startup)</td>
+      <td>Synchronous deduplicated append</td>
+      <td><code>computeOutcomes()</code> → <code>scorecard()</code> → Trader <code>get_scorecard</code>; <code>publishReviewReady</code></td>
+    </tr>
+    <tr>
+      <td><code>policy.yaml</code></td>
+      <td>Concierge (<code>update_policy</code> tool); operator by hand</td>
+      <td>Validated rewrite; guarded hot-reload</td>
+      <td>Every layer — L0 is the single source of every behavioural number</td>
+    </tr>
+  </table>
+
+  <footer>Made with IBM Bob</footer>
+</div>
+</body>
+</html>
