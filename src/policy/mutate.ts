@@ -7,13 +7,15 @@
  *
  * Deliberately narrow: only the fields a user would express as a preference
  * ("add TSLA", "reduce position size to 3%") are exposed. Immutable ceilings
- * are enforced by the existing parsePolicy validator — this file does not
- * re-implement them.
+ * are enforced by the existing parsePolicy validator, which runs on the RESULT
+ * (see the end of `mutatePolicy`) — so the only shape check here is the one that
+ * has to precede the mutation: that the sections it writes into exist at all.
  */
 
 import fs from 'fs';
 import path from 'path';
 import { dump as dumpYaml, load as parseYamlDoc } from 'js-yaml';
+import { writeFileAtomic } from '../core/fsAtomic';
 import { HISTORY_DIR, POLICY_FILE, parsePolicy, readPolicyText, reloadPolicy } from './load';
 
 export interface PolicyMutation {
@@ -69,7 +71,7 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
   const applied: string[] = [];
 
   // ── Watchlist ──────────────────────────────────────────────────────────────
-  let watchlist: string[] = Array.isArray(doc.strategy?.watchlist)
+  let watchlist: string[] = Array.isArray(doc.strategy.watchlist)
     ? [...doc.strategy.watchlist]
     : [];
 
@@ -135,17 +137,12 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
     // Non-fatal — a backup failure must not block the mutation
   }
 
-  // Written via a temp file in the SAME directory and renamed, because `rename` within a
-  // filesystem is atomic while `writeFileSync` truncates first: a crash mid-write left a
-  // half-parsed policy.yaml behind, and policy is the file every startup path needs to read.
-  // The backup above is not the answer to that — restoring it is a manual step, and the
-  // daemon would already be down.
-  const tmp = `${POLICY_FILE}.${process.pid}.tmp`;
+  // Atomic because policy is the file every startup path needs to read, and the backup above
+  // is not an answer to a truncated one — restoring it is a manual step and the daemon would
+  // already be down. See `core/fsAtomic.ts`.
   try {
-    fs.writeFileSync(tmp, newText, 'utf8');
-    fs.renameSync(tmp, POLICY_FILE);
+    writeFileAtomic(POLICY_FILE, newText);
   } catch (err: any) {
-    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
     return { ok: false, errors: [`cannot write policy: ${err.message}`] };
   }
   reloadPolicy();

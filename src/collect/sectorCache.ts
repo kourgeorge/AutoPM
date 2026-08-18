@@ -16,6 +16,7 @@
  */
 
 import fs from 'fs';
+import { writeFileAtomic } from '../core/fsAtomic';
 import path from 'path';
 import { logger } from '../core/logger';
 import { getSectorRaw } from './yahoo';
@@ -48,7 +49,7 @@ function load(): Record<string, string> {
 function save(): void {
   try {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(SECTORS_FILE, JSON.stringify(_cache, null, 2), 'utf8');
+    writeFileAtomic(SECTORS_FILE, JSON.stringify(_cache, null, 2));
   } catch (err: any) {
     logger.warn(`[SectorCache] Write failed — in-memory cache still valid: ${err.message}`);
   }
