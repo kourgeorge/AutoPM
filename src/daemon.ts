@@ -6,7 +6,6 @@ import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
 import { reconcileOnStartup } from './review/reconcile';
-import { repairSessionExtremes } from './state/repair';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -28,14 +27,7 @@ const scheduler = new FeatureScheduler({
   }),
 });
 
-// Sequenced BEFORE the first tick, unlike `reconcileOnStartup` below, and for the opposite
-// reason: this writes the same `sessionHigh`/`sessionLow` fields a tick reads, so overlapping
-// them lets a tick read a poisoned figure and write it straight back. The bar fetches run in
-// parallel and a failure still starts the scheduler — an unverified extreme must not stop
-// trading, it must only stop being silent.
-void repairSessionExtremes()
-  .catch((err) => logger.error('[Repair] Session extreme repair failed', err.message ?? err))
-  .then(() => scheduler.start());
+scheduler.start();
 
 // Not awaited, and deliberately not blocking the scheduler: this reaches back a month to
 // catch fills that landed while the daemon was down, and a slow or unreachable broker at
