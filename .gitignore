@@ -17,3 +17,9 @@ tmp/
 
 data/policy/
 policy/history/
+
+# The IBKR-mode data directory — the same runtime files as data/ (journal, fills,
+# LESSONS, state, sectors, policy) from a run against TWS. Live trading records, so
+# ignored for the same reason its data/ counterparts above are. The files stay on disk;
+# the copies already in history are untouched by this.
+ibkr-data/
