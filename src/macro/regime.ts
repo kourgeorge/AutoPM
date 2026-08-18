@@ -43,7 +43,13 @@ export interface RegimeClassification {
   indicators: {
     gdpGrowth: number | null;        // Real GDP annualized QoQ %
     unemployment: number | null;     // Unemployment rate %
-    cpi: number | null;              // CPI YoY %
+    /**
+     * `T10YIE` — the 10-year BREAKEVEN inflation rate: what the bond market expects
+     * inflation to average over ten years. It is NOT realised CPI, and was labelled `cpi`
+     * for long enough to be worth naming loudly: the two disagree most exactly when
+     * inflation is turning, which is when a regime label matters.
+     */
+    inflationExpectation: number | null;
     yieldSpread10y2y: number | null; // 10Y-2Y spread (negative = inverted)
     vix: number | null;              // VIX level
   };
@@ -114,12 +120,18 @@ function scoreGrowth(gdp: number | null, unemployment: number | null): number {
   return parts.length > 0 ? parts.reduce((a, b) => a + b, 0) / parts.length : 0;
 }
 
-function scoreInflation(cpi: number | null): number {
-  if (cpi === null) return 0.5; // assume moderate if unknown
-  // CPI: <2% = low (0.1), 2-3% = target (0.3), 3-5% = elevated (0.6), >5% = hot (1.0)
-  if (cpi < 2) return 0.1;
-  if (cpi < 3) return 0.3;
-  if (cpi < 5) return 0.6;
+/**
+ * Thresholds are the familiar CPI ones, applied to the 10-year breakeven. Deliberate: the
+ * bands say "is inflation a problem for a risk asset", and the market's ten-year answer is
+ * the more forward-looking input for a regime label. Worth knowing that a breakeven is far
+ * less volatile than realised CPI, so this score moves less than the band names suggest —
+ * >5% is a regime break, not a hot print.
+ */
+function scoreInflation(breakeven: number | null): number {
+  if (breakeven === null) return 0.5; // assume moderate if unknown
+  if (breakeven < 2) return 0.1;
+  if (breakeven < 3) return 0.3;
+  if (breakeven < 5) return 0.6;
   return 1.0;
 }
 
@@ -190,20 +202,29 @@ function classifyRegime(
 
 let _cache: RegimeClassification | null = null;
 let _cacheAt: number = 0;
+/** TTL of the entry currently in `_cache` — a full one, or the retry window below. */
+let _cacheTtlMs: number = 0;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — regime changes slowly
+/**
+ * A classification drawn from NO indicators is cached only this long. The 6-hour TTL is
+ * justified by the regime changing slowly; a fetch failure does not change slowly, and
+ * pinning the fallback for six hours turned one FRED outage or one missing API key into a
+ * whole session of it.
+ */
+const NO_DATA_TTL_MS = 5 * 60 * 1000;
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export async function getRegime(forceRefresh = false): Promise<RegimeClassification> {
   const now = Date.now();
-  if (!forceRefresh && _cache && now - _cacheAt < CACHE_TTL_MS) {
+  if (!forceRefresh && _cache && now - _cacheAt < _cacheTtlMs) {
     return _cache;
   }
 
   logger.info('[Regime] Fetching macro indicators from FRED...');
 
   // Parallel fetch of all indicators
-  const [gdpGrowth, unemployment, cpiYoY, treasury10y, treasury2y, vix] = await Promise.all([
+  const [gdpGrowth, unemployment, breakeven10y, treasury10y, treasury2y, vix] = await Promise.all([
     fetchFredSeries('A191RL1Q225SBEA', 3),  // Real GDP growth annualized QoQ %
     fetchFredSeries('UNRATE', 3),            // Unemployment rate %
     fetchFredSeries('T10YIE', 5),            // 10Y breakeven inflation rate (market-implied CPI expectation %)
@@ -217,10 +238,19 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     : null;
 
   const growth = scoreGrowth(gdpGrowth, unemployment);
-  const inflation = scoreInflation(cpiYoY);
+  const inflation = scoreInflation(breakeven10y);
   const financial = scoreFinancial(yieldSpread, vix);
 
-  const { regime, confidence } = classifyRegime(growth, inflation, financial);
+  // With nothing fetched, every score is its neutral default — and `classifyRegime(0, 0.5, 0)`
+  // reads that as `recovery` / `medium`, the most permissive row in `policy.regime` (full size,
+  // rsiEntryMin 50). An absent FRED key was therefore indistinguishable from a measured
+  // recovery. No data is the maximally ambiguous case, so it takes the same branch the
+  // classifier already reserves for ambiguity, and says `low` out loud.
+  const measured = [gdpGrowth, unemployment, breakeven10y, treasury10y, treasury2y, vix]
+    .filter((v) => v !== null).length;
+  const { regime, confidence } = measured === 0
+    ? { regime: 'late_cycle' as Regime, confidence: 'low' as const }
+    : classifyRegime(growth, inflation, financial);
 
   const result: RegimeClassification = {
     regime,
@@ -229,7 +259,7 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     indicators: {
       gdpGrowth,
       unemployment,
-      cpi: cpiYoY,
+      inflationExpectation: breakeven10y,
       yieldSpread10y2y: yieldSpread,
       vix,
     },
@@ -237,12 +267,21 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     source: FRED_API_KEY ? 'FRED' : 'fallback',
   };
 
-  logger.info(
-    `[Regime] Classification: ${regime} (${confidence}) — growth=${growth.toFixed(2)} inflation=${inflation.toFixed(2)} financial=${financial.toFixed(2)}`,
-  );
+  if (measured === 0) {
+    logger.warn(
+      `[Regime] No indicator could be fetched — falling back to ${regime} (low confidence), ` +
+        `retrying in ${NO_DATA_TTL_MS / 60_000}m`,
+    );
+  } else {
+    logger.info(
+      `[Regime] Classification: ${regime} (${confidence}) — ${measured}/6 indicators, ` +
+        `growth=${growth.toFixed(2)} inflation=${inflation.toFixed(2)} financial=${financial.toFixed(2)}`,
+    );
+  }
 
   _cache = result;
   _cacheAt = now;
+  _cacheTtlMs = measured === 0 ? NO_DATA_TTL_MS : CACHE_TTL_MS;
   return result;
 }
 
