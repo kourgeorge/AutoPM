@@ -16,16 +16,12 @@
  * symbol; a missing market value is a caveat, not a reconstruction from entry price.
  */
 
-import { collectBars } from '../collect/barSource';
-import { isPresent } from '../collect/types';
 import { getSectors } from '../collect/sectorCache';
 import { broker } from '../broker';
 import type { Position } from '../broker/IBroker';
-import { dailyReturns, pearsonCorrelation } from './portfolioRisk';
-
-/** Same window and minimum as `correlationGate`, so the two agree on any shared pair. */
-const LOOKBACK_DAYS = 60;
-const MIN_RETURNS = 15;
+// Bars, window, minimum sample and the pairwise arithmetic all come from the entry gate's
+// module, so a pair correlated here and a pair correlated there cannot disagree.
+import { correlate, returnsMatrix } from './portfolioRisk';
 
 export interface ExposurePosition {
   symbol: string;
@@ -225,22 +221,12 @@ async function heldCorrelations(symbols: string[]): Promise<{
   if (symbols.length < 2) return empty;
 
   const caveats: string[] = [];
-  const returns = new Map<string, number[]>();
-
-  const fetched = await Promise.all(
-    symbols.map(async s => ({ symbol: s, bars: await collectBars(s, LOOKBACK_DAYS) })),
-  );
-  for (const { symbol, bars } of fetched) {
-    if (!isPresent(bars)) continue;
-    const r = dailyReturns(bars.value);
-    if (r.length < MIN_RETURNS) continue;
-    returns.set(symbol, r);
-  }
+  const returns = await returnsMatrix(symbols);
 
   const skipped = symbols.filter(s => !returns.has(s));
   if (skipped.length > 0) {
     caveats.push(
-      `insufficient return history for ${skipped.join(', ')} — excluded from correlations`,
+      `insufficient return history for ${skipped.join(', ')} \u2014 excluded from correlations`,
     );
   }
 
@@ -253,12 +239,9 @@ async function heldCorrelations(symbols: string[]): Promise<{
     for (let j = i + 1; j < usable.length; j++) {
       const a = usable[i];
       const b = usable[j];
-      const ra = returns.get(a)!;
-      const rb = returns.get(b)!;
-      const len = Math.min(ra.length, rb.length);
-      if (len < MIN_RETURNS) continue;
 
-      const corr = pearsonCorrelation(ra.slice(-len), rb.slice(-len));
+      const corr = correlate(returns.get(a)!, returns.get(b)!);
+      if (corr === null) continue;
       correlations.push({ a, b, corr });
 
       if (Math.abs(corr) > Math.abs(maxHeldCorrelation)) {
