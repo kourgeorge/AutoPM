@@ -19,6 +19,7 @@ import path from 'path';
 import { logger } from '../core/logger';
 import { getPolicy } from '../policy/load';
 import type { DecisionInput, DecisionRecord } from './types';
+import { canonicalSymbol } from '../core/symbols';
 
 export const DATA_DIR = path.join(process.cwd(), 'data');
 export const JOURNAL_FILE = path.join(DATA_DIR, 'journal.jsonl');
@@ -90,8 +91,10 @@ export function readDecisions(opts: { symbol?: string; limit?: number } = {}): D
     }
   }
 
-  const filtered = opts.symbol
-    ? records.filter((r) => r.symbol === opts.symbol)
+  // Canonical, so a `BTC/USD` decision is found by a caller holding the venue's `BTCUSD`.
+  const wanted = opts.symbol ? canonicalSymbol(opts.symbol) : null;
+  const filtered = wanted
+    ? records.filter((r) => r.symbol != null && canonicalSymbol(r.symbol) === wanted)
     : records;
 
   return opts.limit != null ? filtered.slice(-opts.limit) : filtered;

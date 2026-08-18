@@ -14,6 +14,8 @@
  * journal. Neither is asked for what it does not know.
  */
 
+import { canonicalSymbol } from '../core/symbols';
+import { logger } from '../core/logger';
 import { readDecisions } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 import type { Fill } from '../broker/IBroker';
@@ -75,12 +77,18 @@ interface Leg {
   notional: number;
   fees: number;
   feesComplete: boolean;
-  at: string;
+  /** First fill in the leg. */
+  firstAt: string;
+  /** Last fill in the leg. */
+  lastAt: string;
   orderIds: Set<string>;
 }
 
 function emptyLeg(): Leg {
-  return { qty: 0, notional: 0, fees: 0, feesComplete: true, at: '', orderIds: new Set() };
+  return {
+    qty: 0, notional: 0, fees: 0, feesComplete: true,
+    firstAt: '', lastAt: '', orderIds: new Set(),
+  };
 }
 
 function absorb(leg: Leg, fill: Fill, qty: number): void {
@@ -89,7 +97,11 @@ function absorb(leg: Leg, fill: Fill, qty: number): void {
   // Pro-rated, because one fill can be split across two round trips by a scale-out.
   if (fill.fee == null) leg.feesComplete = false;
   else leg.fees += fill.fee * (qty / fill.qty);
-  leg.at = fill.at;
+  // BOTH ends, because the two legs want opposite ones: a position was entered at its FIRST
+  // buy and exited at its LAST sell. A single `at` overwritten per fill gave the entry the
+  // timestamp of the last scale-in, which shortened `holdingMs` by the whole accumulation.
+  if (leg.firstAt === '') leg.firstAt = fill.at;
+  leg.lastAt = fill.at;
   leg.orderIds.add(fill.orderId);
 }
 
@@ -109,22 +121,28 @@ function absorb(leg: Leg, fill: Fill, qty: number): void {
 export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): TradeOutcome[] {
   const fills = readFills({ symbol: opts.symbol });
 
-  const bySymbol = new Map<string, Fill[]>();
+  // Grouped canonically: a buy recorded as `BTC/USD` and the sell that closed it recorded as
+  // `BTCUSD` are one round trip, and grouping on the raw string put them in two buckets where
+  // neither ever returned to flat — so the trade simply never appeared in a review. The
+  // first spelling seen is kept for display; the canonical form is only ever the key.
+  const bySymbol = new Map<string, { display: string; fills: Fill[] }>();
   for (const f of fills) {
     if (!(f.qty > 0) || !Number.isFinite(f.price)) continue;
-    const list = bySymbol.get(f.symbol);
-    if (list) list.push(f);
-    else bySymbol.set(f.symbol, [f]);
+    const key = canonicalSymbol(f.symbol);
+    const bucket = bySymbol.get(key);
+    if (bucket) bucket.fills.push(f);
+    else bySymbol.set(key, { display: f.symbol, fills: [f] });
   }
 
   const journal = indexJournal(readDecisions());
   const outcomes: TradeOutcome[] = [];
 
-  for (const [symbol, symbolFills] of bySymbol) {
+  for (const [, { display: symbol, fills: symbolFills }] of bySymbol) {
     let position = 0;
     let entry = emptyLeg();
     let exit = emptyLeg();
     let unexplained = false;
+    let orphanedQty = 0;
 
     for (const fill of symbolFills) {
       if (fill.side === 'buy') {
@@ -137,8 +155,18 @@ export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): T
       // there. The excess is dropped rather than carried as a short — the system is
       // long-only, so this is a gap in the ledger, not a position.
       const matched = Math.min(fill.qty, position);
+
+      // A sell against a FLAT position closes nothing, so it belongs to no round trip.
+      // `unexplained` used to be set here and then survive into the next trip, which
+      // stamped the following clean round trip as unreconciled. Counted per symbol instead,
+      // where it is a statement about the ledger rather than about a trade.
+      if (matched <= 0) {
+        orphanedQty += fill.qty;
+        continue;
+      }
+      // Partially matched: this sell DID close the position, and did so short a buy. That
+      // is a fact about this round trip.
       if (matched < fill.qty) unexplained = true;
-      if (matched <= 0) continue;
 
       absorb(exit, fill, matched);
       position -= matched;
@@ -149,6 +177,13 @@ export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): T
       entry = emptyLeg();
       exit = emptyLeg();
       unexplained = false;
+    }
+
+    if (orphanedQty > 0) {
+      logger.warn(
+        `[Ledger] ${symbol}: ${orphanedQty} unit(s) sold with no position on record — a buy is ` +
+          `missing from the fills ledger. Those sells are in no round trip.`,
+      );
     }
   }
 
@@ -208,9 +243,9 @@ function assemble(
   return {
     symbol,
     qty,
-    entryAt: entry.at,
-    exitAt: exit.at,
-    holdingMs: Date.parse(exit.at) - Date.parse(entry.at),
+    entryAt: entry.firstAt,
+    exitAt: exit.lastAt,
+    holdingMs: Date.parse(exit.lastAt) - Date.parse(entry.firstAt),
     entryPrice,
     exitPrice,
     grossPnL,
