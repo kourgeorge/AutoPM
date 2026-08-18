@@ -21,8 +21,6 @@ ui.onMessage((msg) => concierge.handleMessage(msg));
 // carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a
 // machine event is not an operator instruction. The events themselves travel via the
 // registry, read at cycle start.
-//
-// To roll back to observation only, swap `createLiveRouter(...)` for `observeOnlyRouter`.
 const scheduler = new FeatureScheduler({
   route: createLiveRouter({
     wakeTrader: () => trader.wake(),
