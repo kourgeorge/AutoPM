@@ -201,15 +201,20 @@ function classifyRegime(
 // ── Cache ────────────────────────────────────────────────────────────────────
 
 let _cache: RegimeClassification | null = null;
-let _cacheAt: number = 0;
-/** TTL of the entry currently in `_cache` — a full one, or the retry window below. */
-let _cacheTtlMs: number = 0;
+/** When the entry in `_cache` stops being usable. One variable: the age and the TTL it was
+ *  compared against were only ever read together, in one expression. */
+let _cacheExpiresAt: number = 0;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — regime changes slowly
 /**
  * A classification drawn from NO indicators is cached only this long. The 6-hour TTL is
  * justified by the regime changing slowly; a fetch failure does not change slowly, and
- * pinning the fallback for six hours turned one FRED outage or one missing API key into a
- * whole session of it.
+ * pinning the fallback for six hours turned one FRED outage into a whole session of it.
+ *
+ * Applies to a TRANSIENT failure only. A missing `FRED_API_KEY` cannot heal — `fetchFredSeries`
+ * short-circuits before the network — so retrying it every 5 minutes buys nothing and costs six
+ * no-op calls and seven log lines each time, ~78 refreshes a day instead of 2. Worse, one of
+ * `getRegime`'s callers is `applyRegimeSizing` on the order path, where a refresh that does
+ * reach the network can hold an entry for up to 10s per indicator.
  */
 const NO_DATA_TTL_MS = 5 * 60 * 1000;
 
@@ -217,7 +222,7 @@ const NO_DATA_TTL_MS = 5 * 60 * 1000;
 
 export async function getRegime(forceRefresh = false): Promise<RegimeClassification> {
   const now = Date.now();
-  if (!forceRefresh && _cache && now - _cacheAt < _cacheTtlMs) {
+  if (!forceRefresh && _cache && now < _cacheExpiresAt) {
     return _cache;
   }
 
@@ -248,7 +253,8 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
   // classifier already reserves for ambiguity, and says `low` out loud.
   const measured = [gdpGrowth, unemployment, breakeven10y, treasury10y, treasury2y, vix]
     .filter((v) => v !== null).length;
-  const { regime, confidence } = measured === 0
+  const noData = measured === 0;
+  const { regime, confidence } = noData
     ? { regime: 'late_cycle' as Regime, confidence: 'low' as const }
     : classifyRegime(growth, inflation, financial);
 
@@ -267,7 +273,7 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     source: FRED_API_KEY ? 'FRED' : 'fallback',
   };
 
-  if (measured === 0) {
+  if (noData) {
     logger.warn(
       `[Regime] No indicator could be fetched — falling back to ${regime} (low confidence), ` +
         `retrying in ${NO_DATA_TTL_MS / 60_000}m`,
@@ -280,8 +286,8 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
   }
 
   _cache = result;
-  _cacheAt = now;
-  _cacheTtlMs = measured === 0 ? NO_DATA_TTL_MS : CACHE_TTL_MS;
+  // Retry soon only if retrying could change the answer: no key is a permanent condition.
+  _cacheExpiresAt = now + (noData && FRED_API_KEY ? NO_DATA_TTL_MS : CACHE_TTL_MS);
   return result;
 }
 
