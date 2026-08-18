@@ -56,9 +56,12 @@ export function volatilityScaledQty(
   // (we can't spend more than the budget in total notional)
   const qtyByRisk = dollarBudget / riskPerShare;
   const qtyByNotional = dollarBudget / price;
-  const qty = Math.floor(Math.min(qtyByRisk, qtyByNotional));
 
-  return Math.max(qty, 1); // at least 1 share
+  // Zero when one share does not fit the budget, and zero is the honest answer: a trailing
+  // `Math.max(qty, 1)` used to report 1 there, which on a high-priced asset recommended a
+  // position many times the equity (measured: $10k equity, $118k price -> qty 1 = 1180%).
+  // It also disagreed with the `riskPerShare <= 0` branch above, which floors to 0 already.
+  return Math.floor(Math.min(qtyByRisk, qtyByNotional));
 }
 
 // ── Shared correlation primitives ─────────────────────────────────────────────

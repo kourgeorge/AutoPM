@@ -9,6 +9,7 @@
 
 import { broker } from '../broker';
 import { logger } from '../core/logger';
+import { canonicalSymbol } from '../core/symbols';
 import { getState } from '../state/state';
 import { SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
@@ -82,10 +83,16 @@ export async function enterPosition(
   }
   // Adding to a winner is a different decision with a different stop; it is not this
   // function's job. Blocking it also protects the entry baselines from being re-derived.
-  if (positions.some((p) => p.symbol === symbol)) {
+  //
+  // Compared canonically, not raw: an order placed as `BTC/USD` comes back from Alpaca as
+  // `BTCUSD`, so `===` let the same asset through this guard twice under two spellings.
+  if (positions.some((p) => canonicalSymbol(p.symbol) === canonicalSymbol(symbol))) {
     reject('already_holding', `Already holding ${symbol} — exit first, or size the original entry correctly`);
   }
 
+  // Checked against the REQUESTED qty, before `applyRegimeSizing`. Sound only because that
+  // function can now only reduce — while it could clamp a fractional qty UP to a whole unit,
+  // the order that reached the venue was one this check had never seen.
   if (!hasEnoughBuyingPower(account, signal, qty)) {
     reject('insufficient_buying_power', `Insufficient buying power for ${qty} × $${price} (have $${account.buyingPower.toFixed(2)})`);
   }
@@ -103,7 +110,15 @@ export async function enterPosition(
 
 /**
  * Apply regime-based position sizing. Reduces qty in late_cycle/recession.
- * Never increases qty (multiplier capped at 1.0). Fails open (returns original qty if regime unavailable).
+ *
+ * The one invariant: NOTHING LEAVES HERE LARGER THAN WHAT CAME IN. It used to, in both
+ * directions at once — `Math.floor` collapsed any fractional request to 0 and a trailing
+ * `Math.max(adjusted, 1)` clamped that 0 up to a whole unit, so a request for 0.05 BTC
+ * reached the venue as 1 BTC. It fired in `expansion` too, where `mult` is 1 and this
+ * function is meant to be a no-op, and it escaped `hasEnoughBuyingPower`, which had already
+ * run against the 0.05.
+ *
+ * Fails open (returns the original qty if the regime is unavailable).
  */
 async function applyRegimeSizing(qty: number): Promise<number> {
   try {
@@ -111,11 +126,20 @@ async function applyRegimeSizing(qty: number): Promise<number> {
     const policy = getPolicy();
     const override = policy.regime[regime.regime];
     const mult = Math.min(override.sizeMult, 1.0); // never increase
-    const adjusted = Math.floor(qty * mult);
+
+    // Whole-share requests stay whole; a fractional one stays fractional. Rounding a
+    // fraction is not "sizing down", it is changing the asset's unit.
+    const scaled = Number.isInteger(qty) ? Math.floor(qty * mult) : qty * mult;
+
+    // A single share halved floors to zero, and a zero-share order is a failed order rather
+    // than a smaller one. Fall back to the REQUEST — never to a constant, which is what
+    // turned this clamp into an increase.
+    const adjusted = scaled > 0 ? Math.min(scaled, qty) : qty;
+
     if (adjusted < qty) {
       logger.info(`[Guard] Regime ${regime.regime} — size reduced from ${qty} to ${adjusted} (×${mult})`);
     }
-    return Math.max(adjusted, 1); // at least 1 share
+    return adjusted;
   } catch {
     // Fail open: if regime fetch fails, use original qty
     return qty;
@@ -127,7 +151,10 @@ export async function exitPosition(
   reason: string,
 ): Promise<{ orderId: string }> {
   const positions = await broker.getPositions();
-  const pos = positions.find((p) => p.symbol === symbol);
+  // Canonical, for the same reason as `already_holding` above — with `===` a crypto
+  // position could not be exited AT ALL: the venue reports `BTCUSD`, the caller says
+  // `BTC/USD`, and `no_position` threw on a position that was plainly open.
+  const pos = positions.find((p) => canonicalSymbol(p.symbol) === canonicalSymbol(symbol));
 
   // Throws where it used to log a warning and return. The warning let `toolExecuteExit`
   // report `{ ok: true }` for a sell that never happened, and discard the position's
