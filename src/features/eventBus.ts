@@ -463,3 +463,19 @@ export function publishTick(
 
   return fired;
 }
+
+/**
+ * Release every trigger latch, returning how many were held.
+ *
+ * Lives here because this module owns both halves of "the latch": `processHits` writes
+ * `eventCooldowns`, `rearm` writes `armedTriggers`, and only one of the two is written on any
+ * given path — so a caller that counted one field skipped days where only the other was dirty.
+ * The scheduler decides WHEN a day has turned; it should not also have to know which fields
+ * constitute the latch, because a third one added here would silently not be released there.
+ */
+export function releaseAllLatches(): number {
+  const state = getState();
+  const held = Object.keys(state.eventCooldowns).length + state.armedTriggers.length;
+  if (held > 0) updateState({ eventCooldowns: {}, armedTriggers: [] });
+  return held;
+}
