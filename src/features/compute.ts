@@ -27,7 +27,12 @@ import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { atr, crossedAbove, ema, rsi } from '../strategy/indicators';
 import { computeSignals, signalSummary, type SignalScore } from '../strategy/signals';
-import { getState, patchPositionSnapshot, type PositionSnapshot } from '../state/state';
+import {
+  getPositionSnapshot,
+  getState,
+  patchPositionSnapshot,
+  type PositionSnapshot,
+} from '../state/state';
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
@@ -309,7 +314,10 @@ export function computeTick(raw: RawBundle, p: Policy): TickData {
   for (const pos of held) {
     positions[pos.symbol] = buildPositionData(
       pos,
-      state.positionSnapshots[pos.symbol],
+      // Through the canonical lookup, not the raw key: a `BTC/USD` snapshot against the
+      // venue's `BTCUSD` used to miss here while the cycle context — which normalises —
+      // reported the same position as stopped. The stop detector saw no level.
+      getPositionSnapshot(pos.symbol),
       price(pos.symbol),
       bars(pos.symbol),
       p,

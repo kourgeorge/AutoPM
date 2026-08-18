@@ -21,7 +21,7 @@
 import { collectAccount } from '../collect';
 import { isPresent, isUsable } from '../collect/types';
 import { logger } from '../core/logger';
-import { etDate, type MarketSession } from '../core/time';
+import { etDate, etNow, type MarketSession } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { getState, resetDailyState, updateState } from '../state/state';
@@ -76,8 +76,29 @@ export async function ensureDailyReset(now: Date = new Date()): Promise<boolean>
     return false;
   }
 
-  resetDailyState(account.value.equity, today);
-  logger.info(`[Scheduler] Daily reset for ${today} — start equity $${account.value.equity.toFixed(2)}`);
+  // Which equity is "start of day" depends on when this reset actually happens.
+  //
+  // Before the open, current equity IS the start of the day. After it, current equity is
+  // mid-day equity, and using it read every late start as a flat day: start at 14:00 after a
+  // 3% drawdown and `isDailyLossBreached` compared today's loss against today's loss, i.e.
+  // zero, switching the limit off for the rest of the session. The previous close is the
+  // honest baseline, so prefer it whenever the venue reports one.
+  //
+  // ET wall clock, not `marketSession()`, which answers 'closed' both before the open and
+  // late in the evening — the two cases that need opposite baselines.
+  const et = etNow(now);
+  const afterOpen = et.hours * 60 + et.minutes >= 570; // 09:30 ET
+  const prevClose = account.value.previousCloseEquity;
+  const baseline = afterOpen && prevClose != null ? prevClose : account.value.equity;
+
+  resetDailyState(baseline, today);
+  const provenance = !afterOpen
+    ? 'current equity, before the open'
+    : prevClose != null
+      ? 'previous close'
+      : `current equity — reset ran at ${et.timeStr} ET and the venue reports no previous close, ` +
+        `so today's move before now is not in this baseline`;
+  logger.info(`[Scheduler] Daily reset for ${today} — start equity $${baseline.toFixed(2)} (${provenance})`);
 
   // Release every trigger latch, because the day it was measured against is over.
   //

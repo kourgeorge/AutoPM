@@ -10,6 +10,16 @@ export interface AccountInfo {
   equity: number;
   cash: number;
   buyingPower: number;
+  /**
+   * Equity at the previous session's close, or `null` when the venue does not report it.
+   *
+   * The daily loss limit is measured against the start of the day, and the only other source
+   * for that number is "whatever equity was when this process happened to start" — which
+   * reads a mid-session start as a flat day and switches the limit off. `null` is never to be
+   * substituted with `0` or with current equity here; the caller decides what to do without it
+   * and says so.
+   */
+  previousCloseEquity: number | null;
 }
 
 export interface OrderRequest {

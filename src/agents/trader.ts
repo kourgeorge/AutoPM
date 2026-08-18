@@ -1,6 +1,7 @@
 import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { logger } from '../core/logger';
+import { canonicalSymbol } from '../core/symbols';
 import { renderPolicy } from '../policy/render';
 import { getPolicy } from '../policy/load';
 import { getState } from '../state/state';
@@ -210,17 +211,6 @@ function ageOf(openedAt: string): string | null {
   return `${Math.round(hours / 24)}d`;
 }
 
-/**
- * Join key between a position snapshot and a venue position.
- *
- * Crypto is the whole reason: an order placed as `BTC/USD` comes back from Alpaca as `BTCUSD`.
- * Deliberately not exported — this is a rendering convenience for one block, not a claim that
- * the system has a canonical symbol form.
- */
-function normalizeSymbol(s: string): string {
-  return s.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-}
-
 function signed(pct: number): string {
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
 }
@@ -263,11 +253,11 @@ async function buildPortfolioContext(
     logger.warn(`[Trader] Exposure unavailable for cycle context: ${err.message}`);
   }
 
-  // Joined on a normalized symbol: the snapshot is keyed as the order was placed (`BTC/USD`)
-  // while the venue reports `BTCUSD`, and an unjoined row silently renders as "sector unknown"
-  // for a position whose sector is known one line further down.
+  // Joined on the canonical symbol: the snapshot may carry the spelling the order was placed
+  // with (`BTC/USD`) while the venue reports `BTCUSD`, and an unjoined row silently renders as
+  // "sector unknown" for a position whose sector is known one line further down.
   const snapByKey = new Map(
-    Object.values(snapshots).map(s => [normalizeSymbol(s.symbol), s] as const),
+    Object.values(snapshots).map(s => [canonicalSymbol(s.symbol), s] as const),
   );
 
   // Venue positions first, then any snapshot the venue did not confirm. A row with no
@@ -276,12 +266,12 @@ async function buildPortfolioContext(
   const rows: Array<{ label: string; snap?: PositionSnapshot; e?: ExposurePosition }> = [];
   const claimed = new Set<string>();
   for (const e of exp?.positions ?? []) {
-    const snap = snapByKey.get(normalizeSymbol(e.symbol));
-    if (snap) claimed.add(normalizeSymbol(e.symbol));
+    const snap = snapByKey.get(canonicalSymbol(e.symbol));
+    if (snap) claimed.add(canonicalSymbol(e.symbol));
     rows.push({ label: snap?.symbol ?? e.symbol, snap, e });
   }
   for (const snap of Object.values(snapshots)) {
-    if (claimed.has(normalizeSymbol(snap.symbol))) continue;
+    if (claimed.has(canonicalSymbol(snap.symbol))) continue;
     rows.push({ label: snap.symbol, snap });
   }
 

@@ -21,11 +21,13 @@ import { isPresent } from '../collect/types';
 import { atr } from '../strategy/indicators';
 import { computeSignals, signalSummary } from '../strategy/signals';
 import {
+  getPositionSnapshot,
   getState,
   openPositionSnapshot,
-  patchPositionSnapshot,
+  upsertPositionSnapshot,
   removePositionSnapshot,
 } from '../state/state';
+import { canonicalSymbol } from '../core/symbols';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
@@ -77,9 +79,9 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         symbol:       { type: 'string', description: 'Ticker exactly as it appears in the portfolio.' },
-        stopLoss:     { type: 'number', description: 'Absolute stop-loss price. Must be below entryPrice.' },
-        takeProfit:   { type: 'number', description: 'Absolute take-profit price. Must be above entryPrice.' },
-        entryPrice:   { type: 'number', description: 'Original entry price. Required only when not already recorded (legacy positions). Ignored if the snapshot already has one.' },
+        stopLoss:     { type: 'number', description: 'Absolute stop-loss price. Must be below the CURRENT price — an inherited position may be underwater, in which case a sane stop sits above its original entry.' },
+        takeProfit:   { type: 'number', description: 'Absolute take-profit price. Must be above the current price.' },
+        entryPrice:   { type: 'number', description: 'Original entry price. Optional — defaults to the venue cost basis when this system has no record of the entry.' },
         thesis:       { type: 'string', description: 'One-sentence holding thesis: why you are still in, and what would invalidate it.' },
       },
       required: ['symbol', 'stopLoss', 'thesis'],
@@ -545,13 +547,16 @@ function journalRefusal(
  * Retrofit baselines onto a position that was opened without them.
  *
  * This is the only write path for `stopLevel`, `takeProfitLevel`, `entryPrice`, and
- * `entryDecisionId` on a snapshot that already exists. `openPositionSnapshot` refuses to
- * overwrite an existing entry, and the entry flow never runs for positions that predated
- * this system or were opened by an external tool.
+ * `entryDecisionId` on a position that already exists. `openPositionSnapshot` refuses to
+ * overwrite, and the entry flow never runs for positions that predated this system or were
+ * opened by an external tool — so this goes through `upsertPositionSnapshot`, which can
+ * create. It used to write through `patchPositionSnapshot`, which returns early when no
+ * snapshot exists: for the externally-opened position this tool exists for, it wrote
+ * nothing and still returned `{ ok: true }`.
  *
- * The stop validation mirrors `enterPosition`'s `missing_stop` rule exactly — same
- * invariant, same error name — so the stop detector starts watching immediately and the
- * next cycle sees a normal managed position rather than a `NO STOP RECORDED HERE` flag.
+ * The stop is validated against the CURRENT price, not the entry price. An inherited
+ * position can be far underwater, and every sane stop on it is then above the old entry —
+ * validating against entry would reject exactly the levels worth setting.
  */
 async function toolAnnotatePosition(input: Record<string, unknown>): Promise<string> {
   const { symbol, stopLoss, takeProfit, thesis } = input as {
@@ -562,24 +567,36 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
   // Confirm the position is live at the venue — annotating a phantom is worse than
   // doing nothing, because it creates a stop the detector will report on air.
   const positions = await broker.getPositions();
-  if (!positions.some(p => p.symbol === symbol)) {
+  // Canonical comparison, not `===`: the model quotes the symbol as the portfolio renders it,
+  // which for crypto is the snapshot's `BTC/USD` against the venue's `BTCUSD`. An exact match
+  // reported "no open position" for a position sitting right there in the same context.
+  const held = positions.find(p => canonicalSymbol(p.symbol) === canonicalSymbol(symbol));
+  if (!held) {
     return JSON.stringify({ error: `No open position in ${symbol} at the venue — nothing to annotate` });
   }
 
-  // Resolve the effective entry price: snapshot wins if already recorded, caller
-  // supplies it for legacy positions where it was never written.
-  const snap = getState().positionSnapshots[symbol];
-  const effectiveEntry = snap?.entryPrice ?? providedEntryPrice;
-  if (effectiveEntry == null) {
-    return JSON.stringify({ error: `entryPrice is not recorded for ${symbol} — supply it as entryPrice` });
+  // Entry price: the snapshot if it has one, else the caller's, else the venue's cost
+  // basis. The venue fallback is why this can no longer fail for want of a number the
+  // broker already told us.
+  const snap = getPositionSnapshot(symbol);
+  const effectiveEntry = snap?.entryPrice ?? providedEntryPrice ?? held.avgCost;
+
+  // Same shape as toolExecuteExit's exit price. Degrades to the cost basis when the broker
+  // omits marketValue, which is the pre-existing convention for "no better number".
+  const currentPrice = (held.marketValue ?? held.avgCost * held.qty) / held.qty;
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    return JSON.stringify({ error: `Cannot determine a current price for ${symbol} — refusing to set a stop against an unknown level` });
   }
 
-  // Same invariant as enterPosition's missing_stop guard.
-  if (!(stopLoss > 0 && stopLoss < effectiveEntry)) {
-    return JSON.stringify({ error: `stopLoss $${stopLoss} must be above zero and below entryPrice $${effectiveEntry}` });
+  if (!(stopLoss > 0 && stopLoss < currentPrice)) {
+    return JSON.stringify({
+      error: stopLoss >= currentPrice
+        ? `stopLoss $${stopLoss} is at or above the current price $${currentPrice.toFixed(2)} — that level is already breached, use execute_exit if you want out`
+        : `stopLoss $${stopLoss} must be above zero and below the current price $${currentPrice.toFixed(2)}`,
+    });
   }
-  if (takeProfit != null && takeProfit <= effectiveEntry) {
-    return JSON.stringify({ error: `takeProfit $${takeProfit} must be above entryPrice $${effectiveEntry}` });
+  if (takeProfit != null && takeProfit <= currentPrice) {
+    return JSON.stringify({ error: `takeProfit $${takeProfit} must be above the current price $${currentPrice.toFixed(2)}` });
   }
 
   // Record a hold decision: this becomes the entryDecisionId the portfolio context resolves
@@ -599,15 +616,21 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
 
   // Write baselines. entryPrice only if it was missing — the ownership invariant from
   // openPositionSnapshot: entry baselines are written once and never overwritten.
-  const patch: Parameters<typeof patchPositionSnapshot>[1] = {
+  upsertPositionSnapshot(symbol, {
     stopLevel: stopLoss,
     ...(takeProfit != null && { takeProfitLevel: takeProfit }),
     ...(snap?.entryPrice == null && { entryPrice: effectiveEntry }),
     entryDecisionId: record.id,
-  };
-  patchPositionSnapshot(symbol, patch);
+  });
 
-  return JSON.stringify({ ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null, entryDecisionId: record.id });
+  // Read the write back. The bug this replaces was a success report with no write behind
+  // it, so the report is now conditional on the state actually holding the level.
+  const written = getPositionSnapshot(symbol);
+  if (written?.stopLevel !== stopLoss) {
+    return JSON.stringify({ error: `Failed to record the stop for ${symbol} — state still shows ${written?.stopLevel ?? 'no stop'}` });
+  }
+
+  return JSON.stringify({ ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null, entryPrice: effectiveEntry, entryDecisionId: record.id });
 }
 
 async function toolExecuteEntry(input: Record<string, unknown>): Promise<string> {

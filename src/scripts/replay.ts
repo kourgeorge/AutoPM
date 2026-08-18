@@ -106,7 +106,9 @@ interface World {
   accountDown?: boolean;
 }
 
-const ACCOUNT: AccountInfo = { equity: 100_000, cash: 50_000, buyingPower: 100_000 };
+const ACCOUNT: AccountInfo = {
+  equity: 100_000, cash: 50_000, buyingPower: 100_000, previousCloseEquity: 100_000,
+};
 
 function bundle(world: World, at: Date): RawBundle {
   const prices = new Map<string, Maybe<number>>();

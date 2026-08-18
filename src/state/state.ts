@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { canonicalSymbol } from '../core/symbols';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -69,11 +70,45 @@ let _state: SystemState = { ...DEFAULT_STATE };
 let _writeTimer: ReturnType<typeof setTimeout> | null = null;
 let _ephemeral = false;
 
+/**
+ * Re-key the snapshot map to canonical symbols.
+ *
+ * Needed because the map was written with whatever string the caller held: an order placed
+ * as `BTC/USD` stored `BTC/USD`, and every lookup against the venue's `BTCUSD` missed. The
+ * spread in `loadFromDisk` merges the TOP level only, so nothing has ever normalised the
+ * individual entries.
+ *
+ * On a collision the later entry wins field by field and the earlier one fills the gaps, so
+ * a stop level recorded under one spelling is never dropped in favour of an entry that has
+ * none.
+ */
+function canonicaliseSnapshots(
+  raw: Record<string, PositionSnapshot> | undefined,
+): Record<string, PositionSnapshot> {
+  const out: Record<string, PositionSnapshot> = {};
+  for (const [key, snap] of Object.entries(raw ?? {})) {
+    if (!snap || typeof snap !== 'object') continue;
+    // `symbol` keeps the spelling it was written with — it is the label; the key is the join.
+    const withSymbol: PositionSnapshot = { ...snap, symbol: snap.symbol ?? key };
+    const canon = canonicalSymbol(withSymbol.symbol);
+    const prior = out[canon];
+    out[canon] = prior ? { ...prior, ...stripUndefined(withSymbol) } : withSymbol;
+  }
+  return out;
+}
+
+function stripUndefined(snap: PositionSnapshot): Partial<PositionSnapshot> {
+  return Object.fromEntries(
+    Object.entries(snap).filter(([, v]) => v !== undefined && v !== null),
+  ) as Partial<PositionSnapshot>;
+}
+
 function loadFromDisk(): void {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const raw = fs.readFileSync(STATE_FILE, 'utf8');
-      _state = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      const parsed = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      _state = { ...parsed, positionSnapshots: canonicaliseSnapshots(parsed.positionSnapshots) };
     }
   } catch {
     // Corrupted file — start fresh
@@ -115,12 +150,18 @@ export function useEphemeralState(seed: Partial<SystemState> = {}): void {
     clearTimeout(_writeTimer);
     _writeTimer = null;
   }
-  _state = { ...DEFAULT_STATE, ...seed };
+  const merged = { ...DEFAULT_STATE, ...seed };
+  _state = { ...merged, positionSnapshots: canonicaliseSnapshots(merged.positionSnapshots) };
 }
 
 export function updateState(patch: Partial<SystemState>): void {
   _state = { ..._state, ...patch };
   scheduleSave();
+}
+
+/** The snapshot for a symbol in any spelling — `BTC/USD` and `BTCUSD` find the same record. */
+export function getPositionSnapshot(symbol: string): PositionSnapshot | undefined {
+  return _state.positionSnapshots[canonicalSymbol(symbol)];
 }
 
 /**
@@ -129,9 +170,10 @@ export function updateState(patch: Partial<SystemState>): void {
  * they describe the original entry, and overwriting them would reset the stop.
  */
 export function openPositionSnapshot(snap: PositionSnapshot): void {
-  const existing = _state.positionSnapshots[snap.symbol];
+  const key = canonicalSymbol(snap.symbol);
+  const existing = _state.positionSnapshots[key];
   const merged: PositionSnapshot = existing ?? snap;
-  _state.positionSnapshots = { ..._state.positionSnapshots, [snap.symbol]: merged };
+  _state.positionSnapshots = { ..._state.positionSnapshots, [key]: merged };
   scheduleSave();
 }
 
@@ -140,17 +182,40 @@ export function patchPositionSnapshot(
   symbol: string,
   patch: Partial<Omit<PositionSnapshot, 'symbol'>>,
 ): void {
-  const existing = _state.positionSnapshots[symbol];
+  const key = canonicalSymbol(symbol);
+  const existing = _state.positionSnapshots[key];
   if (!existing) return;
   _state.positionSnapshots = {
     ..._state.positionSnapshots,
-    [symbol]: { ...existing, ...patch },
+    [key]: { ...existing, ...patch },
+  };
+  scheduleSave();
+}
+
+/**
+ * Merge a partial update in, creating the snapshot when the symbol is unknown.
+ *
+ * The create half is the whole point. `patchPositionSnapshot` refuses to create, and
+ * `openPositionSnapshot` refuses to overwrite, so a position this system did not open had
+ * no write path at all: the retrofit tool wrote through the patch, hit its early return,
+ * and still reported success. Nothing recorded the stop, and the stop detector saw a
+ * position with no level to watch.
+ */
+export function upsertPositionSnapshot(
+  symbol: string,
+  patch: Partial<Omit<PositionSnapshot, 'symbol'>>,
+): void {
+  const key = canonicalSymbol(symbol);
+  const existing = _state.positionSnapshots[key];
+  _state.positionSnapshots = {
+    ..._state.positionSnapshots,
+    [key]: { ...(existing ?? { symbol }), ...patch, symbol: existing?.symbol ?? symbol },
   };
   scheduleSave();
 }
 
 export function removePositionSnapshot(symbol: string): void {
-  const { [symbol]: _, ...rest } = _state.positionSnapshots;
+  const { [canonicalSymbol(symbol)]: _, ...rest } = _state.positionSnapshots;
   _state.positionSnapshots = rest;
   scheduleSave();
 }
