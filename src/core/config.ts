@@ -17,9 +17,20 @@ function requireEnv(key: string): string {
  * model id, it belongs here.
  */
 export const config = {
-  /** Active broker. Set BROKER=ibkr to switch; defaults to alpaca. */
+  /**
+   * Active EXECUTION venue — orders, positions, account, fills. Set BROKER=ibkr to switch;
+   * defaults to alpaca.
+   *
+   * It does NOT switch the market-data vendor. Prices, bars and the model's market-data
+   * tools read the Alpaca data client whichever broker is active, because there is no
+   * market-data method on `IBroker` to switch. So `BROKER=ibkr` still wants the ALPACA_*
+   * data credentials below, and an IBKR-only operator who omits them gets Yahoo-only
+   * prices, not no prices — a degradation that looks like a slow feed.
+   */
   broker: (process.env.BROKER ?? 'alpaca') as 'alpaca' | 'ibkr',
 
+  /** Trading host serves the active broker only when `broker === 'alpaca'`; the data host
+   *  serves market data unconditionally. See the note on `broker` above. */
   alpaca: {
     keyId: process.env.ALPACA_KEY_ID ?? '',
     secretKey: process.env.ALPACA_SECRET_KEY ?? '',
