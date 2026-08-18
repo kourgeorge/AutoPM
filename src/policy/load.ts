@@ -252,11 +252,6 @@ export function getPolicy(): Policy {
   return _policy ?? loadPolicy();
 }
 
-export function getPolicyMeta(): PolicyMeta {
-  if (!_meta) loadPolicy();
-  return _meta!;
-}
-
 /** Raw yaml text of the active policy file. Used by mutate.ts and history snapshots. */
 export function readPolicyText(): string {
   return fs.readFileSync(POLICY_FILE, 'utf8');

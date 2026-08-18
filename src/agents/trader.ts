@@ -13,9 +13,11 @@ import type { PositionSnapshot } from '../state/state';
 import { ui } from '../ui/ui';
 import {
   TRADER_TOOL_DEFINITIONS,
+  brokerOrderView,
   executeTraderTool,
 } from '../tools/traderTools';
 import type { ChatMessage, ContentBlock } from '../core/types';
+import type { OpenOrder } from '../broker/IBroker';
 
 const MAX_ROUNDS = 30;
 const DEFAULT_SLEEP_MS = 10 * 60_000;
@@ -480,6 +482,60 @@ const MAX_LESSONS = 20;
  * Rendered in full rather than summarized, unlike events and decisions: a lesson compressed
  * to a headline is a slogan, and the reasoning is the part that makes it applicable.
  */
+/**
+ * What is actually resting at the venue.
+ *
+ * Rendered EVERY cycle, including when the book is empty, and that is the point: the model has
+ * asserted a "bracket in place" for positions this system opened with a bare market order, and
+ * the correction has to be present unprompted rather than waiting for someone to ask. The
+ * section reports the venue and this system's own recorded stop as two separate facts — it never
+ * merges them into "protected", because which of the two holds the stop determines who exits.
+ */
+async function buildBrokerOrders(): Promise<string> {
+  const lines = ['=== BROKER ORDERS ==='];
+  lines.push('This system sends only market orders. Anything else below was placed outside it, and a stop resting at the venue is NOT what the stop detector watches — that is the SL recorded in PORTFOLIO CONTEXT.');
+
+  let view: Awaited<ReturnType<typeof brokerOrderView>>;
+  try {
+    view = await brokerOrderView();
+  } catch (err: any) {
+    // Fail soft: a broker hiccup must not cost the cycle its whole context.
+    lines.push(`Unavailable this cycle (${err.message}) — what rests at the venue is unknown. Retry with get_open_orders.`);
+    lines.push('=== END BROKER ORDERS ===');
+    return lines.join('\n');
+  }
+
+  if (view.orders.length === 0) {
+    lines.push('Nothing is resting at the venue. No stop, target or bracket exists anywhere but in this system.');
+  } else {
+    for (const row of view.byPosition) {
+      for (const o of row.orders) {
+        lines.push(`  ${row.symbol.padEnd(8)}${describeOrder(o)}`);
+      }
+    }
+    for (const o of view.ordersWithoutPosition) {
+      lines.push(`  ${o.symbol.padEnd(8)}${describeOrder(o)}  NO OPEN POSITION`);
+    }
+    for (const m of view.stopMismatches) {
+      lines.push(`${m.symbol}: SL recorded here $${m.recordedHere.toFixed(2)}, stop order at the venue $${m.atVenue.toFixed(2)}. Both are real and they are different levels.`);
+    }
+  }
+
+  lines.push('=== END BROKER ORDERS ===');
+  return lines.join('\n');
+}
+
+function describeOrder(o: OpenOrder): string {
+  const price =
+    o.stopPrice    != null ? ` @ $${o.stopPrice.toFixed(2)}`
+    : o.limitPrice != null ? ` @ $${o.limitPrice.toFixed(2)}`
+    : o.trailPercent != null ? ` trail ${o.trailPercent}%`
+    : o.trailAmount  != null ? ` trail $${o.trailAmount}`
+    : '';
+  const filled = o.filled > 0 ? ` (${o.filled}/${o.qty} filled)` : '';
+  return `${o.side} ${o.qty} ${o.type === 'other' ? o.rawType : o.type}${price}${o.tif ? ` ${o.tif}` : ''} ${o.status}${filled}`;
+}
+
 function buildLessons(): string {
   const all = readLessons();
   if (all.length === 0) return '';
@@ -522,6 +578,12 @@ export async function buildCycleContext(
 
   const portfolioCtx = await buildPortfolioContext(state.positionSnapshots);
   if (portfolioCtx) { lines.push(''); lines.push(portfolioCtx); }
+
+  // Directly after the portfolio, because it is a statement about those same positions —
+  // and unconditional, since "nothing is resting at the venue" is the fact that most needs
+  // saying.
+  lines.push('');
+  lines.push(await buildBrokerOrders());
 
   const historyCtx = buildDecisionHistory();
   if (historyCtx) { lines.push(''); lines.push(historyCtx); }

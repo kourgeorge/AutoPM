@@ -16,6 +16,27 @@ function makeClient(baseURL: string): AxiosInstance {
 const trading = makeClient(config.alpaca.baseUrl);
 const data    = makeClient(config.alpaca.dataUrl);
 
+/**
+ * Alpaca's `type` strings, which happen to be our names already. The lookup exists so an
+ * unrecognised one falls to `'other'` rather than being asserted into a type it is not — the
+ * bug this replaces was `o.type as 'market' | 'limit'`, under which a stop order read as a
+ * limit order with no price.
+ */
+const ALPACA_ORDER_TYPES: Record<string, OpenOrder['type']> = {
+  market:        'market',
+  limit:         'limit',
+  stop:          'stop',
+  stop_limit:    'stop_limit',
+  trailing_stop: 'trailing_stop',
+};
+
+/** Alpaca sends prices as strings and absent prices as `null`. Absent must stay absent. */
+function num(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = parseFloat(String(v));
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export class AlpacaBroker implements IBroker {
   async getPositions(): Promise<Position[]> {
     const res = await trading.get('/v2/positions');
@@ -30,24 +51,38 @@ export class AlpacaBroker implements IBroker {
 
   async getAccountInfo(): Promise<AccountInfo> {
     const d = (await trading.get('/v2/account')).data;
+    // `last_equity` is equity at the previous close and has always been in this payload.
+    // Parsed defensively: a missing field must arrive as `null` (unknown), never as NaN
+    // masquerading as a number the daily loss limit will be measured against.
+    const lastEquity = parseFloat(d.last_equity);
     return {
       equity:       parseFloat(d.equity),
       cash:         parseFloat(d.cash),
       buyingPower:  parseFloat(d.buying_power),
+      previousCloseEquity: Number.isFinite(lastEquity) && lastEquity > 0 ? lastEquity : null,
     };
   }
 
+  /**
+   * `nested` is deliberately not requested: bracket legs already arrive as their own top-level
+   * rows, and asking for them nested would hide a resting stop inside a parent order.
+   */
   async getOpenOrders(): Promise<OpenOrder[]> {
     const res = await trading.get('/v2/orders', { params: { status: 'open' } });
     return (res.data as any[]).map((o) => ({
-      id:         o.id,
-      symbol:     o.symbol,
-      side:       o.side as 'buy' | 'sell',
-      qty:        parseFloat(o.qty),
-      filled:     parseFloat(o.filled_qty ?? '0'),
-      type:       o.type as 'market' | 'limit',
-      limitPrice: o.limit_price ? parseFloat(o.limit_price) : undefined,
-      status:     o.status,
+      id:           o.id,
+      symbol:       o.symbol,
+      side:         o.side as 'buy' | 'sell',
+      qty:          parseFloat(o.qty),
+      filled:       parseFloat(o.filled_qty ?? '0'),
+      type:         ALPACA_ORDER_TYPES[o.type] ?? 'other',
+      rawType:      String(o.type),
+      limitPrice:   num(o.limit_price),
+      stopPrice:    num(o.stop_price),
+      trailPercent: num(o.trail_percent),
+      trailAmount:  num(o.trail_price),
+      tif:          o.time_in_force ?? undefined,
+      status:       o.status,
     }));
   }
 

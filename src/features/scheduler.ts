@@ -230,18 +230,3 @@ export class FeatureScheduler {
   }
 }
 
-/**
- * Observe-only router — logs what WOULD have been routed and wakes nobody.
- *
- * `createLiveRouter` has superseded it in `daemon.ts`. Kept because it makes rollback a
- * one-line edit there: if live routing turns out to wake too often, the pipeline can be put
- * back to observing without touching anything else.
- */
-export const observeOnlyRouter: EventRouter = (events) => {
-  for (const event of events) {
-    logger.info(
-      `[L2 observe] ${event.kind} ${event.severity} ${event.symbol ?? '-'} w${event.wakeCount} — ${event.headline}`,
-    );
-  }
-  logger.info(`[L2 observe] ${events.length} event(s)`);
-};
