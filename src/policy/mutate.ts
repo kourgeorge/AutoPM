@@ -54,6 +54,18 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
     return { ok: false, errors: [`cannot parse current policy: ${err.message}`] };
   }
 
+  // A policy missing either section is a broken file, not a mutation to apply blindly:
+  // `doc.strategy.watchlist = ...` throws a TypeError on an absent section, and a THROW from
+  // here escapes past every caller, which all expect the `{ ok: false }` channel.
+  if (doc == null || typeof doc !== 'object') {
+    return { ok: false, errors: ['policy.yaml did not parse to an object'] };
+  }
+  for (const section of ['strategy', 'risk'] as const) {
+    if (doc[section] == null || typeof doc[section] !== 'object') {
+      return { ok: false, errors: [`policy.yaml has no ${section} section — refusing to create one`] };
+    }
+  }
+
   const applied: string[] = [];
 
   // ── Watchlist ──────────────────────────────────────────────────────────────
@@ -123,7 +135,19 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
     // Non-fatal — a backup failure must not block the mutation
   }
 
-  fs.writeFileSync(POLICY_FILE, newText, 'utf8');
+  // Written via a temp file in the SAME directory and renamed, because `rename` within a
+  // filesystem is atomic while `writeFileSync` truncates first: a crash mid-write left a
+  // half-parsed policy.yaml behind, and policy is the file every startup path needs to read.
+  // The backup above is not the answer to that — restoring it is a manual step, and the
+  // daemon would already be down.
+  const tmp = `${POLICY_FILE}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, newText, 'utf8');
+    fs.renameSync(tmp, POLICY_FILE);
+  } catch (err: any) {
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    return { ok: false, errors: [`cannot write policy: ${err.message}`] };
+  }
   reloadPolicy();
 
   return { ok: true, applied, version: doc.version };
