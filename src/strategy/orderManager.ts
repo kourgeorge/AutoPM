@@ -9,7 +9,7 @@
 
 import { broker } from '../broker';
 import { logger } from '../core/logger';
-import { canonicalSymbol } from '../core/symbols';
+import { sameSymbol } from '../core/symbols';
 import { getState } from '../state/state';
 import { SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
@@ -84,9 +84,9 @@ export async function enterPosition(
   // Adding to a winner is a different decision with a different stop; it is not this
   // function's job. Blocking it also protects the entry baselines from being re-derived.
   //
-  // Compared canonically, not raw: an order placed as `BTC/USD` comes back from Alpaca as
+  // `sameSymbol`, not `===`: an order placed as `BTC/USD` comes back from Alpaca as
   // `BTCUSD`, so `===` let the same asset through this guard twice under two spellings.
-  if (positions.some((p) => canonicalSymbol(p.symbol) === canonicalSymbol(symbol))) {
+  if (positions.some((p) => sameSymbol(p.symbol, symbol))) {
     reject('already_holding', `Already holding ${symbol} — exit first, or size the original entry correctly`);
   }
 
@@ -151,10 +151,10 @@ export async function exitPosition(
   reason: string,
 ): Promise<{ orderId: string }> {
   const positions = await broker.getPositions();
-  // Canonical, for the same reason as `already_holding` above — with `===` a crypto
+  // `sameSymbol`, for the same reason as `already_holding` above — with `===` a crypto
   // position could not be exited AT ALL: the venue reports `BTCUSD`, the caller says
   // `BTC/USD`, and `no_position` threw on a position that was plainly open.
-  const pos = positions.find((p) => canonicalSymbol(p.symbol) === canonicalSymbol(symbol));
+  const pos = positions.find((p) => sameSymbol(p.symbol, symbol));
 
   // Throws where it used to log a warning and return. The warning let `toolExecuteExit`
   // report `{ ok: true }` for a sell that never happened, and discard the position's
