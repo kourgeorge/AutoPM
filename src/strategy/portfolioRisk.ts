@@ -61,6 +61,56 @@ export function volatilityScaledQty(
   return Math.max(qty, 1); // at least 1 share
 }
 
+// ── Shared correlation primitives ─────────────────────────────────────────────
+
+/**
+ * The window and the minimum sample, shared by the entry gate and `exposure.ts`.
+ *
+ * Exported so there is one pair of numbers rather than two: if the gate looked back 60 bars
+ * and the book view looked back 90, the same two symbols would carry two different
+ * correlations depending on which tool the model happened to ask.
+ */
+export const LOOKBACK_DAYS = 60;
+export const MIN_RETURNS = 15;
+
+/**
+ * Fetch bars ONCE PER SYMBOL, concurrently, and reduce each to its return series.
+ *
+ * O(n) fetches, not O(n²): correlation is a pairwise measure, so a loop written over PAIRS
+ * requests the same symbol once per partner — 15 requests for a 6-name book where 6 suffice,
+ * and serially at that. Correlating in memory afterwards is free. Symbols whose bars are
+ * missing or too short are simply absent from the map; the caller decides whether that is a
+ * caveat or a fail-open.
+ */
+export async function returnsMatrix(symbols: string[]): Promise<Map<string, number[]>> {
+  const unique = [...new Set(symbols)];
+  const fetched = await Promise.all(
+    unique.map(async (symbol) => ({ symbol, bars: await collectBars(symbol, LOOKBACK_DAYS) })),
+  );
+
+  const returns = new Map<string, number[]>();
+  for (const { symbol, bars } of fetched) {
+    if (!isPresent(bars)) continue;
+    const r = dailyReturns(bars.value);
+    if (r.length < MIN_RETURNS) continue;
+    returns.set(symbol, r);
+  }
+  return returns;
+}
+
+/**
+ * Correlate two return series, aligning them on their common tail.
+ *
+ * `null` means "not enough overlap to say", which is not the same fact as 0 — a zero
+ * correlation is a measurement, and reporting one for an unmeasurable pair would put a
+ * number the data does not support in front of the model.
+ */
+export function correlate(ra: number[], rb: number[]): number | null {
+  const len = Math.min(ra.length, rb.length);
+  if (len < MIN_RETURNS) return null;
+  return pearsonCorrelation(ra.slice(-len), rb.slice(-len));
+}
+
 // ── Correlation-aware entry gating ───────────────────────────────────────────
 
 export interface CorrelationResult {
@@ -91,67 +141,75 @@ export async function correlationGate(
   const VETO_THRESHOLD = 0.85;
   const DOWNSIZE_THRESHOLD = 0.70;
   const DOWNSIZE_MULT = 0.5;
-  const LOOKBACK_DAYS = 60; // fetch 60 bars, use for 30-day returns
+
+  const pass = (detail: string): CorrelationResult => ({
+    allowed: true,
+    maxCorrelation: 0,
+    mostCorrelatedWith: null,
+    sizeMultiplier: 1.0,
+    detail,
+  });
 
   try {
     const positions = await broker.getPositions();
-    if (positions.length === 0) {
-      return { allowed: true, maxCorrelation: 0, mostCorrelatedWith: null, sizeMultiplier: 1.0, detail: 'no existing positions' };
+
+    // A held candidate must not be correlated against ITSELF. Left in, the self-pair scores
+    // 1.0 and vetoes, which made `get_correlation` on anything already in the book report a
+    // redundancy that does not exist.
+    const others = positions
+      .map((p) => p.symbol)
+      .filter((symbol) => symbol !== candidateSymbol);
+
+    if (others.length === 0) {
+      return pass(
+        positions.length === 0
+          ? 'no existing positions'
+          : `${candidateSymbol} is the only holding — nothing to correlate against`,
+      );
     }
 
-    // Fetch bars for the candidate
-    const candidateBars = await collectBars(candidateSymbol, LOOKBACK_DAYS);
-    if (!isPresent(candidateBars)) {
-      return { allowed: true, maxCorrelation: 0, mostCorrelatedWith: null, sizeMultiplier: 1.0, detail: 'candidate bars unavailable — fail open' };
-    }
+    const returns = await returnsMatrix([candidateSymbol, ...others]);
 
-    const candidateReturns = dailyReturns(candidateBars.value);
-    if (candidateReturns.length < 15) {
-      return { allowed: true, maxCorrelation: 0, mostCorrelatedWith: null, sizeMultiplier: 1.0, detail: 'insufficient return history — fail open' };
+    const candidateReturns = returns.get(candidateSymbol);
+    if (!candidateReturns) {
+      return pass('candidate bars or return history unavailable — fail open');
     }
 
     let maxCorr = 0;
     let maxCorrSymbol: string | null = null;
 
-    for (const pos of positions) {
-      const posBars = await collectBars(pos.symbol, LOOKBACK_DAYS);
-      if (!isPresent(posBars)) continue;
+    for (const symbol of others) {
+      const held = returns.get(symbol);
+      if (!held) continue;
 
-      const posReturns = dailyReturns(posBars.value);
-      // Align lengths
-      const len = Math.min(candidateReturns.length, posReturns.length);
-      if (len < 15) continue;
-
-      const corr = pearsonCorrelation(
-        candidateReturns.slice(-len),
-        posReturns.slice(-len),
-      );
+      const corr = correlate(candidateReturns, held);
+      if (corr === null) continue;
 
       if (Math.abs(corr) > Math.abs(maxCorr)) {
         maxCorr = corr;
-        maxCorrSymbol = pos.symbol;
+        maxCorrSymbol = symbol;
       }
     }
 
     if (maxCorr > VETO_THRESHOLD) {
-      logger.info(`[PortfolioRisk] Correlation veto: ${candidateSymbol} ↔ ${maxCorrSymbol} = ${maxCorr.toFixed(3)}`);
+      logger.info(`[PortfolioRisk] Correlation veto: ${candidateSymbol} \u2194 ${maxCorrSymbol} = ${maxCorr.toFixed(3)}`);
       return {
         allowed: false,
         maxCorrelation: maxCorr,
         mostCorrelatedWith: maxCorrSymbol,
         sizeMultiplier: 0,
-        detail: `correlation ${maxCorr.toFixed(2)} with ${maxCorrSymbol} exceeds ${VETO_THRESHOLD} — entry blocked`,
+        detail: `correlation ${maxCorr.toFixed(2)} with ${maxCorrSymbol} exceeds ${VETO_THRESHOLD} \u2014 entry blocked`,
       };
     }
 
     if (maxCorr > DOWNSIZE_THRESHOLD) {
-      logger.info(`[PortfolioRisk] Correlation downsize: ${candidateSymbol} ↔ ${maxCorrSymbol} = ${maxCorr.toFixed(3)} — sizing ×${DOWNSIZE_MULT}`);
+      logger.info(`[PortfolioRisk] Correlation downsize: ${candidateSymbol} \u2194 ${maxCorrSymbol} = ${maxCorr.toFixed(3)} \u2014 sizing \u00d7${DOWNSIZE_MULT}`);
       return {
         allowed: true,
         maxCorrelation: maxCorr,
         mostCorrelatedWith: maxCorrSymbol,
         sizeMultiplier: DOWNSIZE_MULT,
-        detail: `correlation ${maxCorr.toFixed(2)} with ${maxCorrSymbol} exceeds ${DOWNSIZE_THRESHOLD} — position halved`,
+        detail: `correlation ${maxCorr.toFixed(2)} with ${maxCorrSymbol} exceeds ${DOWNSIZE_THRESHOLD} \u2014 position halved`,
       };
     }
 
@@ -161,12 +219,12 @@ export async function correlationGate(
       mostCorrelatedWith: maxCorrSymbol,
       sizeMultiplier: 1.0,
       detail: maxCorrSymbol
-        ? `max correlation ${maxCorr.toFixed(2)} with ${maxCorrSymbol} — within limits`
+        ? `max correlation ${maxCorr.toFixed(2)} with ${maxCorrSymbol} \u2014 within limits`
         : 'no correlations computed',
     };
   } catch (err: any) {
-    logger.warn(`[PortfolioRisk] Correlation check failed — fail open: ${err.message}`);
-    return { allowed: true, maxCorrelation: 0, mostCorrelatedWith: null, sizeMultiplier: 1.0, detail: `error: ${err.message} — fail open` };
+    logger.warn(`[PortfolioRisk] Correlation check failed \u2014 fail open: ${err.message}`);
+    return { allowed: true, maxCorrelation: 0, mostCorrelatedWith: null, sizeMultiplier: 1.0, detail: `error: ${err.message} \u2014 fail open` };
   }
 }
 
