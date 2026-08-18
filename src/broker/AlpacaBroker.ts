@@ -1,6 +1,6 @@
 import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
 import { BrokerRejection } from './errors';
-import { alpacaTrading as trading } from './alpacaHttp';
+import { alpacaTimeToMs, alpacaTrading as trading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
 
 /**
@@ -152,8 +152,11 @@ export class AlpacaBroker implements IBroker {
         // sits inside `reconcileFills`'s try/catch — so one malformed row was discarding
         // every fill in the batch under the message "could not fetch fills". Falling back to
         // ingest time costs the holding period of one trade; the throw cost all of them.
-        const stamped = Date.parse(a.transaction_time);
-        if (!Number.isFinite(stamped)) {
+        const stamped = alpacaTimeToMs(a.transaction_time);
+        let at = ingestedAt;
+        if (Number.isFinite(stamped)) {
+          at = new Date(stamped).toISOString();
+        } else {
           logger.warn(
             `[Alpaca] Fill ${a.id} has an unparseable transaction_time "${a.transaction_time}" — ` +
               `recorded at ingest time instead`,
@@ -171,7 +174,7 @@ export class AlpacaBroker implements IBroker {
           // Equity commissions are zero but regulatory fees (SEC, TAF) arrive as separate
           // FEE activities, so what this fill cost is not knowable from this row.
           fee:     null,
-          at:      Number.isFinite(stamped) ? new Date(stamped).toISOString() : ingestedAt,
+          at,
         });
       }
 

@@ -9,7 +9,7 @@ import type { ToolDefinition } from '../core/types';
 import {
   alpacaData as dataClient,
   alpacaTrading as tradingClient,
-} from '../broker/alpacaHttp';
+} from '../core/alpacaHttp';
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 

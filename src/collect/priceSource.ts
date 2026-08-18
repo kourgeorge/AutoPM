@@ -9,19 +9,20 @@
  * which feed each price came from.
  */
 
-import { alpacaData } from '../broker/alpacaHttp';
+import { alpacaData, alpacaTimeToMs } from '../core/alpacaHttp';
 import { marketSession } from '../core/time';
 import { getQuoteRaw } from './yahoo';
 import { DEFAULT_MAX_AGE_MS, Maybe, missingFrom, observe } from './types';
 
 /**
- * Alpaca returns nanosecond-precision timestamps ("...723490207Z", 9 decimal
- * digits). Date.parse() returns NaN for anything beyond milliseconds on some
- * runtimes, which makes ageMs = NaN and observe() flags every price as stale.
- * Truncate to 3 fractional digits before any date arithmetic.
+ * Alpaca's nanosecond timestamps, normalised to something `observe()` can subtract. The
+ * truncation rule itself lives with the rest of the Alpaca wire format in
+ * `core/alpacaHttp.ts`; an unreadable stamp is passed through unchanged so `observe()` still
+ * sees a NaN age and flags the value stale rather than inventing a fresh one.
  */
 function toMs(ts: string): string {
-  return ts.replace(/(\.\d{3})\d+/, '$1');
+  const ms = alpacaTimeToMs(ts);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : ts;
 }
 
 /**
