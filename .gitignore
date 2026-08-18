@@ -23,3 +23,13 @@ policy/history/
 # ignored for the same reason its data/ counterparts above are. The files stay on disk;
 # the copies already in history are untouched by this.
 ibkr-data/
+
+# Local agent/tool scratch, never shared. `.claude/settings local.json` was tracked and
+# carried a live ANTHROPIC_AUTH_TOKEN and an internal base URL into a PUBLIC repo (added
+# in a446713); `.bob/` holds a generated architecture HTML that is a build artifact of a
+# conversation, not a source file. Ignoring the directories, not just those two paths, so
+# the next local settings file or artifact does not repeat it. If a SHARED .claude config
+# is ever wanted, un-ignore it explicitly (`!.claude/settings.json`) — never the *.local.*
+# variants, which is where credentials land.
+.claude/
+.bob/
