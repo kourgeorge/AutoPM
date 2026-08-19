@@ -35,6 +35,18 @@ const LEVEL_LABEL: Record<string, string> = {
   TOOL:  `${COLORS.tool}TOOL {/}`,
 };
 
+/**
+ * Log stamp: LOCAL wall-clock HH:MM:SS.mmm. Deliberately not `toISOString()`, which is always
+ * UTC — the operator reads a log line against the clock on their own wall. Built from the
+ * local getters rather than `toLocaleTimeString`, which carries no milliseconds and would let
+ * a small-ICU Node build pick its own separators. Market time is a separate question: session
+ * gating and the dashboard clock stay pinned to ET regardless of where the operator sits.
+ */
+function stamp(d: Date = new Date()): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
 // ── UI singleton ─────────────────────────────────────────────────────────────
 
 class TerminalUI {
@@ -132,7 +144,7 @@ class TerminalUI {
   }
 
   log(level: 'INFO' | 'WARN' | 'ERROR' | 'TRADE' | 'TOOL', msg: string): void {
-    const ts    = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+    const ts    = stamp();
     const label = LEVEL_LABEL[level] ?? level;
     const line  = level === 'TRADE'
       ? `{gray-fg}${ts}{/}  ${label}  {bold}{green-fg}${this.escape(msg)}{/}`
@@ -160,7 +172,7 @@ class TerminalUI {
    * continuation lines are padded into the same column as the first.
    */
   alert(msg: string): void {
-    const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+    const ts = stamp();
     const marker = '⚠ ALERT';
     const gutter = ' '.repeat(ts.length + 2 + marker.length + 2);
 
