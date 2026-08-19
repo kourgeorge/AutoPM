@@ -63,6 +63,8 @@ export interface TickSnapshot {
   account: {
     equity: number | null;
     buyingPower: number | null;
+    cash: number | null;
+    invested: number | null;
     dayPnLPct: number | null;
     positionCount: number;
   };
@@ -288,8 +290,19 @@ function sortedWatchlist(tick: TickSnapshot): WatchEntry[] {
  * `px sig rsi` used to be right-aligned to the panel border while its four values sat on the
  * left, so the labels named columns of empty space.
  */
-const POS_GRID = { sym: 5, px: 7, pnl: 7, stop: 6, qty: 5, rsi: 3, held: 6 } as const;
+const POS_GRID = { sym: 5, px: 7, cost: 7, pnl: 7, stop: 6, qty: 5, rsi: 3, held: 6 } as const;
 const WATCH_GRID = { sym: 5, px: 7, sig: 5, rsi: 3 } as const;
+
+/**
+ * Columns a complete position row needs: every field plus one space between each.
+ *
+ * Exported so `ui.ts` can cap the sidebar at the width of its widest row instead of at a
+ * hand-written constant. `packRow` drops columns right-to-left when the panel is narrower than
+ * this, which is the intended behaviour on a small terminal — but a panel that is never allowed
+ * to reach this width drops them on a 200-column one too, silently and forever.
+ */
+export const POS_ROW_COLS: number =
+  Object.values(POS_GRID).reduce((a, b) => a + b, 0) + Object.keys(POS_GRID).length - 1;
 
 /**
  * Legends as columns rather than as a string, so `sectionHeader` can place each label over the
@@ -299,6 +312,7 @@ const WATCH_GRID = { sym: 5, px: 7, sig: 5, rsi: 3 } as const;
 const POS_LEGEND: Col[] = [
   { text: '', w: POS_GRID.sym },
   { text: 'px', w: POS_GRID.px, right: true },
+  { text: 'cost', w: POS_GRID.cost, right: true },
   { text: 'p&l', w: POS_GRID.pnl, right: true },
   { text: 'stop', w: POS_GRID.stop, right: true },
   { text: 'qty', w: POS_GRID.qty, right: true },
@@ -325,6 +339,18 @@ function positionRow(m: DashboardModel, f: Fmt, p: PositionRow, width: number): 
       w: POS_GRID.px,
       right: true,
       color: dim ? 'gray-fg' : undefined,
+    },
+    {
+      // The basis P&L is measured FROM, so px, cost and p&l on one row always agree with each
+      // other: `compute.ts` prefers the journal's recorded entry price and falls back to the
+      // venue's average cost, and quoting the venue's figure here instead would print a cost
+      // the neighbouring percentage was not computed against.
+      // Never dimmed with the rest of the row: the cost basis is a recorded fact, not a quote,
+      // so a dead price feed does not make it any less known.
+      text: priceText(f, p.entryPrice),
+      w: POS_GRID.cost,
+      right: true,
+      color: 'gray-fg',
     },
     { text: f.signedPct(p.pnlPct, 1), w: POS_GRID.pnl, right: true, color: f.pnlColor(p.pnlPct) },
     {
@@ -421,6 +447,14 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
       { text: f.signedPct(t?.account.dayPnLPct ?? null), color: f.pnlColor(t?.account.dayPnLPct) },
     ]),
   );
+  // How the equity above is currently split. Directly under it on purpose: `inv` and `cash` are
+  // that one number decomposed, whereas buying power is a limit derived from it.
+  head.push(
+    joinChunks(f, width, ' · ', [
+      { text: `inv ${f.money(t?.account.invested ?? null)}`, color: 'gray-fg' },
+      { text: `cash ${f.money(t?.account.cash ?? null)}`, color: 'gray-fg' },
+    ]),
+  );
   head.push(
     joinChunks(f, width, ' · ', [
       { text: `bp ${f.money(t?.account.buyingPower ?? null)}`, color: 'gray-fg' },
@@ -448,13 +482,20 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
   const blank = ' '.repeat(width);
   const spacious = height >= head.length + 8;
   const lines: string[] = [];
+  // Sizes of the three head blocks — identity, account, lifecycle — in the order pushed above.
+  // Counts rather than an index per line, so adding a line to a block is one edit here and cannot
+  // silently drop or duplicate one the way hand-written `head[n]` positions could.
+  const HEAD_BLOCKS = [3, 3, 3];
   const pushHead = () => {
-    lines.push(head[0], head[1], head[2]);
-    if (spacious) lines.push(blank);
-    lines.push(head[3], head[4]);
-    if (spacious) lines.push(blank);
-    lines.push(head[5], head[6], head[7]);
-    if (spacious) lines.push(blank);
+    let at = 0;
+    for (const n of HEAD_BLOCKS) {
+      lines.push(...head.slice(at, at + n));
+      at += n;
+      if (spacious) lines.push(blank);
+    }
+    // A head line the block sizes forgot is still rendered, unseparated. Losing a fact off the
+    // panel is the failure mode worth insuring against; a missing blank row is not.
+    if (at < head.length) lines.push(...head.slice(at));
   };
   pushHead();
 
@@ -470,24 +511,37 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
   // terminal.
   const posNeed = 1 + Math.max(1, positions.length);
   const watchNeed = 1 + Math.max(1, watch.length);
+  // A blank row between the two lists, on exactly the condition the head blocks use for theirs:
+  // one predicate decides whether this panel is spending rows on separation at all, rather than
+  // the head spending three while the lists — the part actually being separated — spend none.
+  //
+  // It is budgeted here, BEFORE the split, so it is a row the lists were never offered rather
+  // than one taken back afterwards. When that costs a list its last row, `listBody` says so with
+  // `+N more`; a separator may cost a visible row, never a silent one.
+  const sep = spacious && remaining >= 5 ? 1 : 0;
+  const listRows = remaining - sep;
   let posBudget = posNeed;
   let watchBudget = 0;
-  if (posNeed + watchNeed <= remaining) {
+  if (posNeed + watchNeed <= listRows) {
     watchBudget = watchNeed;
-  } else if (remaining >= 4) {
-    watchBudget = Math.min(watchNeed, Math.max(2, Math.floor(remaining / 2)));
-    posBudget = Math.min(posNeed, remaining - watchBudget);
+  } else if (listRows >= 4) {
+    watchBudget = Math.min(watchNeed, Math.max(2, Math.floor(listRows / 2)));
+    posBudget = Math.min(posNeed, listRows - watchBudget);
   } else {
-    posBudget = Math.min(posNeed, remaining);
+    posBudget = Math.min(posNeed, listRows);
   }
 
+  let drewPositions = false;
   if (posBudget >= 2) {
     lines.push(sectionHeader(f, width, 'POSITIONS', positions.length, POS_LEGEND));
     lines.push(
       ...listBody(f, width, posBudget - 1, positions, (p, w) => positionRow(m, f, p, w), 'flat'),
     );
+    drewPositions = true;
   }
   if (watchBudget >= 2) {
+    // Only ever between two lists — a blank first row would read as a rendering fault.
+    if (sep && drewPositions) lines.push(blank);
     lines.push(sectionHeader(f, width, 'WATCHLIST', watch.length, WATCH_LEGEND));
     lines.push(
       ...listBody(f, width, watchBudget - 1, watch, (e, w) => watchRow(m, f, e, w), 'empty'),
@@ -589,6 +643,8 @@ export function renderStrip(m: DashboardModel, width: number): string[] {
     laneChunk(m, m.trader, true),
     { text: t ? `${Object.keys(t.positions).length} pos` : '', color: 'gray-fg' },
     { text: `bp ${f.money(t?.account.buyingPower ?? null)}`, color: 'gray-fg' },
+    { text: `inv ${f.money(t?.account.invested ?? null)}`, color: 'gray-fg' },
+    { text: `cash ${f.money(t?.account.cash ?? null)}`, color: 'gray-fg' },
     { text: m.cycle.n > 0 ? `cyc ${m.cycle.n}` : '', color: 'gray-fg' },
   ]);
 

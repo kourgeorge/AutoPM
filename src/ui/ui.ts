@@ -14,6 +14,7 @@
 import * as blessed from 'blessed';
 import { InputEditor } from './inputEditor';
 import {
+  POS_ROW_COLS,
   renderSidebar,
   renderStatus,
   renderStrip,
@@ -103,7 +104,17 @@ const CHROME_ROWS = INPUT_ROWS + 1;
 const MIN_LOG_COLS = 44;
 
 const SIDEBAR_MIN_COLS = 34;
-const SIDEBAR_MAX_COLS = 46;
+
+/**
+ * Widest the panel is ever allowed to grow: exactly one complete position row plus its borders.
+ *
+ * Read from the grid rather than written down, because the two must agree. `packRow` drops
+ * columns right-to-left when the panel is narrower than a full row — correct on a small terminal,
+ * but a ceiling below the row width applies that truncation on a 200-column terminal too, where
+ * there is nothing to truncate for. Adding a column to `POS_GRID` therefore widens this on its
+ * own; it does not quietly cost the rightmost one instead.
+ */
+const SIDEBAR_MAX_COLS = POS_ROW_COLS + 2;
 
 /** 3 rendered lines + 2 border rows. `renderStrip` is contractually exactly 3 lines. */
 const STRIP_ROWS = 5;
@@ -652,7 +663,12 @@ class TerminalUI {
 
     let sidebarCols = 0;
     if (mode === 'sidebar') {
-      sidebarCols = Math.min(SIDEBAR_MAX_COLS, Math.max(SIDEBAR_MIN_COLS, Math.floor(w * 0.34)));
+      // 0.40, not the 0.34 this started at: at 0.34 a 100-column terminal — the exact width that
+      // qualifies for sidebar mode at all — got 34 columns, which is one column short of a
+      // position row's `stop`. The list is SORTED by distance to stop, so that was the one column
+      // whose absence made the row order look arbitrary. The `SIDEBAR_MAX_COLS` cap and the
+      // `MIN_LOG_COLS` floor below both still apply, so a wide window cannot run away with this.
+      sidebarCols = Math.min(SIDEBAR_MAX_COLS, Math.max(SIDEBAR_MIN_COLS, Math.floor(w * 0.4)));
       sidebarCols = Math.min(sidebarCols, w - MIN_LOG_COLS);
       // Demote rather than shrink: a panel too narrow for a position row is worse than the
       // strip, which says less but says it legibly.

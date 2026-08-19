@@ -82,6 +82,17 @@ export interface WatchlistData {
 export interface AccountData {
   equity: number | null;
   buyingPower: number | null;
+  /** Uninvested cash as the venue reports it. */
+  cash: number | null;
+  /**
+   * Equity currently at risk in the market, i.e. `equity - cash`.
+   *
+   * Derived from the two figures the venue reports directly rather than by summing
+   * `Position.marketValue`, which is OPTIONAL in `IBroker` — a book where one position omits it
+   * would silently total to less than is actually invested. Not clamped at zero: a net-short
+   * book genuinely has negative market value, and flooring it would hide that.
+   */
+  invested: number | null;
   stale: boolean;
   staleReason: string | null;
   startOfDayEquity: number;
@@ -268,6 +279,8 @@ function buildAccountData(
     return {
       equity: null,
       buyingPower: null,
+      cash: null,
+      invested: null,
       stale: true,
       staleReason: reason,
       startOfDayEquity,
@@ -279,6 +292,8 @@ function buildAccountData(
   return {
     equity: account.value.equity,
     buyingPower: account.value.buyingPower,
+    cash: account.value.cash,
+    invested: account.value.equity - account.value.cash,
     stale: false,
     staleReason: null,
     startOfDayEquity,
