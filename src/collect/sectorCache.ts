@@ -20,8 +20,8 @@ import { writeFileAtomic } from '../core/fsAtomic';
 import path from 'path';
 import { logger } from '../core/logger';
 import { getSectorRaw } from './yahoo';
+import { DATA_DIR, ensureDataDir } from '../core/paths';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
 const SECTORS_FILE = path.join(DATA_DIR, 'sectors.json');
 
 /** Loaded once on first read, then authoritative in memory. */
@@ -48,7 +48,7 @@ function load(): Record<string, string> {
  */
 function save(): void {
   try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    ensureDataDir();
     writeFileAtomic(SECTORS_FILE, JSON.stringify(_cache, null, 2));
   } catch (err: any) {
     logger.warn(`[SectorCache] Write failed — in-memory cache still valid: ${err.message}`);

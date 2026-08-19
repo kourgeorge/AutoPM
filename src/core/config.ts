@@ -26,6 +26,10 @@ export const config = {
    * market-data method on `IBroker` to switch. So `BROKER=ibkr` still wants the ALPACA_*
    * data credentials below, and an IBKR-only operator who omits them gets Yahoo-only
    * prices, not no prices — a degradation that looks like a slow feed.
+   *
+   * It does NOT switch the data directory either — that is `DATA_DIR` alone, in
+   * `core/paths.ts`. Two brokers sharing one journal is an operator decision, not something
+   * inferred from this value.
    */
   broker: (process.env.BROKER ?? 'alpaca') as 'alpaca' | 'ibkr',
 

@@ -23,8 +23,8 @@ import path from 'path';
 import { logger } from '../core/logger';
 import type { Fill } from '../broker/IBroker';
 import { canonicalSymbol } from '../core/symbols';
+import { DATA_DIR, ensureDataDir } from '../core/paths';
 
-export const DATA_DIR = path.join(process.cwd(), 'data');
 export const FILLS_FILE = path.join(DATA_DIR, 'fills.jsonl');
 
 let _ephemeral = false;
@@ -146,7 +146,7 @@ export function recordFills(fills: Fill[]): number {
 
   if (!_ephemeral) {
     try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      ensureDataDir();
       fs.appendFileSync(FILLS_FILE, fresh.map(f => JSON.stringify(f)).join('\n') + '\n', 'utf8');
     } catch (err: any) {
       logger.error(`[Fills] write failed for ${fresh.length} fill(s): ${err.message}`);

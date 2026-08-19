@@ -22,6 +22,10 @@ policy/history/
 # LESSONS, state, sectors, policy) from a run against TWS. Live trading records, so
 # ignored for the same reason its data/ counterparts above are. The files stay on disk;
 # the copies already in history are untouched by this.
+#
+# Kept ignored so `DATA_DIR=./ibkr-data` works without further edits. Any OTHER DATA_DIR is
+# covered by neither this line nor the data/ lines above — if you point one inside the repo,
+# add it here too.
 ibkr-data/
 
 # Local agent/tool scratch, never shared. `.claude/settings local.json` was tracked and

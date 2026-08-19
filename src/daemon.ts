@@ -6,10 +6,16 @@ import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
 import { reconcileOnStartup } from './review/reconcile';
+import { DATA_DIR } from './core/paths';
 import { config } from './core/config';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
+
+// Announced because it is now configurable, and because every durable record the operator
+// might go looking for is under it. Logged AFTER `attachUI` so it lands in the UI log box —
+// the blessed screen clears the terminal, so anything printed earlier is gone.
+logger.info(`[Boot] data dir: ${DATA_DIR}`);
 
 // The dashboard cannot read config itself (`src/ui/` must stay importable without an API key),
 // so identity is pushed in from here — the one place that already knows all of it.

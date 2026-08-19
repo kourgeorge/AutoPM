@@ -3,6 +3,7 @@ import path from 'path';
 import { logger } from '../core/logger';
 import { writeFileAtomic } from '../core/fsAtomic';
 import { canonicalSymbol } from '../core/symbols';
+import { DATA_DIR, ensureDataDir } from '../core/paths';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -65,7 +66,6 @@ export interface SystemState {
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
-const DATA_DIR = path.join(process.cwd(), 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const DEBOUNCE_MS = 5_000;
 
@@ -133,7 +133,7 @@ function scheduleSave(): void {
   _writeTimer = setTimeout(() => {
     _writeTimer = null;
     try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      ensureDataDir();
       // Atomic: this rewrites the whole file on every debounce, and `loadFromDisk` treats an
       // unparseable one as "start fresh" — which would silently discard every position
       // snapshot, stop included. A truncated write is the one failure it cannot detect.

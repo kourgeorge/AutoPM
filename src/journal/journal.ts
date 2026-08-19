@@ -20,8 +20,8 @@ import { logger } from '../core/logger';
 import { getPolicy } from '../policy/load';
 import type { DecisionInput, DecisionRecord } from './types';
 import { canonicalSymbol } from '../core/symbols';
+import { DATA_DIR, ensureDataDir } from '../core/paths';
 
-export const DATA_DIR = path.join(process.cwd(), 'data');
 export const JOURNAL_FILE = path.join(DATA_DIR, 'journal.jsonl');
 
 let _ephemeral = false;
@@ -56,7 +56,7 @@ export function recordDecision(input: DecisionInput): DecisionRecord {
 
   if (!_ephemeral) {
     try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      ensureDataDir();
       fs.appendFileSync(JOURNAL_FILE, JSON.stringify(record) + '\n', 'utf8');
     } catch (err: any) {
       logger.error(`[Journal] write failed for ${record.id}: ${err.message}`);
