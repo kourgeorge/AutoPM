@@ -122,6 +122,34 @@ function stamp(d: Date = new Date()): string {
 
 // ── UI singleton ─────────────────────────────────────────────────────────────
 
+/**
+ * What the approval gate hands over, structurally.
+ *
+ * A copy of `ApprovalRequest` from `core/approvals.ts` rather than an import, for the reason
+ * documented on `setTick`: that module imports `core/config`, which THROWS at import when
+ * `AI_API_KEY` is absent, and this file is reached by probe scripts. Structural typing keeps
+ * the compile-time check without adding the edge — `daemon.ts` assigns `askApproval` into the
+ * `ApprovalChannel` slot, so a drift in the real shape fails there.
+ */
+export interface ApprovalPrompt {
+  action: 'entry' | 'exit';
+  symbol: string;
+  venue: 'paper' | 'live';
+  qty: number;
+  price: number | null;
+  notional: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  pnl: number | null;
+  reason: string;
+  /** Absolute epoch ms. The same number the gate is timing against. */
+  deadline: number;
+}
+
+/** Exact, case-insensitive, trimmed. A near-miss must reach the concierge, not the venue. */
+const APPROVE_WORDS = /^(y|yes|approve|ok|go)$/i;
+const DENY_WORDS = /^(n|no|deny|reject|cancel|stop)$/i;
+
 class TerminalUI {
   private screen: blessed.Widgets.Screen;
   private logBox: blessed.Widgets.Log;
@@ -141,6 +169,16 @@ class TerminalUI {
   private tick: TickSnapshot | null = null;
   private env: Environment = { broker: '', venue: '', provider: '', model: '' };
   private traderLane: Lane = { state: 'starting' };
+  /**
+   * The one approval on screen, if any. `prevLane` is captured on entry and restored on
+   * settle: this is the only code that knows the trader is stopped at the gate, so it is also
+   * the only code that can put the lane back to whatever it was saying before.
+   */
+  private approval: {
+    req: ApprovalPrompt;
+    resolve: (answer: 'approve' | 'deny') => void;
+    prevLane: Lane;
+  } | null = null;
   private conciergeLane: Lane = { state: 'idle' };
   private cycleInfo: Cycle = { n: 0 };
   /** Advances once a second. Drives the spinner and the session blink — nothing else. */
@@ -283,6 +321,17 @@ class TerminalUI {
 
     this.input.onSubmit((line) => {
       this.appendUserMessage(line);
+      // The approval answer is matched HERE, before anything reaches the concierge: the
+      // decision to send an order to a live venue must not pass through a language model, and
+      // the concierge has no approval tool precisely so it cannot answer on the operator's
+      // behalf. Anything that is not an exact yes or no falls through to the conversation as
+      // it always did, with a reminder that the gate is still holding.
+      if (this.approval) {
+        const answer = line.trim();
+        if (APPROVE_WORDS.test(answer)) return this.settleApproval('approve');
+        if (DENY_WORDS.test(answer)) return this.settleApproval('deny');
+        this.log('WARN', `Still waiting on y/n for ${this.approval.req.action} ${this.approval.req.symbol} — that message goes to the concierge, not to the gate.`);
+      }
       this.onSubmit?.(line);
     });
 
@@ -300,6 +349,7 @@ class TerminalUI {
     // imports this module is not held open by one more handle.
     this.ticker = setInterval(() => {
       this.frame++;
+      this.expireApproval();
       this.paint();
     }, 1000);
     this.ticker.unref();
@@ -348,6 +398,54 @@ class TerminalUI {
     this.screen.render();
   }
 
+
+  /**
+   * Put an order in front of the operator and wait for `y` or `n`.
+   *
+   * Registered as the gate's channel by `daemon.ts` — nothing here decides WHETHER to ask;
+   * `core/approvals.ts` owns that, and this is only how a human is reached.
+   *
+   * The promise may be ABANDONED: the gate races it against its own deadline timer, so a
+   * lapse settles over there and this one is simply never awaited again. That is why
+   * `expireApproval` clears the slot without resolving — see the note on it.
+   */
+  askApproval(req: ApprovalPrompt): Promise<'approve' | 'deny'> {
+    // Defensive, and a refusal rather than a queue: the gate already serialises requests, so
+    // reaching here means two prompts would share one screen and one `y`.
+    if (this.approval) {
+      this.log('WARN', `Second approval for ${req.action} ${req.symbol} refused — ${this.approval.req.symbol} still on screen.`);
+      return Promise.resolve('deny');
+    }
+
+    const f = (n: number | null, prefix = '$') => (n == null ? '—' : `${prefix}${n.toFixed(2)}`);
+    const verb = req.action === 'entry' ? 'BUY' : 'SELL';
+    const mins = Math.max(1, Math.round((req.deadline - Date.now()) / 60_000));
+
+    const lines = [
+      `${verb} ${req.qty} ${req.symbol} on the ${req.venue.toUpperCase()} account`,
+      `  price ${f(req.price)}   notional ${f(req.notional)}`,
+      req.action === 'entry'
+        ? `  stop ${f(req.stopLoss)}   target ${f(req.takeProfit)}`
+        : `  unrealized ${req.pnl == null ? '—' : `${req.pnl >= 0 ? '+' : '-'}$${Math.abs(req.pnl).toFixed(2)}`}`,
+      `  reason: ${req.reason}`,
+      `Type y to approve, n to deny. No answer within ~${mins} min and it is refused.`,
+    ];
+    this.prompt(lines.join('\n'), req.venue === 'live');
+
+    // The bell is the point of the whole feature on a live account: the operator may not be
+    // looking at this window, and the alternative to a noise is a silent ten-minute timeout.
+    process.stdout.write('\x07');
+
+    return new Promise((resolve) => {
+      this.approval = { req, resolve, prevLane: this.traderLane };
+      this.traderLane = {
+        state: 'awaiting',
+        until: req.deadline,
+        detail: `${req.action} ${req.symbol}`,
+      };
+      this.paint();
+    });
+  }
 
   // ── Dashboard inputs ─────────────────────────────────────────────────────
 
@@ -398,6 +496,61 @@ class TerminalUI {
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
+
+  /**
+   * The approval block. `alert`'s shape — blank row, dated first line, continuations padded
+   * into the same column — with its own marker so it cannot be skimmed as one more warning,
+   * and red on a live venue because that is the only detail that changes what it costs to
+   * get this wrong.
+   */
+  private prompt(msg: string, live: boolean): void {
+    const ts = stamp();
+    const marker = '▶ APPROVE?';
+    const color = live ? COLORS.error : COLORS.warn;
+    const gutter = ' '.repeat(ts.length + 2 + marker.length + 2);
+
+    this.emit('');
+    msg.split('\n').forEach((line, i) => {
+      const prefix = i === 0
+        ? `{bold}${color}${ts}{/}  {bold}${color}${marker}{/}  `
+        : gutter;
+      this.emit(`${prefix}{bold}${color}${this.escape(line)}{/}`);
+    });
+    this.emit('');
+    this.screen.render();
+  }
+
+  /** Hand the answer back and put the screen back the way it was. */
+  private settleApproval(answer: 'approve' | 'deny'): void {
+    const pending = this.approval;
+    if (!pending) return;
+    // Cleared BEFORE resolving, so a handler that immediately asks for another approval finds
+    // an empty slot rather than a busy one.
+    this.approval = null;
+    this.traderLane = pending.prevLane;
+    this.log(answer === 'approve' ? 'TRADE' : 'WARN',
+      `Operator ${answer === 'approve' ? 'approved' : 'denied'} ${pending.req.action} ${pending.req.symbol}.`);
+    pending.resolve(answer);
+    this.paint();
+  }
+
+  /**
+   * Drop a prompt whose window has closed. Called from the 1s repaint, which is already
+   * counting the same `deadline` down on screen.
+   *
+   * Deliberately does NOT resolve the promise. The gate settles a lapse on its own timer, by
+   * `policy.approval.onTimeout` — and with `onTimeout: allow` a `deny` from here landing a
+   * moment first would silently overturn the operator's configured choice. Clearing the slot
+   * is this side's whole job: it stops a `y` typed at the dead prompt from being read as an
+   * answer to it.
+   */
+  private expireApproval(): void {
+    const pending = this.approval;
+    if (!pending || Date.now() < pending.req.deadline) return;
+    this.approval = null;
+    this.traderLane = pending.prevLane;
+    this.log('WARN', `Approval window closed for ${pending.req.action} ${pending.req.symbol} — settled by policy, not by you.`);
+  }
 
   /**
    * The operator's message, echoed in the log so the transcript holds both halves of the

@@ -8,6 +8,27 @@ function requireEnv(key: string): string {
 }
 
 /**
+ * `paper` or `live`, DERIVED — never a flag of its own.
+ *
+ * A boolean an operator sets by hand can disagree with the endpoint the orders actually go
+ * to, and the one thing that must never be wrong here is which account is live: the UI
+ * paints it red, and `policy.approval.mode: live_only` arms the operator approval gate off
+ * it. Both read this, so they cannot disagree.
+ *
+ * Alpaca announces it in the hostname. IBKR announces it only in the port — 7497 (TWS) and
+ * 4002 (Gateway) are the paper listeners — so an unrecognised port is treated as LIVE. That
+ * asymmetry is deliberate: mistaking live for paper is the expensive direction.
+ */
+function resolveVenue(broker: string, alpacaBaseUrl: string, ibkrPort: number): 'paper' | 'live' {
+  if (broker === 'alpaca') return /paper/i.test(alpacaBaseUrl) ? 'paper' : 'live';
+  return ibkrPort === 7497 || ibkrPort === 4002 ? 'paper' : 'live';
+}
+
+const BROKER = (process.env.BROKER ?? 'alpaca') as 'alpaca' | 'ibkr';
+const ALPACA_BASE_URL = process.env.ALPACA_BASE_URL ?? 'https://paper-api.alpaca.markets';
+const IBKR_PORT = parseInt(process.env.IBKR_PORT ?? '7497'); // 7497=paper TWS, 4002=paper Gateway
+
+/**
  * Environment and secrets. NOT behaviour.
  *
  * Every behavioural number — watchlist, risk limits, indicator periods, trigger
@@ -31,21 +52,28 @@ export const config = {
    * `core/paths.ts`. Two brokers sharing one journal is an operator decision, not something
    * inferred from this value.
    */
-  broker: (process.env.BROKER ?? 'alpaca') as 'alpaca' | 'ibkr',
+  broker: BROKER,
+
+  /**
+   * Which account the active broker's orders reach. Derived from the endpoint above by
+   * `resolveVenue` — see the note there. `daemon.ts` pushes it to the UI banner and
+   * `core/approvals.ts` arms the approval gate off it.
+   */
+  venue: resolveVenue(BROKER, ALPACA_BASE_URL, IBKR_PORT),
 
   /** Trading host serves the active broker only when `broker === 'alpaca'`; the data host
    *  serves market data unconditionally. See the note on `broker` above. */
   alpaca: {
     keyId: process.env.ALPACA_KEY_ID ?? '',
     secretKey: process.env.ALPACA_SECRET_KEY ?? '',
-    baseUrl: process.env.ALPACA_BASE_URL ?? 'https://paper-api.alpaca.markets',
+    baseUrl: ALPACA_BASE_URL,
     dataUrl: process.env.ALPACA_DATA_URL ?? 'https://data.alpaca.markets',
   },
 
   /** Interactive Brokers TWS / IB Gateway connection. */
   ibkr: {
     host:     process.env.IBKR_HOST     ?? 'localhost',
-    port:     parseInt(process.env.IBKR_PORT     ?? '7497'), // 7497=paper TWS, 4002=paper Gateway
+    port:     IBKR_PORT,
     clientId: parseInt(process.env.IBKR_CLIENT_ID ?? '1'),
     account:  process.env.IBKR_ACCOUNT ?? '',  // leave blank for single-account setups
   },
