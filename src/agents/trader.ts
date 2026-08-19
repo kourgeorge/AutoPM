@@ -126,7 +126,21 @@ export class Trader {
         ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
         await this.interruptibleSleep(sleepMs);
       } catch (err: any) {
-        logger.error(`[Trader] Cycle error: ${err.message}`);
+        // `err.message` alone is not diagnosable: the Anthropic SDK reports every transport
+        // failure as the single string "Connection error." and hides the real reason
+        // (ECONNRESET, ETIMEDOUT, EAI_AGAIN, a 502 from a proxy) in `name`, `status` and the
+        // `cause` chain. Unwrap them, or a recurring cycle failure has no evidence at all.
+        const detail = [
+          err?.name && err.name !== 'Error' ? `name=${err.name}` : null,
+          err?.status ? `status=${err.status}` : null,
+          err?.requestID ? `requestID=${err.requestID}` : null,
+        ].filter(Boolean).join(' ');
+        const causes: string[] = [];
+        for (let c = err?.cause, depth = 1; c && depth <= 4; c = c?.cause, depth++) {
+          causes.push(`cause[${depth}]: ${c?.code ?? c?.name ?? '?'} ${c?.message ?? ''}`.trim());
+        }
+        logger.error(`[Trader] Cycle error: ${err.message}${detail ? ` (${detail})` : ''}`);
+        for (const c of causes) logger.error(`[Trader]   ${c}`);
         ui.setTraderActivity({ state: 'error', detail: 'error — retrying in 1 min' });
         await this.interruptibleSleep(ERROR_RECOVERY_SLEEP_MS);
       }
