@@ -85,6 +85,15 @@ const LOG_SCROLLBAR_COLS = 1;
  */
 const CHAT_MIN_TEXT_COLS = 24;
 
+/**
+ * Source lines of the OPERATOR's own message the log echoes before summarising the rest.
+ *
+ * Only their side is capped. A reply is content they have not read yet; a pasted table is content
+ * they pasted a second ago and still hold in the clipboard, and thirty rows of it would push every
+ * machine line out of the box — which is the one thing the box is for.
+ */
+const USER_ECHO_LINES = 6;
+
 // ── Layout ───────────────────────────────────────────────────────────────────
 
 /**
@@ -570,7 +579,14 @@ class TerminalUI {
    * neither a log entry nor a chat turn.
    */
   private appendUserMessage(msg: string): void {
-    this.chatBlock(CHAT_LABELS.operator, COLORS.user, msg);
+    // Trimmed for the ECHO only: the full text is what reaches the concierge (`onSubmit`, above),
+    // and what was left out is always stated rather than quietly dropped.
+    const lines = msg.split('\n');
+    const extra = lines.length - USER_ECHO_LINES;
+    const shown = extra <= 0
+      ? msg
+      : [...lines.slice(0, USER_ECHO_LINES), `… +${extra} more line${extra === 1 ? '' : 's'}`].join('\n');
+    this.chatBlock(CHAT_LABELS.operator, COLORS.user, shown);
   }
 
   /**
