@@ -290,6 +290,22 @@ Snapshots are keyed through `core/symbols.ts` (`canonicalSymbol`), because an or
 
 Everything else under `data/` is append-only and gitignored: `journal.jsonl`, `fills.jsonl`, `LESSONS.md`, `sectors.json`, `policy/`.
 
+### Where the record is written
+
+`core/paths.ts` resolves the data directory once and every writer imports `DATA_DIR` from there. One env var is the whole interface:
+
+```env
+DATA_DIR=./ibkr-data        # unset → ./data; absolute or relative to the repo root
+```
+
+Each of the six persistence modules used to compute `path.join(process.cwd(), 'data')` for itself, so pointing a run at a different directory meant editing six files — and a seventh writer added later would have hardcoded a seventh copy. The `ibkr-data/` directory on disk was produced by renaming `data/` by hand, a step no code knew about.
+
+`DATA_DIR` is **independent of `BROKER`**. Two venues sharing one journal is an operator decision, so it is stated once in the environment rather than inferred from a value that merely correlates with it. The consequence is worth knowing: with `DATA_DIR` unset, an IBKR run appends its fills, decisions and lessons to the same files as an Alpaca run, with nothing in the records to separate them afterwards.
+
+`paths.ts` deliberately imports nothing but node builtins and dotenv. `config.ts` throws on a missing `AI_API_KEY`, and every persistence module would inherit that throw if the data path came from there — reading a ledger file should not require an LLM key.
+
+`.gitignore` covers `data/` and `ibkr-data/` only; any other `DATA_DIR` inside the repo is not ignored.
+
 ---
 
 ## Architecture
@@ -352,6 +368,7 @@ src/
 │   └── types.ts          # Maybe<T> wrappers; the one staleness chokepoint
 ├── core/
 │   ├── config.ts         # API keys, model, broker selection (NOT behaviour)
+│   ├── paths.ts          # DATA_DIR — the one declaration of where the record goes
 │   ├── modelProvider.ts  # Anthropic + any OpenAI-compatible endpoint
 │   ├── symbols.ts        # canonicalSymbol / sameSymbol — one definition of "same symbol"
 │   ├── alpacaHttp.ts     # Both Alpaca base URLs + the nanosecond timestamp rule
@@ -420,6 +437,8 @@ IBKR_PORT=7497        # TWS paper 7497 / live 7496; Gateway paper 4002 / live 40
 IBKR_CLIENT_ID=1
 IBKR_ACCOUNT=         # blank for single-account setups
 ```
+
+This switches the execution venue only. To keep IBKR's journal, fills and lessons out of the Alpaca ones, also set `DATA_DIR` — see [Where the record is written](#where-the-record-is-written).
 
 Note that **environment holds secrets and endpoints, never behaviour.** Anything an operator would tune to change *how* the system trades lives in the policy YAML.
 

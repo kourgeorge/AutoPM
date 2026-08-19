@@ -22,13 +22,18 @@ import path from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { logger } from '../core/logger';
 import type { Policy, PolicyLoadResult, PolicyMeta, RegimeOverride, RegimePolicy } from './types';
+import { DATA_DIR } from '../core/paths';
 
-/** Read-only default shipped with the project source. */
+/**
+ * Read-only defaults shipped with the project source. These stay under `policy/` in the repo
+ * whatever DATA_DIR is set to: they are tracked source, not per-broker record, and POLICY.md
+ * is the system prompt itself.
+ */
 export const DEFAULT_POLICY_FILE = path.join(process.cwd(), 'policy', 'default.yaml');
 export const TEMPLATE_FILE = path.join(process.cwd(), 'policy', 'POLICY.md');
 
-/** Live (user-managed) policy and its history — gitignored data directory. */
-export const DATA_POLICY_DIR = path.join(process.cwd(), 'data', 'policy');
+/** Live (user-managed) policy and its history — inside the gitignored data directory. */
+export const DATA_POLICY_DIR = path.join(DATA_DIR, 'policy');
 export const POLICY_FILE = path.join(DATA_POLICY_DIR, 'policy.yaml');
 export const HISTORY_DIR = path.join(DATA_POLICY_DIR, 'history');
 

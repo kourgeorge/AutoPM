@@ -22,7 +22,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../core/logger';
 import { getPolicy } from '../policy/load';
-import { DATA_DIR } from './journal';
+import { DATA_DIR, ensureDataDir } from '../core/paths';
 
 export const LESSONS_FILE = path.join(DATA_DIR, 'LESSONS.md');
 
@@ -65,7 +65,7 @@ export function recordLesson(text: string): string {
 
   if (!_ephemeral) {
     try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      ensureDataDir();
       if (!fs.existsSync(LESSONS_FILE)) fs.writeFileSync(LESSONS_FILE, FILE_HEADER, 'utf8');
       fs.appendFileSync(LESSONS_FILE, entry, 'utf8');
     } catch (err: any) {
