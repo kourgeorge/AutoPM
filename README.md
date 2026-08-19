@@ -242,7 +242,31 @@ Failure semantics differ by phase on purpose: the **first** load throws, because
 
 The `immutable` block is the part the Concierge and the Trader cannot argue with: `maxPositionsCeiling`, `maxDailyLossPctCeiling`, `positionSizePctCeiling`, `stopLossAtrMultCeiling`, `minTickIntervalMs`, `requireStopOnEntry`.
 
-POLICY.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`.
+POLICY.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`, plus the four from the approval gate below.
+
+### The operator approval gate
+
+By default the agent trades a **paper** account with no human in the loop, and asks before every order on a **live** one. The gate sits at the last statement before `broker.placeOrder` in both `enterPosition` and `exitPosition`, after regime sizing — so what you approve is the quantity that will actually be sent, and you are never asked about an order the guards would have refused anyway.
+
+An armed gate prints a block in the log, rings the terminal bell, and puts the Trader lane into `needs y/n` with a countdown. Type **`y`** to approve or **`n`** to deny, in the same input you talk to the Concierge with. The match is exact, case-insensitive and deterministic: anything else goes to the Concierge as a normal message, so the model never sees the answer and cannot give one on your behalf — it has no approval tool at all.
+
+```yaml
+approval:
+  mode: live_only        # off | live_only | always
+  timeoutMs: 600000      # how long a request waits for you
+  onTimeout: deny        # deny | allow
+  require:
+    entry: true
+    exit: true
+```
+
+`paper` vs `live` is **derived** from the endpoint you configured — the Alpaca hostname, or the IBKR port (7497/4002 are the paper listeners; an unrecognised port counts as live) — never from a flag of its own, so `live_only` cannot disagree with the account the orders go to. Set `mode: always` to gate paper too, which is the honest way to watch what the agent would have done before letting it do it.
+
+A refusal is journalled as a `vetoRule` like any other guard: `approval_denied` (you said no), `approval_timeout` (nobody answered in time), `approval_unavailable` (an armed gate in a process with no operator attached — a script or a headless run, which therefore cannot trade), `approval_busy` (a second request while one was already on screen). `grep '"vetoRule":"approval_timeout"' data/journal.jsonl` answers "what did I miss by not being at the desk".
+
+The block is **absent from `update_policy`**: the Concierge cannot disarm the gate on your behalf. Only a human editing `data/policy/policy.yaml` can — and it hot-reloads like the rest of the policy, so a change takes effect on the next order, with the panel badge following on the next tick. A policy file written before this feature existed has no `approval:` block; it defaults to **armed** (`live_only`), never to off.
+
+**One consequence, stated plainly:** with `require.exit: true` and `onTimeout: deny`, an unattended live agent cannot close a losing position — a stop-breach exit is refused at the gate and journalled as `approval_timeout`. If you are not watching the terminal, either set `require.exit: false` (entries gated, exits free) or `onTimeout: allow` (the gate becomes delay-and-notify rather than a veto).
 
 ### The review layer
 
@@ -495,6 +519,16 @@ Trigger and wake cadences (`triggers:`):
 | `heartbeatWithPositionsMs` | 900000 | Heartbeat cadence while holding with the market open — wakes the Trader |
 | `heartbeatFlatMs` | 3600000 | Heartbeat cadence when flat or closed — context only, no wake |
 | `maxQuoteAgeMs` | 180000 | Age past which a quote is stale and fires `data_stale` |
+
+Operator approval (`approval:`) — see [the operator approval gate](#the-operator-approval-gate):
+
+| Parameter | Default | Description |
+|---|---|---|
+| `mode` | `live_only` | `off` \| `live_only` \| `always` — when the gate is armed |
+| `timeoutMs` | 600000 | How long a request waits for a y/n (10 min) |
+| `onTimeout` | `deny` | What an unanswered request settles as |
+| `require.entry` | true | Gate `execute_entry` |
+| `require.exit` | true | Gate `execute_exit` |
 
 Safety ceilings (`immutable:`) — no runtime change, from the Concierge or the Trader, can exceed these:
 

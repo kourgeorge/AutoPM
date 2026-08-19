@@ -8,6 +8,7 @@ import { createLiveRouter } from './features/router';
 import { reconcileOnStartup } from './review/reconcile';
 import { DATA_DIR } from './core/paths';
 import { config } from './core/config';
+import { approvalRequired, approvalSummary, setApprovalChannel } from './core/approvals';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -17,27 +18,44 @@ ui.captureStreams();
 // the blessed screen clears the terminal, so anything printed earlier is gone.
 logger.info(`[Boot] data dir: ${DATA_DIR}`);
 
-// The dashboard cannot read config itself (`src/ui/` must stay importable without an API key),
-// so identity is pushed in from here — the one place that already knows all of it.
+// The operator approval gate's one wire to a human.
 //
-// The venue is derived, not configured, and it is the reason this is worth doing at all: an
-// operator glancing at the panel must never mistake a live account for a paper one. Alpaca
-// announces it in the hostname; IBKR only in the port (7497 TWS / 4002 Gateway are paper).
-const venue =
-  config.broker === 'alpaca'
-    ? /paper/i.test(config.alpaca.baseUrl)
-      ? 'paper'
-      : 'live'
-    : config.ibkr.port === 7497 || config.ibkr.port === 4002
-      ? 'paper'
-      : 'live';
+// Registered here because this is the only module that owns both halves: `core/approvals.ts`
+// must stay free of `src/ui/`, which builds a blessed screen AT IMPORT. Any process that does
+// NOT run this line — a script, the replay harness, a probe — has no operator to ask, and an
+// armed gate there refuses rather than assuming consent.
+setApprovalChannel((req) => ui.askApproval(req));
 
-ui.setEnvironment({
-  broker: config.broker,
-  venue,
-  provider: config.ai.provider,
-  model: config.ai.model,
-});
+// Announced, not left to be discovered by an order that stops dead. `config.venue` is derived
+// from the endpoint (see resolveVenue), so this line and the gate read the same truth.
+logger.info(`[Boot] approvals: ${approvalSummary()}`);
+
+/**
+ * The dashboard cannot read config itself (`src/ui/` must stay importable without an API key),
+ * so identity is pushed in from here — the one place that already knows all of it.
+ *
+ * The venue is derived, not configured, and it is the reason this is worth doing at all: an
+ * operator glancing at the panel must never mistake a live account for a paper one.
+ *
+ * Re-pushed on every tick rather than set once, because the gate is read from the policy and
+ * the policy is hot-reloaded: a badge fixed at boot would keep claiming the gate was armed for
+ * up to a whole session after someone disarmed it in the file. Cheap — it is a repaint of
+ * strings the panel already renders every second.
+ */
+function pushEnvironment(): void {
+  const armed = (['entry', 'exit'] as const).filter((a) => approvalRequired(a));
+  ui.setEnvironment({
+    broker: config.broker,
+    venue: config.venue,
+    provider: config.ai.provider,
+    model: config.ai.model,
+    // Empty when disarmed — `joinChunks` drops an empty chunk, so the badge costs no columns
+    // until there is something to say.
+    gate: armed.length > 0 ? `gate ${armed.join('+')}` : '',
+  });
+}
+
+pushEnvironment();
 
 const trader = new Trader();
 const concierge = new ConciergeAgent(msg => trader.wake(msg));
@@ -56,7 +74,10 @@ const scheduler = new FeatureScheduler({
   }),
   // The tick's features are already computed for the detectors; the panel is a second reader of
   // the same snapshot, which is why the live dashboard costs no broker calls at all.
-  onTick: (data) => ui.setTick(data),
+  onTick: (data) => {
+    ui.setTick(data);
+    pushEnvironment(); // policy may have been reloaded since the last tick
+  },
 });
 
 scheduler.start();

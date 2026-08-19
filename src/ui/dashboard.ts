@@ -71,7 +71,7 @@ export interface TickSnapshot {
   policyVersion: number;
 }
 
-export type LaneState = 'starting' | 'idle' | 'thinking' | 'sleeping' | 'error';
+export type LaneState = 'starting' | 'idle' | 'thinking' | 'sleeping' | 'awaiting' | 'error';
 
 /**
  * What one agent is doing. `until` is an absolute epoch ms, not a remaining duration, so the
@@ -90,6 +90,15 @@ export interface Environment {
   venue: string;
   provider: string;
   model: string;
+  /**
+   * The approval gate, as a badge — `gate: entry, exit` — or absent when disarmed.
+   *
+   * Optional and empty-when-off on purpose: `joinChunks` drops an empty chunk, so a disarmed
+   * gate costs no columns, and a panel that says nothing about approvals is a panel where
+   * nothing will ask. The armed case is the one that must be visible without being asked for,
+   * because it changes what happens when the operator walks away.
+   */
+  gate?: string;
 }
 
 export interface Cycle {
@@ -212,6 +221,16 @@ function laneChunk(m: DashboardModel, lane: Lane, spinner: boolean): Chunk {
     case 'sleeping': {
       const left = lane.until != null ? f.duration(lane.until - m.now) : null;
       return { text: left ? `sleeping ${left}` : 'sleeping', color: 'white-fg' };
+    }
+    // The only lane state that is a REQUEST: the trader is stopped at the gate and will stay
+    // there until the operator types y or n, or the countdown runs out and it is refused.
+    // Yellow and bold, with the deadline counted down from `until` like `sleeping` — the
+    // number an operator needs here is how long they have left, not how long they were given.
+    case 'awaiting': {
+      const left = lane.until != null ? f.duration(lane.until - m.now) : null;
+      const what = lane.detail ?? 'approval';
+      // No markup in `text`: `joinChunks` escapes it, so a `{bold}` here would print as one.
+      return { text: `needs y/n: ${what}${left ? ` (${left})` : ''}`, color: 'yellow-fg' };
     }
     case 'error':
       return { text: lane.detail ?? 'error', color: 'red-fg' };
@@ -390,6 +409,7 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
     joinChunks(f, width, ' ', [
       { text: m.env.broker || 'broker?', color: 'gray-fg' },
       { text: m.env.venue, color: m.env.venue === 'live' ? 'red-fg' : 'gray-fg' },
+      { text: m.env.gate ?? '', color: 'yellow-fg' },
       { text: t ? `pol v${t.policyVersion}` : '', color: 'gray-fg' },
     ]),
   );
@@ -558,6 +578,7 @@ export function renderStrip(m: DashboardModel, width: number): string[] {
     },
     { text: m.env.model || 'model?', color: 'cyan-fg' },
     { text: `${m.env.broker} ${m.env.venue}`, color: m.env.venue === 'live' ? 'red-fg' : 'gray-fg' },
+    { text: m.env.gate ?? '', color: 'yellow-fg' },
     { text: t ? `pol v${t.policyVersion}` : '', color: 'gray-fg' },
     { text: t ? `tick ${f.ageOf(t.tickAt, m.now)} ago` : 'awaiting first tick', color: 'gray-fg' },
   ]);

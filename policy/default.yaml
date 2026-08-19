@@ -56,6 +56,28 @@ triggers:
   heartbeatWithPositionsMs: 900000
   heartbeatFlatMs: 3600000
   maxQuoteAgeMs: 180000
+approval:
+  # Operator approval gate — the trader asks before an order reaches the venue.
+  #
+  # mode:  off       never ask
+  #        live_only ask only on a live account (paper stays fully autonomous)
+  #        always    ask on both, useful while building trust in the agent
+  #
+  # The venue is DERIVED from the endpoint (Alpaca hostname / IBKR port), not configured
+  # here — see resolveVenue in src/core/config.ts. Answer a prompt by typing y or n in the
+  # terminal UI; the match is exact and deterministic, so the concierge never sees it and
+  # cannot answer on your behalf.
+  mode: live_only
+  # How long a request waits for you. Refused as approval_timeout when it lapses.
+  timeoutMs: 600000
+  # deny | allow. WARNING on `deny` with `require.exit: true`: an unattended live agent
+  # then cannot close a losing position — a stop-breach exit is refused at the gate and
+  # journalled as a veto. If you are not watching the terminal, set `exit: false` (entries
+  # gated, exits free) or `onTimeout: allow` (gate becomes delay-and-notify).
+  onTimeout: deny
+  require:
+    entry: true
+    exit: true
 immutable:
   maxPositionsCeiling: 10
   maxDailyLossPctCeiling: 0.05

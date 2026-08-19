@@ -21,7 +21,14 @@ import fs from 'fs';
 import path from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { logger } from '../core/logger';
-import type { Policy, PolicyLoadResult, PolicyMeta, RegimeOverride, RegimePolicy } from './types';
+import type {
+  ApprovalPolicy,
+  Policy,
+  PolicyLoadResult,
+  PolicyMeta,
+  RegimeOverride,
+  RegimePolicy,
+} from './types';
 import { DATA_DIR } from '../core/paths';
 
 /**
@@ -91,6 +98,26 @@ function bool(src: Record<string, unknown>, where: string, key: string, errs: Er
     return false;
   }
   return v;
+}
+
+/**
+ * One of a fixed set of strings. Absent is NOT handled here — the caller decides whether a
+ * missing key is an error or a default, because those differ per block.
+ */
+function enumOf<T extends string>(
+  src: Record<string, unknown>,
+  where: string,
+  key: string,
+  allowed: readonly T[],
+  errs: Errors,
+): T | undefined {
+  const v = src[key];
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string' || !(allowed as readonly string[]).includes(v)) {
+    errs.push(`${where}.${key}: expected one of ${allowed.join(' | ')}, got ${JSON.stringify(v)}`);
+    return undefined;
+  }
+  return v as T;
 }
 
 function symbolList(src: Record<string, unknown>, where: string, key: string, errs: Errors): string[] {
@@ -189,7 +216,55 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     maxQuoteAgeMs: num(t, 'triggers', 'maxQuoteAgeMs', errs, { int: true, min: 0 }),
   };
 
-  return { policy: { version, risk, strategy, triggers, regime, immutable }, errors: errs };
+
+  // ── Approval gate ───────────────────────────────────────────────────────────
+  //
+  // Optional block, ARMED by default. Every policy.yaml written before the gate existed is
+  // missing it, and the first load THROWS on a validation error (see the header) — so
+  // requiring the block would take down every daemon that upgraded. The fallback is
+  // `live_only` rather than `off`: an operator who has never heard of this feature should
+  // find their live account gated, not silently unguarded.
+  //
+  // Stricter than `regime` above on purpose. There, a wrong type falls back to the default;
+  // here it is an error. `mode: live-only` (a hyphen) must not quietly become the default —
+  // on a safety gate, a typo that reads as "configured" is the whole failure mode.
+  const DEFAULT_APPROVAL: ApprovalPolicy = {
+    mode: 'live_only',
+    timeoutMs: 600_000,
+    onTimeout: 'deny',
+    require: { entry: true, exit: true },
+  };
+
+  const a = isRecord(root.approval) ? root.approval : {};
+  if (root.approval !== undefined && !isRecord(root.approval)) {
+    errs.push('approval: present but not a mapping');
+  }
+  const reqRaw = isRecord(a.require) ? a.require : {};
+  if (a.require !== undefined && !isRecord(a.require)) {
+    errs.push('approval.require: present but not a mapping');
+  }
+
+  const optBool = (src: Record<string, unknown>, where: string, key: string, fallback: boolean): boolean => {
+    if (src[key] === undefined) return fallback;
+    return bool(src, where, key, errs);
+  };
+
+  const approval: ApprovalPolicy = {
+    mode: enumOf(a, 'approval', 'mode', ['off', 'live_only', 'always'] as const, errs)
+      ?? DEFAULT_APPROVAL.mode,
+    // Floors at 5s (an unanswerable window is a denial with extra steps) and caps at 24h.
+    timeoutMs: a.timeoutMs === undefined
+      ? DEFAULT_APPROVAL.timeoutMs
+      : num(a, 'approval', 'timeoutMs', errs, { int: true, min: 5_000, max: 86_400_000 }),
+    onTimeout: enumOf(a, 'approval', 'onTimeout', ['deny', 'allow'] as const, errs)
+      ?? DEFAULT_APPROVAL.onTimeout,
+    require: {
+      entry: optBool(reqRaw, 'approval.require', 'entry', DEFAULT_APPROVAL.require.entry),
+      exit: optBool(reqRaw, 'approval.require', 'exit', DEFAULT_APPROVAL.require.exit),
+    },
+  };
+
+  return { policy: { version, risk, strategy, triggers, regime, approval, immutable }, errors: errs };
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────────

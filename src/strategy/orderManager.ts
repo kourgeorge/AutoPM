@@ -20,6 +20,7 @@ import {
   isAtMaxPositions,
   isDailyLossBreached,
 } from './riskManager';
+import { requestApproval } from '../core/approvals';
 
 /**
  * A refusal by this system's own rules, as opposed to the venue's (`BrokerRejection`).
@@ -102,6 +103,22 @@ export async function enterPosition(
   // so late_cycle/recession positions are automatically smaller.
   const regimeQty = await applyRegimeSizing(qty);
 
+  // LAST, and after regime sizing: the operator approves the qty that will actually reach
+  // the venue, and is never woken for an order the guards above would have refused anyway.
+  // Disarmed by policy — the common case — this returns `not_required` without touching the
+  // UI, so the ordering above is unchanged for a paper account.
+  const nod = await requestApproval('entry', {
+    symbol,
+    qty: regimeQty,
+    price,
+    notional: regimeQty * price,
+    stopLoss,
+    takeProfit,
+    pnl: null,
+    reason: signal.reason,
+  });
+  if (!nod.granted) reject(nod.rule, nod.message);
+
   logger.trade(`Entering ${symbol}: qty=${regimeQty} @ ~$${price.toFixed(2)}, SL=$${stopLoss.toFixed(2)}, TP=$${takeProfit.toFixed(2)}`);
   const { id } = await broker.placeOrder({ symbol, side: 'buy', qty: regimeQty, type: 'market' });
   logger.trade(`Order ${id} submitted for ${symbol}`);
@@ -162,6 +179,21 @@ export async function exitPosition(
   if (!pos) {
     reject('no_position', `No open position in ${symbol} — nothing to exit`);
   }
+
+  // Below the `no_position` guard, so a phantom exit never wakes anyone. The operator sees
+  // the venue's own qty and unrealized P&L — the numbers that make the decision — not the
+  // model's account of them.
+  const nod = await requestApproval('exit', {
+    symbol,
+    qty: pos.qty,
+    price: pos.marketValue != null && pos.qty !== 0 ? pos.marketValue / pos.qty : null,
+    notional: pos.marketValue ?? null,
+    stopLoss: null,
+    takeProfit: null,
+    pnl: pos.unrealizedPnL ?? null,
+    reason,
+  });
+  if (!nod.granted) reject(nod.rule, nod.message);
 
   logger.trade(`Exiting ${symbol}: ${reason}`);
   const { id } = await broker.placeOrder({ symbol, side: 'sell', qty: pos.qty, type: 'market' });
