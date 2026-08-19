@@ -59,6 +59,8 @@ export class Trader {
    * write would leave a filled order with no stop recorded anywhere.
    */
   private wakePending = false;
+  /** Cycles since this process started — a counter, not a persisted statistic. */
+  private cycleCount = 0;
 
   async start(): Promise<void> {
     this.running = true;
@@ -97,8 +99,20 @@ export class Trader {
   private async loop(): Promise<void> {
     while (this.running) {
       try {
-        ui.setStatus('thinking…');
-        let sleepMs = await this.runCycle();
+        this.cycleCount++;
+        const startedAt = Date.now();
+        ui.setTraderActivity({ state: 'thinking', detail: `cycle ${this.cycleCount}` });
+
+        const cycle = await this.runCycle();
+        let sleepMs = cycle.sleepMs;
+
+        ui.setCycle({
+          n: this.cycleCount,
+          lastMs: Date.now() - startedAt,
+          inTokens: cycle.inTokens,
+          outTokens: cycle.outTokens,
+        });
+
         if (this.wakePending) {
           this.wakePending = false;
           logger.info('[Trader] Wake was pending — starting the next cycle immediately');
@@ -106,15 +120,19 @@ export class Trader {
         }
         const mins = (sleepMs / 60_000).toFixed(0);
         logger.info(`[Trader] Sleeping ${mins} min`);
-        ui.setStatus(`sleeping — next cycle in ${mins} min`);
+        // An absolute deadline rather than a duration string: the panel subtracts `now` once a
+        // second, which is what turns "next cycle in 7 min" into a countdown that actually
+        // moves — and it stays truthful if a wake cuts the sleep short.
+        ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
         await this.interruptibleSleep(sleepMs);
       } catch (err: any) {
         logger.error(`[Trader] Cycle error: ${err.message}`);
-        ui.setStatus('error — retrying in 1 min');
+        ui.setTraderActivity({ state: 'error', detail: 'error — retrying in 1 min' });
         await this.interruptibleSleep(ERROR_RECOVERY_SLEEP_MS);
       }
     }
     logger.info('[Trader] Stopped.');
+    ui.setTraderActivity({ state: 'idle', detail: 'stopped' });
   }
 
   private interruptibleSleep(ms: number): Promise<void> {
@@ -124,7 +142,8 @@ export class Trader {
     });
   }
 
-  private async runCycle(): Promise<number> {
+  /** One cycle's outcome: when to wake next, and what it cost. */
+  private async runCycle(): Promise<{ sleepMs: number; inTokens: number; outTokens: number }> {
     const state = getState();
     const pendingMessages = this.pendingMessages.splice(0);
 
@@ -136,6 +155,11 @@ export class Trader {
     ];
 
     let scheduledSleepMs = DEFAULT_SLEEP_MS;
+    // Summed across the tool rounds, not taken from the last response: a cycle that called ten
+    // tools paid for ten prompts, and the last one alone understates the cost several-fold.
+    // Providers that report no usage report 0 (see `modelProvider.ts`), which is honest here.
+    let inTokens = 0;
+    let outTokens = 0;
     // Rendered per cycle, so a hot POLICY.md edit takes effect on the next one.
     const prompt = systemPrompt();
 
@@ -146,6 +170,9 @@ export class Trader {
         tools: TRADER_TOOL_DEFINITIONS,
         maxTokens: 4096,
       });
+
+      inTokens += response.usage.inputTokens;
+      outTokens += response.usage.outputTokens;
 
       messages.push({ role: 'assistant', content: response.content });
 
@@ -189,7 +216,7 @@ export class Trader {
       break;
     }
 
-    return scheduledSleepMs;
+    return { sleepMs: scheduledSleepMs, inTokens, outTokens };
   }
 }
 

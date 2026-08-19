@@ -6,9 +6,32 @@ import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
 import { reconcileOnStartup } from './review/reconcile';
+import { config } from './core/config';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
+
+// The dashboard cannot read config itself (`src/ui/` must stay importable without an API key),
+// so identity is pushed in from here — the one place that already knows all of it.
+//
+// The venue is derived, not configured, and it is the reason this is worth doing at all: an
+// operator glancing at the panel must never mistake a live account for a paper one. Alpaca
+// announces it in the hostname; IBKR only in the port (7497 TWS / 4002 Gateway are paper).
+const venue =
+  config.broker === 'alpaca'
+    ? /paper/i.test(config.alpaca.baseUrl)
+      ? 'paper'
+      : 'live'
+    : config.ibkr.port === 7497 || config.ibkr.port === 4002
+      ? 'paper'
+      : 'live';
+
+ui.setEnvironment({
+  broker: config.broker,
+  venue,
+  provider: config.ai.provider,
+  model: config.ai.model,
+});
 
 const trader = new Trader();
 const concierge = new ConciergeAgent(msg => trader.wake(msg));
@@ -25,6 +48,9 @@ const scheduler = new FeatureScheduler({
     wakeTrader: () => trader.wake(),
     alertUser: (msg) => concierge.pushAlert(msg),
   }),
+  // The tick's features are already computed for the detectors; the panel is a second reader of
+  // the same snapshot, which is why the live dashboard costs no broker calls at all.
+  onTick: (data) => ui.setTick(data),
 });
 
 scheduler.start();

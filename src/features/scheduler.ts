@@ -27,7 +27,7 @@ import type { Policy } from '../policy/types';
 import { getState, resetDailyState, updateState } from '../state/state';
 import { reconcileFills } from '../review/reconcile';
 import { publishReviewReady } from '../review/reviewReady';
-import { collectAndCompute } from './compute';
+import { collectAndCompute, type TickData } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, releaseAllLatches, type Detector, type TriggerEvent } from './eventBus';
 
@@ -48,6 +48,15 @@ export interface SchedulerOptions {
   detectors?: Detector[];
   /** Re-read on every tick, so a hot-reloaded policy changes the cadence live. */
   policy?: () => Policy;
+  /**
+   * Observer for the tick's computed features, injected the same way `route` is — so this file
+   * still has no opinion about who is watching.
+   *
+   * It exists because a full `TickData` was already being built once a minute and then
+   * discarded, and the terminal dashboard needs exactly that and nothing more. Read-only by
+   * contract: an observer that mutates `data` is corrupting what the detectors just judged.
+   */
+  onTick?: (data: TickData) => void;
 }
 
 /**
@@ -137,6 +146,7 @@ export class FeatureScheduler {
   private readonly detectors: Detector[];
   private readonly route: EventRouter;
   private readonly policyOf: () => Policy;
+  private readonly onTick?: (data: TickData) => void;
   private lastReconcileAt = 0;
   private lastSession: MarketSession | null = null;
 
@@ -144,6 +154,7 @@ export class FeatureScheduler {
     this.route = opts.route;
     this.detectors = opts.detectors ?? DETECTORS;
     this.policyOf = opts.policy ?? getPolicy;
+    this.onTick = opts.onTick;
   }
 
   start(): void {
@@ -174,6 +185,18 @@ export class FeatureScheduler {
     const data = await collectAndCompute(policy);
     const events = publishTick(this.detectors, data, policy);
     if (events.length > 0) this.route(events);
+
+    // Observers run after routing and inside their own guard. A TICK NEVER THROWS OUT (see the
+    // file header), and a dashboard formatting bug must not be able to stop the trading loop —
+    // so this is a `try` around a display, not around anything the system depends on.
+    if (this.onTick) {
+      try {
+        this.onTick(data);
+      } catch (err: any) {
+        logger.warn(`[Scheduler] onTick observer failed: ${err?.message ?? err}`);
+      }
+    }
+
     // After routing, never before: reconciliation feeds review and must not delay a
     // critical event by the length of a broker call. `reconcileFills` swallows its own
     // errors, so this cannot cost the tick either.

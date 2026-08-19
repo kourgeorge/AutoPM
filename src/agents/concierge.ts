@@ -162,7 +162,10 @@ export class ConciergeAgent {
     while (this.queue.length > 0) {
       const msg = this.queue.shift()!;
       this.busy = true;
-      ui.setStatus('concierge thinking…');
+      // Its OWN lane. This used to be `ui.setStatus`, which the trader also wrote to — so
+      // answering a question erased the trader's sleep countdown, and 'ready' below claimed the
+      // trader was idle when it was mid-cycle.
+      ui.setConciergeActivity({ state: 'thinking' });
       try {
         this.history.push({ role: 'user', content: [{ type: 'text', text: msg }] });
         await this.runTurn();
@@ -171,7 +174,7 @@ export class ConciergeAgent {
         ui.reply('Sorry, I ran into an error. Please try again.');
       } finally {
         this.busy = false;
-        ui.setStatus('ready');
+        ui.setConciergeActivity({ state: 'idle' });
       }
     }
   }

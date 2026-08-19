@@ -230,10 +230,23 @@ export function computeSignals(bars: Bar[], policy: Policy): SignalScore[] {
   ];
 }
 
+export interface SignalTally {
+  bullish: number;
+  bearish: number;
+  neutral: number;
+  total: number;
+}
+
 /**
- * One-line summary: "3/5 bullish, 1 neutral, 1 bearish"
+ * How many signals lean which way.
+ *
+ * Exported on purpose. The dead band that decides "bullish" is a judgement, not an
+ * arithmetic fact, and it used to be inlined in `signalSummary` alone — so the terminal
+ * dashboard, which wants the same verdict in three columns rather than a sentence, would have
+ * had to restate `> 0.1` and become a second, silently divergent truth about the same five
+ * numbers. One owner, two renderings.
  */
-export function signalSummary(signals: SignalScore[]): string {
+export function signalTally(signals: SignalScore[]): SignalTally {
   let bullish = 0;
   let bearish = 0;
   let neutral = 0;
@@ -243,6 +256,15 @@ export function signalSummary(signals: SignalScore[]): string {
     else if (s.score < -0.1) bearish++;
     else neutral++;
   }
+
+  return { bullish, bearish, neutral, total: signals.length };
+}
+
+/**
+ * One-line summary: "3/5 bullish, 1 neutral, 1 bearish"
+ */
+export function signalSummary(signals: SignalScore[]): string {
+  const { bullish, bearish, neutral } = signalTally(signals);
 
   const parts: string[] = [];
   if (bullish > 0) parts.push(`${bullish}/${signals.length} bullish`);
