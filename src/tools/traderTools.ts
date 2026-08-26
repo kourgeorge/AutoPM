@@ -21,6 +21,8 @@ import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
 import { isPresent } from '../collect/types';
 import { atr } from '../strategy/indicators';
 import { computeSignals, signalSummary } from '../strategy/signals';
+import { getLastTick } from '../features/lastTick';
+import { watchlistScan } from '../features/watchlistScan';
 import {
   getPositionSnapshot,
   getState,
@@ -197,6 +199,15 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_watchlist_scan',
+    description: 'Read the WHOLE watchlist as one table: every non-held watchlist symbol with its five signal scores, tally, ATR, RSI, both EMAs, price and price staleness. Use this INSTEAD of calling get_signals once per symbol when you are scanning for a candidate — it is one call rather than eighteen, and the numbers are identical because both come from the same deterministic computation. These are the exact figures the machine judged on its last 60-second pass, not a fresh fetch: tickAt and ageMs say when, and a caveat appears if the table is older than a few tick intervals. Held names are NOT rows — they are listed in heldExcluded, so their absence means held, not off the watchlist. A symbol the machine declined to score (too little bar history) is still a row, with notScored naming why, so silence never stands in for missing data. priceStale is about the PRICE only; signals come from bars, so a row can have no price and full scores. Rows are SORTED by bullish count, which is an ordering and not a judgement of quality. Before the first tick of a process there is no table at all and this returns an error rather than an empty list. For a symbol that is not on the watchlist, or for a fresh reading right now, use get_signals(symbol).',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: 'get_correlation',
     description: 'Check how correlated a candidate entry is with current holdings. Returns the max pairwise correlation and a sizing recommendation. Call this BEFORE execute_entry to assess diversification.',
     input_schema: {
@@ -271,6 +282,7 @@ export async function executeTraderTool(
       case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'get_position_size':   return await toolGetPositionSize(input);
       case 'get_signals':         return await toolGetSignals(input);
+      case 'get_watchlist_scan':  return toolGetWatchlistScan();
       case 'get_correlation':     return await toolGetCorrelation(input);
       case 'get_exposure':        return await toolGetExposure();
       case 'get_calendar':        return await toolGetCalendar(input);
@@ -440,6 +452,24 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
     signals,
     summary: signalSummary(signals),
   });
+}
+
+/**
+ * The watchlist as one table, read out of the tick that already computed it.
+ *
+ * Sync, and reaches nothing: no broker call, no network, no promise. The whole point is
+ * that the numbers were computed a few seconds ago by `collectAndCompute` and then thrown
+ * away. `get_signals` had to re-fetch bars per symbol to rebuild them, so a discretionary
+ * pass over eighteen names spent eighteen of thirty rounds rebuilding a table that had been
+ * in memory — which is why POLICY.md's "assess watchlist candidates" step was unfollowable
+ * as written, and an unfollowable instruction is a fabrication vector.
+ *
+ * Thin on purpose. The projection lives in `features/watchlistScan.ts`, beside the tick it
+ * reads; nothing here rounds, sorts or decides. `get_signals` stays for the two things this
+ * cannot do: a symbol that is not on the watchlist, and a reading taken right now.
+ */
+function toolGetWatchlistScan(): string {
+  return JSON.stringify(watchlistScan(getLastTick(), getPolicy().triggers.tickIntervalMs));
 }
 
 async function toolGetCorrelation(input: Record<string, unknown>): Promise<string> {
