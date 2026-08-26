@@ -15,6 +15,24 @@ export interface Observation<T> {
   asOf: string;
   fetchedAt: string;
   stale: boolean;
+  /**
+   * Did trading confirm this number, or is it only what somebody was asking?
+   *
+   * The third provenance axis, and PRICES ONLY — nothing else crossing this layer has a
+   * tape to be confirmed against, so every other observation leaves it undefined.
+   *
+   * True for a print, and for a book midpoint that trading corroborates (see
+   * `priceSource.ts`). False for a midpoint nothing corroborates: a book so wide that no
+   * one would deal at the middle of it, or one floating clear of the day's traded range.
+   * Such a price is still the best number available and is still reported — it just may
+   * not set a record, because a high-water mark is permanent and a quote is not.
+   *
+   * UNDEFINED MEANS "no reason to doubt it", not "unconfirmed". Only a source that
+   * actually distinguishes the two cases sets the field, so a reader must treat absence
+   * as permission — otherwise adding this field would have silently frozen every baseline
+   * fed by a source that does not report a book at all.
+   */
+  tradeConfirmed?: boolean;
 }
 
 export interface Missing {
