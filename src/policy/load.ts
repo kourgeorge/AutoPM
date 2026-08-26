@@ -73,6 +73,12 @@ function block(root: Record<string, unknown>, name: string, errs: Errors): Recor
   return v;
 }
 
+/**
+ * Fallback for `triggers.confirmTicks` when the key is absent. Two readings, i.e. one tick
+ * of extra latency at the default cadence, which is the cheapest confirmation that exists.
+ */
+const DEFAULT_CONFIRM_TICKS = 2;
+
 function num(
   src: Record<string, unknown>,
   where: string,
@@ -209,6 +215,15 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     trailingDrawdownPct: num(t, 'triggers', 'trailingDrawdownPct', errs, { min: 0 }),
     positionSurgePct: num(t, 'triggers', 'positionSurgePct', errs, { min: 0 }),
     hysteresisPct: num(t, 'triggers', 'hysteresisPct', errs, { min: 0 }),
+    // Optional, and defaulting to CONFIRMATION rather than to the old behaviour. Every
+    // policy.yaml written before gate 0 existed is missing this key, and the first load
+    // THROWS on a validation error, so requiring it would take down every daemon that
+    // upgraded. The fallback is 2 and not 1 because 1 *is* the fire-on-one-reading bug the
+    // gate exists to remove: an operator who has never heard of the field should inherit the
+    // protection, not the thing it protects against.
+    confirmTicks: t.confirmTicks === undefined
+      ? DEFAULT_CONFIRM_TICKS
+      : num(t, 'triggers', 'confirmTicks', errs, { int: true, min: 1, max: 10 }),
     defaultCooldownMs: num(t, 'triggers', 'defaultCooldownMs', errs, { int: true, min: 0 }),
     criticalCooldownMs: num(t, 'triggers', 'criticalCooldownMs', errs, { int: true, min: 0 }),
     heartbeatWithPositionsMs: num(t, 'triggers', 'heartbeatWithPositionsMs', errs, { int: true, min: 0 }),

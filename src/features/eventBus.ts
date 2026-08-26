@@ -6,8 +6,13 @@
  * which is a wake storm, not a signal. The bus turns a sequence of level reports into
  * at most one event per crossing, and escalates the ones nobody answered.
  *
- * Four gates, applied in this order per `cooldownKey`:
+ * Five gates, applied in this order per `cooldownKey`:
  *
+ *  0. CONFIRM    — a level must be seen breached `confirmTicks` times, without recrossing
+ *                  the band in between, before it counts. One reading is not a condition:
+ *                  every price-derived level here comes from a single quote, and a single
+ *                  bad quote looks exactly like the event. Default 1 — a no-op unless a
+ *                  detector asks for confirmation.
  *  1. EDGE       — fire only on a `false -> true` arming transition. Arming lives in
  *                  `state.armedTriggers`, so a restart does not re-announce everything
  *                  the previous process already announced.
@@ -17,6 +22,10 @@
  *  4. ESCALATION — a `critical` event still breaching and still unacked re-fires at
  *                  `criticalCooldownMs` with `wakeCount++`. This is what stands in for
  *                  auto-execution: ignore a stop breach and the wakes get louder.
+ *
+ * A crossing that recovers past the band publishes `condition_resolved`. Re-arming is
+ * otherwise SILENT — the event the trader was woken for simply disappears from the
+ * registry — so the all-clear is the one edge in this file that nobody was ever told about.
  *
  * THE BUS ROUTES, IT NEVER DECIDES. `severity` says who is told and how loudly;
  * `suggestedAction` is a suggestion. Nothing here places an order.
@@ -38,6 +47,7 @@ export type EventKind =
   | 'entry_signal'
   | 'data_stale'
   | 'heartbeat'
+  | 'condition_resolved'
   | 'review_ready'
   | 'portfolio_review'
   | 'policy_changed'
@@ -117,6 +127,20 @@ export interface DetectorHit {
    * else knows which policy field paces them.
    */
   cooldownMs?: number;
+  /**
+   * Breached readings required before this hit fires, reset by a recross. Default 1.
+   *
+   * A level computed from ONE reading can be wrong in a way that is indistinguishable from
+   * the event itself. Measured: an order book with one side emptied reports the missing
+   * side as `0`, so a mid of `(bid + 0) / 2` is half the real price — below any stop, and
+   * stamped seconds after the closing print, so the freshness guard passes it. Asking the
+   * breach to survive into the next tick costs one tick of latency and rejects the whole
+   * class of one-reading artefacts, which no threshold can distinguish from a real move.
+   *
+   * Only for levels derived from a live reading. A condition computed over a window of bars
+   * is already confirmed by its own history; making it wait twice is latency for nothing.
+   */
+  confirmTicks?: number;
 }
 
 export interface Detector {
@@ -176,6 +200,18 @@ const live = new Map<string, TriggerEvent>();
 
 const MAX_PENDING = 100;
 
+/**
+ * cooldownKey -> consecutive breached ticks seen, for gate 0.
+ *
+ * Deliberately NOT persisted, and deliberately not part of the latch. Every entry is
+ * deleted the moment its level stops breaching, so the map only ever holds what is
+ * breaching right now — persisting it would put a wholly discardable field on the
+ * write-throttled state path to save one tick of latency after a restart. A restart
+ * therefore starts the count over, which DELAYS a real breach rather than announcing an
+ * unconfirmed one: the safe direction for a gate whose job is rejecting bad readings.
+ */
+const breachStreak = new Map<string, number>();
+
 export function getPendingEvents(): TriggerEvent[] {
   return [...pending.values()];
 }
@@ -203,6 +239,7 @@ export function ackEvent(id: string, disposition?: AckDisposition, note?: string
 export function resetEventRegistry(): void {
   pending.clear();
   live.clear();
+  breachStreak.clear();
 }
 
 // ── The gates ─────────────────────────────────────────────────────────────────
@@ -288,6 +325,55 @@ function makeEvent(
   };
 }
 
+/**
+ * The all-clear for a crossing that recovered past its band.
+ *
+ * `info`, not `warn`: this has to reach the next cycle's context and wake nobody, which is
+ * exactly where `info` routes. An all-clear that interrupted the trader would cost more
+ * attention than the breach did, and one that alerted the operator would announce the end
+ * of something they were never told had started (`urgent` does not alert them).
+ *
+ * Carries its OWN `cooldownKey` so `enqueue` cannot file it under the original's key in
+ * `live` — that would hand the escalation gate the all-clear's `wakeCount` of 1 the next
+ * time the level breached, resetting a ladder that had climbed to 3.
+ *
+ * The numbers live in `evidence`, not the headline: a boolean crossing's level is 1-or-0,
+ * and printing that as a measurement reads like a price.
+ */
+function resolveEvent(
+  cleared: TriggerEvent,
+  hit: DetectorHit,
+  firedAt: string,
+  policyVersion: number,
+): TriggerEvent {
+  const answered = cleared.ackedAt ? `answered ${cleared.ackDisposition}` : 'never answered';
+  return makeEvent(
+    'condition_resolved',
+    {
+      symbol: cleared.symbol,
+      cooldownKey: `resolved:${cleared.cooldownKey}`,
+      severity: 'info',
+      headline:
+        `${cleared.symbol ?? 'portfolio'} ${cleared.kind} cleared — back past the threshold `
+        + `by the full band after ${cleared.wakeCount} report(s), ${answered}`,
+      evidence: {
+        resolvedKind: cleared.kind,
+        resolvedEventId: cleared.id,
+        firstFiredAt: cleared.firedAt,
+        wakeCount: cleared.wakeCount,
+        ackDisposition: cleared.ackDisposition ?? 'none',
+        level: hit.crossing?.level ?? 'n/a',
+        threshold: hit.crossing?.threshold ?? 'n/a',
+        originalHeadline: cleared.headline,
+      },
+      suggestedAction: null,
+    },
+    firedAt,
+    policyVersion,
+    1,
+  );
+}
+
 function enqueue(event: TriggerEvent): void {
   // `info` is a level, not an incident: the newest reading of a key says everything the
   // older ones did. Left to accumulate, an hourly overnight heartbeat puts 16 near-identical
@@ -369,11 +455,42 @@ export function processHits(
     // A crossing-bearing hit that is not breached is a re-arm opportunity, never an event.
     if (!breached(hit.crossing)) {
       if (recrossed(hit.crossing)) {
+        // The confirmation counter resets HERE and not on merely-not-breached, because a
+        // level that dips back over the line has not gone away. Hysteresis already made
+        // exactly that call for arming, and gate 0 has to use the same boundary: a price
+        // straddling its threshold every other tick would otherwise never reach two
+        // consecutive breached readings, so a position genuinely sitting on its stop would
+        // go unreported forever. It still rejects a single bad reading, because a bad
+        // reading is followed by a return to the real price, which is far past the band.
+        breachStreak.delete(key);
         rearm(key, tick);
+        // `live` holds only keys that actually FIRED, so its presence is the whole dedup:
+        // this deletion is what makes the next recrossed tick find nothing to announce.
+        const cleared = live.get(key);
         live.delete(key);
+        if (cleared) {
+          const event = resolveEvent(cleared, hit, firedAt, policy.version);
+          enqueue(event);
+          fired.push(event);
+        }
       }
       continue;
     }
+
+    // Gate 0: the breach must be seen `confirmTicks` times before it counts, and the count
+    // survives until the level recrosses the band (see the reset above). Counted before the
+    // arming check on purpose — an unconfirmed breach must leave no trace, no cooldown and
+    // no latch, so the tick it is finally confirmed on is a clean FIRST fire rather than an
+    // escalation of something that never fired.
+    //
+    // Readings, not elapsed time: a detector that skips a subject — a stale price, a
+    // position that vanished — reports nothing for it, so a flickering feed could otherwise
+    // never confirm anything. Two readings that both say breached are two confirmations
+    // whether they arrived 60 seconds or 20 minutes apart.
+    const confirmTicks = Math.max(1, Math.trunc(hit.confirmTicks ?? 1));
+    const streak = (breachStreak.get(key) ?? 0) + 1;
+    breachStreak.set(key, streak);
+    if (streak < confirmTicks) continue;
 
     if (isArmed(key, tick)) {
       // Gate 3: cooldown applies even to a freshly re-armed key.

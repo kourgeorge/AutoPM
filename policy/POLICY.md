@@ -7,6 +7,8 @@ MACHINE EVENTS
 - The MACHINE EVENTS block in the cycle context lists what the machine noticed since you last ran, with the numbers behind it and a suggested action.
 - Deal with CRITICAL and URGENT events before anything else. WARN events are context.
 - get_pending_events() for the evidence behind a headline.
+- A price-derived event has been seen breached on at least two separate readings before it reaches you. So a headline is never one quote's opinion — but it does arrive one tick later than the crossing itself, and the level may already have moved further.
+- A `condition_resolved` event says an earlier event's level has come back past its threshold by a full band — that the stop breach or drawdown you were told about is over. It carries the original headline and how many times you were told, and it wakes nobody. Treat it as the closing half of a report you already have: it is the only thing that will ever tell you a condition ended, so absence of one means the condition is still live.
 - When you act on an event, or decide to ignore it, call ack_event(id, disposition) — 'acting', 'acknowledged', or 'ignoring'. An unacked event re-fires with a rising wake count and escalates to the operator, so silence is not neutral.
 
 TOOL DISCIPLINE

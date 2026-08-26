@@ -487,8 +487,14 @@ function buildMachineEvents(): string {
 
   // `info` is context, not an incident — it accumulates as a count so an overnight of
   // heartbeats cannot push a live warn off the end of the list.
+  //
+  // `condition_resolved` is the exception, and it is why the exception exists: an all-clear
+  // is deliberately `info` so it wakes nobody, but a filtered all-clear is no all-clear at
+  // all — the model would be told about every breach and never about a recovery. Being
+  // `info` still sorts it last, so under MAX_EVENT_LINES pressure the calm news is what
+  // gets dropped first, which is the right order.
   const shown = events
-    .filter(e => e.severity !== 'info')
+    .filter(e => e.severity !== 'info' || e.kind === 'condition_resolved')
     .sort((a, b) =>
       SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
       a.firedAt.localeCompare(b.firedAt),

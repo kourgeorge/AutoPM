@@ -167,6 +167,21 @@ function tick(world: World, at: Date, policy: Policy = getPolicy()): TriggerEven
   return tickBoth(world, at, policy).fired;
 }
 
+/**
+ * The confirming reading gate 0 requires, thrown away.
+ *
+ * `triggers.confirmTicks` means a price-derived level fires on its SECOND breached reading,
+ * so a scenario that shows the world once and expects an event is asserting the old spec.
+ * This presents the same world one tick earlier and discards the result: by construction it
+ * fires none of the confirmed events, and the one thing it can fire — the crossing-less
+ * heartbeat — is asserted by nothing that calls this.
+ *
+ * Scenarios that are ABOUT the gate spell the two readings out instead of calling this.
+ */
+function warm(world: World, when: Date, policy: Policy = getPolicy()): void {
+  tick(world, new Date(when.getTime() - MIN), policy);
+}
+
 function position(symbol: string, qty: number, avgCost: number): Position {
   return { symbol, qty, avgCost };
 }
@@ -283,15 +298,15 @@ function slowBleed(): void {
   checkCount(all, 'stop_breach', 0);
   checkCount(all, 'heartbeat', 2);
 
-  // Bounded rather than exact: k=5 is -1.984% (must not fire), k=6 is -2.376%, k=7 is
-  // -2.767%. Requiring the fired value to sit in (-2.5, -2.0] pins it to k=6 without
-  // hard-coding a float. Firing early means the threshold sign is wrong; firing late
-  // means an edge was missed.
+  // Bounded rather than exact: k=6 is -2.376% (the crossing), k=7 is -2.767% (the reading
+  // that CONFIRMS it), k=8 is -3.155%. Requiring the fired value to sit in (-3.0, -2.5]
+  // pins it to k=7 without hard-coding a float. Firing at k=6 means gate 0 is not counting;
+  // firing after k=7 means an edge was missed.
   const drop = all.find((e) => e.kind === 'position_drop');
   const firedAtPct = drop?.evidence.pnlPct as number | undefined;
   check(
-    'position_drop fired on the first tick past -2.0%',
-    firedAtPct !== undefined && firedAtPct <= -2.0 && firedAtPct > -2.5,
+    'position_drop fires on the reading that confirms the crossing',
+    firedAtPct !== undefined && firedAtPct <= -2.5 && firedAtPct > -3.0,
     `pnlPct ${firedAtPct}`,
   );
 }
@@ -322,9 +337,15 @@ function recoverThenRebreach(): void {
   const hold = [position('AAPL', 10, 100)];
   const all: TriggerEvent[] = [];
 
-  all.push(...tick({ positions: hold, prices: { AAPL: 97.9 } }, at(0)));   // fire
-  all.push(...tick({ positions: hold, prices: { AAPL: 98.6 } }, at(1)));   // -1.4% -> re-arm
-  const inCooldown = tick({ positions: hold, prices: { AAPL: 97.9 } }, at(2)); // armed, quiet
+  // Two readings per breach: gate 0 confirms on the second, so every fire needs a pair.
+  all.push(...tick({ positions: hold, prices: { AAPL: 97.9 } }, at(0)));   // -2.1%, confirming
+  all.push(...tick({ positions: hold, prices: { AAPL: 97.9 } }, at(1)));   // fire
+  all.push(...tick({ positions: hold, prices: { AAPL: 98.6 } }, at(2)));   // -1.4% -> re-arm
+  const inCooldown = [
+    ...tick({ positions: hold, prices: { AAPL: 97.9 } }, at(3)),
+    // Armed AND confirmed, and still quiet — which is the whole point of the scenario.
+    ...tick({ positions: hold, prices: { AAPL: 97.9 } }, at(4)),
+  ];
   all.push(...inCooldown);
   all.push(...tick({ positions: hold, prices: { AAPL: 97.9 } }, at(20)));  // cooldown done
 
@@ -347,14 +368,22 @@ function staleFeed(): void {
   const t2 = tick({ positions: hold, prices: { AAPL: null } }, at(1));
   const t3 = tick({ positions: hold, prices: { AAPL: null } }, at(2));
   const t4 = tick({ positions: hold, prices: { AAPL: 95 } }, at(3));
+  const t5 = tick({ positions: hold, prices: { AAPL: 95 } }, at(4));
 
   const down = [...t2, ...t3];
   check('no stop_breach while the feed is dead', countOf(down, 'stop_breach') === 0);
   checkCount(down, 'data_stale', 1);
+  // The FIRST reading off a recovered feed is the one gate 0 exists to distrust: a feed that
+  // just came back is exactly where a bad quote comes from.
   check(
-    'stop_breach fires as soon as the feed recovers',
-    countOf(t4, 'stop_breach') === 1,
+    'the first reading off a recovered feed does not fire on its own',
+    countOf(t4, 'stop_breach') === 0,
     `got ${countOf(t4, 'stop_breach')}`,
+  );
+  check(
+    'stop_breach fires as soon as the recovered feed confirms it',
+    countOf(t5, 'stop_breach') === 1,
+    `got ${countOf(t5, 'stop_breach')}`,
   );
   check('a healthy tick fires no data_stale', countOf(t1, 'data_stale') === 0);
 }
@@ -372,8 +401,9 @@ function newSessionHigh(): void {
   check('sessionHigh advanced to 110', stored?.sessionHigh === 110, `got ${stored?.sessionHigh}`);
   check('sessionLow held at entry', stored?.sessionLow === 100, `got ${stored?.sessionLow}`);
 
-  const t2 = tick({ positions: hold, prices: { AAPL: 107.5 } }, at(1));
-  const dd = t2.find((e) => e.kind === 'trailing_drawdown');
+  tick({ positions: hold, prices: { AAPL: 107.5 } }, at(1));
+  const t3 = tick({ positions: hold, prices: { AAPL: 107.5 } }, at(2));
+  const dd = t3.find((e) => e.kind === 'trailing_drawdown');
   check('trailing_drawdown fires off the session high', dd !== undefined);
   check('measured from 110, not entry', dd?.evidence.sessionHigh === 110, `got ${dd?.evidence.sessionHigh}`);
   check(
@@ -391,6 +421,7 @@ function newSessionHigh(): void {
  */
 function restart(): void {
   const hold = [position('AAPL', 10, 100)];
+  warm({ positions: hold, prices: { AAPL: 97.5 } }, at(0));
   const first = tick({ positions: hold, prices: { AAPL: 97.5 } }, at(0));
   check('fired before the restart', countOf(first, 'position_drop') === 1);
 
@@ -421,6 +452,7 @@ function policyEdit(): void {
   const hold = [position('AAPL', 10, 100)];
   const live = getPolicy();
 
+  warm({ positions: hold, prices: { AAPL: 97.5 } }, at(0), live);
   const runA = tick({ positions: hold, prices: { AAPL: 97.5 } }, at(0), live);
   checkCount(runA, 'position_drop', 1);
   check(
@@ -442,6 +474,7 @@ function policyEdit(): void {
   useEphemeralState({ startOfDayEquity: ACCOUNT.equity });
   resetEventRegistry();
 
+  warm({ positions: hold, prices: { AAPL: 97.5 } }, at(0), edited.policy);
   const runB = tick({ positions: hold, prices: { AAPL: 97.5 } }, at(0), edited.policy);
   checkCount(runB, 'position_drop', 0);
 
@@ -485,6 +518,7 @@ function escalation(): void {
   const hold = [position('AAPL', 10, 100)];
   const world = { positions: hold, prices: { AAPL: 95 } };
 
+  warm(world, at(0));
   const t0 = tick(world, at(0));
   const first = t0.find((e) => e.kind === 'stop_breach');
   check('first breach fires at wakeCount 1', first?.wakeCount === 1, `got ${first?.wakeCount}`);
@@ -669,6 +703,7 @@ function liveRouting(): void {
     prices: { AAPL: 95, MSFT: 106 },
   };
 
+  warm(busy, at(0));
   const { snapshot, fired } = tickBoth(busy, at(0));
 
   // The world is asserted before the router, so a detector change that silently drains the
@@ -700,8 +735,13 @@ function liveRouting(): void {
   // thing left is the `info` heartbeat. `info` is context — it must reach the next cycle's
   // context block and NOBODY's sleep, or step 3's whole point is undone one layer up.
   const quiet = tickBoth({ positions: [position('AAPL', 10, 100)], prices: { AAPL: 100 } }, atNight(0));
-  check('only the info heartbeat is left', quiet.fired.length === 1, `got ${quiet.fired.length}`);
-  check('and it is info', quiet.fired[0]?.severity === 'info', `got ${quiet.fired[0]?.severity}`);
+  // A count would be the wrong assertion here: the price coming back to 100 also clears
+  // every level it breached above, so the quiet tick carries the beat AND the all-clears.
+  // What matters is that none of it is addressed to anyone.
+  check('nothing waking or alerting is left', quiet.fired.length > 0
+    && quiet.fired.every((e) => e.severity === 'info'),
+    quiet.fired.map((e) => `${e.kind}/${e.severity}`).join(', ') || '(none)');
+  check('the beat is still among them', countOf(quiet.fired, 'heartbeat') === 1);
 
   const night = routerSpy();
   night.route(quiet.fired);
@@ -718,6 +758,7 @@ function liveRouting(): void {
 function escalationText(): void {
   const world = { positions: [position('AAPL', 10, 100)], prices: { AAPL: 95 } };
 
+  warm(world, at(0));
   tick(world, at(0));   // wakeCount 1
   tick(world, at(6));   // 2 — past criticalCooldownMs, still unacked
   const third = tickBoth(world, at(12));
@@ -734,6 +775,7 @@ function escalationText(): void {
   // The first report must NOT carry the escalation wording, or "unactioned" becomes noise
   // that says nothing about whether anyone is handling it.
   resetEventRegistry();
+  warm(world, at(30));
   const first = tickBoth(world, at(30));
   const plainSpy = routerSpy();
   plainSpy.route(first.fired);
@@ -1110,6 +1152,104 @@ function portfolioReviewLoop(): void {
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 
+/**
+ * 20. Confirmation and the all-clear — the two states the bus used to have no words for.
+ *
+ *     Part A is the emptied-book bug in miniature. After the close an IEX book loses one
+ *     side and reports it as `0`, so the mid is HALF the real price: below any stop, and
+ *     stamped seconds after the closing print so it passes every freshness check. One
+ *     reading is not a condition, and a level that appears for a single tick and then
+ *     returns must leave nothing behind — no event, and no cooldown either, or the next
+ *     genuine breach arrives to find itself already in a quiet period it never earned.
+ *
+ *     Part B is the opposite omission. Recrossing the band re-armed the key SILENTLY, so
+ *     the operator and the model were told a stop was breached and then never told it
+ *     wasn't. The all-clear is `info` on purpose — a recovery must not wake anyone — which
+ *     is precisely why it needs asserting: an event that routes to nobody is invisible
+ *     until you count it.
+ */
+function confirmAndResolve(): void {
+  const hold = [position('AAPL', 10, 100)];
+  const level = (world: { positions: Position[]; prices: Record<string, number | null> }, k: number) =>
+    tick(world, at(k));
+
+  // ── Part A: one bad reading, swallowed ──────────────────────────────────────
+  const spike = [
+    ...level({ positions: hold, prices: { AAPL: 100 } }, 0),
+    // 50.00 — the halved mid. Under the 99 stop, -50% from entry, 50% off the session high:
+    // it breaches all three price levels at once, which is what makes it worth swallowing.
+    ...level({ positions: hold, prices: { AAPL: 50 } }, 1),
+    ...level({ positions: hold, prices: { AAPL: 100 } }, 2),
+  ];
+
+  checkCount(spike, 'stop_breach', 0);
+  checkCount(spike, 'position_drop', 0);
+  checkCount(spike, 'trailing_drawdown', 0);
+  check(
+    'a swallowed breach announces no all-clear either',
+    countOf(spike, 'condition_resolved') === 0,
+    `got ${countOf(spike, 'condition_resolved')}`,
+  );
+
+  // The trace assertion. If an unconfirmed breach wrote a cooldown, the real breach in part
+  // B would be gated by a quiet period started by a quote that never should have counted.
+  const cooldowns = getState().eventCooldowns;
+  check(
+    'and it leaves no cooldown behind',
+    ['stop_breach:AAPL', 'position_drop:AAPL', 'trailing_drawdown:AAPL']
+      .every((key) => !(key in cooldowns)),
+    JSON.stringify(cooldowns),
+  );
+
+  // ── Part B: a real breach, then the recovery ────────────────────────────────
+  const confirming = level({ positions: hold, prices: { AAPL: 95 } }, 10);
+  const firing = level({ positions: hold, prices: { AAPL: 95 } }, 11);
+  const recovery = level({ positions: hold, prices: { AAPL: 100 } }, 12);
+
+  check(
+    'the first reading of a real breach is still only a reading',
+    countOf(confirming, 'stop_breach') === 0,
+    `got ${countOf(confirming, 'stop_breach')}`,
+  );
+  check('the second one fires', countOf(firing, 'stop_breach') === 1);
+
+  // Every kind that fired must clear, and clear exactly once — the same recross that
+  // re-arms the key is the only chance it gets to say so.
+  // Everything except the crossing-less beat: a heartbeat has no threshold, so there is
+  // nothing for it to come back past and nothing to clear.
+  const raised = new Set(firing.map((e) => e.kind).filter((k) => k !== 'heartbeat'));
+  const cleared = recovery.filter((e) => e.kind === 'condition_resolved');
+  const clearedKinds = cleared.map((e) => e.evidence.resolvedKind as string);
+  check(
+    'every reported condition clears when the price comes back',
+    raised.size > 0 && [...raised].every((k) => clearedKinds.includes(k)),
+    `raised ${[...raised].join(', ')} / cleared ${clearedKinds.join(', ')}`,
+  );
+  check(
+    'and none of them clears twice',
+    cleared.length === clearedKinds.length && new Set(clearedKinds).size === clearedKinds.length,
+    clearedKinds.join(', '),
+  );
+  check(
+    'the all-clear names the condition it is about',
+    cleared.some((e) => e.headline.includes('stop_breach cleared')),
+    cleared.map((e) => e.headline).join(' | ') || '(none)',
+  );
+
+  // A recovery is not news that interrupts anyone. Asserted through the real router rather
+  // than by reading the severity, because the severity is only meaningful via the routing.
+  check('an all-clear is info', cleared.every((e) => e.severity === 'info'));
+  const spy = routerSpy();
+  spy.route(cleared);
+  check('so it wakes nobody', spy.wakes.length === 0, `got ${spy.wakes.length}`);
+  check('and alerts nobody', spy.alerts.length === 0, `got ${spy.alerts.length}`);
+
+  // Still recovered on the next tick: the all-clear is an edge, not a state, so a second
+  // quiet reading must say nothing at all.
+  const stillFine = level({ positions: hold, prices: { AAPL: 100 } }, 13);
+  checkCount(stillFine, 'condition_resolved', 0);
+}
+
 async function main(): Promise<void> {
   // Loaded once, before any state is faked — a failure here is a broken policy file,
   // not a failed scenario.
@@ -1165,6 +1305,7 @@ async function main(): Promise<void> {
       MSFT: snapshotSeed('MSFT', { entryPrice: 120 }, OPENED),   // no stop on purpose
     },
   }, portfolioReviewLoop);
+  await scenario('20. Confirmation and the all-clear — one reading is not a condition', stopped(99), confirmAndResolve);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {
