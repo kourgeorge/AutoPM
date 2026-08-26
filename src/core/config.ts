@@ -81,7 +81,7 @@ export const config = {
   ai: {
     provider: process.env.AI_PROVIDER ?? 'anthropic',
     model: process.env.AI_MODEL ?? 'claude-sonnet-4-6',
-    apiKey: requireEnv('AI_API_KEY'),
+    apiKey: process.env.AI_API_KEY ?? (process.env.AI_PROVIDER?.toLowerCase() === 'ollama' ? 'ollama' : requireEnv('AI_API_KEY')),
     // Any OpenAI-compatible endpoint. Optional for the providers with a known URL
     // (openai, groq, ollama, cohere, together) and REQUIRED for anything else — an
     // unrecognised provider without this throws rather than guessing a domain to send the

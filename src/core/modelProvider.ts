@@ -214,6 +214,40 @@ export class OpenAICompatibleProvider implements ModelProvider {
       },
     }));
 
+    // OpenAI's legacy models accept `max_tokens`; everything newer (o-series, gpt-4.1+,
+    // gpt-4.5+, gpt-5+, …) requires `max_completion_tokens`. Third-party OpenAI-compatible
+    // endpoints (Groq, Ollama, Together, LiteLLM, etc.) use `max_tokens`.
+    // Strategy: use `max_completion_tokens` for models that are known to require it
+    // (o-series and any gpt-N where N >= 4.1), and `max_tokens` for everything else.
+    // This is checked against the base URL so that a LiteLLM proxy forwarding to openai
+    // with model="gpt-5-nano" still sends the right param.
+    const isOpenAIEndpoint = this.baseUrl.includes('api.openai.com');
+    const isNewOpenAIModel = /^o\d|^gpt-(?!3\.5|4$|4-)(4\.[1-9]|[5-9])/.test(this.model);
+    const usesCompletionTokens = isOpenAIEndpoint && isNewOpenAIModel;
+    const tokenParam = usesCompletionTokens
+      ? { max_completion_tokens: maxTokens }
+      : { max_tokens: maxTokens };
+
+    // The gpt-5+ models reason by DEFAULT, and on /v1/chat/completions reasoning and function
+    // tools are mutually exclusive:
+    //
+    //   "Function tools with reasoning_effort are not supported for gpt-5.6-luna in
+    //    /v1/chat/completions. To use function tools, use /v1/responses or set
+    //    reasoning_effort to 'none'."
+    //
+    // Note what that means: SENDING NOTHING IS NOT NEUTRAL. Omitting the field leaves the
+    // model's own default effort in force, so the rejection arrives for a parameter this code
+    // never set. The only way to decline reasoning is to say `none` explicitly.
+    //
+    // Scoped to gpt-N because the o-series does not accept `none` at all — reasoning is not
+    // optional there, and o-series + tools on chat/completions is already accepted as-is.
+    // Scoped to a non-empty tool list because a tool-free call (the concierge's plain answers)
+    // is not in conflict, and should keep whatever thinking the model would do unbidden.
+    const isGptReasoningModel = isOpenAIEndpoint && /^gpt-[5-9]/.test(this.model);
+    const reasoningParam = isGptReasoningModel && openaiTools.length > 0
+      ? { reasoning_effort: 'none' }
+      : {};
+
     // Make the API request
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -225,8 +259,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
         model: this.model,
         messages: openaiMessages,
         tools: openaiTools,
-        max_tokens: maxTokens,
-        temperature: 0,
+        ...tokenParam,
+        ...reasoningParam,
+        // o-series and gpt-5+ models don't accept a temperature override — omit it
+        // entirely for those so the API uses its default. Legacy models get 0 for
+        // deterministic output.
+        ...(usesCompletionTokens ? {} : { temperature: 0 }),
       }),
     });
 
