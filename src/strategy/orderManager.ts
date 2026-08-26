@@ -13,7 +13,7 @@ import { sameSymbol } from '../core/symbols';
 import { getState } from '../state/state';
 import { SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
-import { getRegime } from '../macro/regime';
+import { getRegime, getCachedRegime } from '../macro/regime';
 import type { Regime } from '../macro/regime';
 import {
   hasEnoughBuyingPower,
@@ -139,7 +139,15 @@ export async function enterPosition(
  */
 async function applyRegimeSizing(qty: number): Promise<number> {
   try {
-    const regime = await getRegime();
+    // THE ORDER PATH NEVER WAITS ON THE NETWORK. A cold `getRegime()` can spend ~15s when
+    // FRED is slow — one attempt plus a retry, six series in parallel — and every second of
+    // it is drift on a market order that has already cleared every guard. Measured
+    // 2026-08-26: 15.5s on a timeout storm. The scheduler already refreshes the regime once
+    // a cycle off this path, so the cached label is at most one cycle old, and a stale
+    // multiplier costs a fraction of a position while a late fill costs the entry price.
+    // Only a genuine cold start, with nothing cached at all, pays for a fetch — there is no
+    // alternative there, and it happens once.
+    const regime = getCachedRegime() ?? (await getRegime());
     const policy = getPolicy();
     const override = policy.regime[regime.regime];
     const mult = Math.min(override.sizeMult, 1.0); // never increase

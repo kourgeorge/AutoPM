@@ -53,41 +53,97 @@ export interface RegimeClassification {
     yieldSpread10y2y: number | null; // 10Y-2Y spread (negative = inverted)
     vix: number | null;              // VIX level
   };
+  /** How many of `indicatorsTotal` FRED series produced a usable value this fetch. */
+  indicatorsMeasured: number;
+  indicatorsTotal: number;
+  /**
+   * Facts about the DATA behind this classification — a missing series, an absent key —
+   * never advice about what to do with it. Same contract as `metrics.ts`: code measures,
+   * the LLM interprets. Empty on a complete read.
+   */
+  caveats: string[];
   fetchedAt: string;
   source: string;
 }
 
 // ── FRED fetcher ─────────────────────────────────────────────────────────────
 
-async function fetchFredSeries(seriesId: string, limit = 5): Promise<number | null> {
+/**
+ * One indicator's outcome. `value: null` alone was ambiguous in the way that matters here:
+ * a series FRED answered with nothing usable and a series FRED never answered are the same
+ * `null` downstream, and only the second one is worth retrying. The TTL below reads `failed`,
+ * so keeping them apart is what stops a permanently-blank series from re-fetching all six
+ * indicators every five minutes forever.
+ */
+interface SeriesResult {
+  value: number | null;
+  failed: boolean;
+}
+
+/**
+ * FRED answers a bad key or an unknown series id with a 4xx, and retrying that is pure
+ * waste. A 5xx, a 429, or no response at all is the gateway having a moment, and the next
+ * attempt usually lands: the 502 that cost us the GDP indicator on 2026-08-26 answered 200
+ * six times running a few minutes later.
+ */
+function isTransient(err: any): boolean {
+  const status = err?.response?.status;
+  if (status == null) return true; // timeout, DNS, socket — no answer to trust either way
+  return status >= 500 || status === 429;
+}
+
+/**
+ * One retry, not three. `applyRegimeSizing` calls `getRegime` on the order path, so this
+ * timeout is time an entry can sit waiting; the retry gets the shorter budget to keep the
+ * worst case near 15s per series rather than a multiple of the first attempt's 10s. The six
+ * series are fetched in parallel, so that is the batch's worst case too, not six times it.
+ */
+const FIRST_TIMEOUT_MS = 10_000;
+const RETRY_TIMEOUT_MS = 5_000;
+const RETRY_BACKOFF_MS = 400;
+
+async function fetchFredSeries(seriesId: string, limit = 5): Promise<SeriesResult> {
   if (!FRED_API_KEY) {
     logger.warn(`[Regime] FRED_API_KEY not set, cannot fetch ${seriesId}`);
-    return null;
+    // Not `failed`: no key is a permanent condition, and the short retry TTL exists for
+    // conditions that can heal. The `source: 'fallback'` label already says this happened.
+    return { value: null, failed: false };
   }
 
-  try {
-    const res = await axios.get(FRED_BASE_URL, {
-      params: {
-        series_id: seriesId,
-        api_key: FRED_API_KEY,
-        file_type: 'json',
-        limit,
-        sort_order: 'desc',
-      },
-      timeout: 10_000,
-    });
+  for (let attempt = 0; attempt <= 1; attempt++) {
+    try {
+      const res = await axios.get(FRED_BASE_URL, {
+        params: {
+          series_id: seriesId,
+          api_key: FRED_API_KEY,
+          file_type: 'json',
+          limit,
+          sort_order: 'desc',
+        },
+        timeout: attempt === 0 ? FIRST_TIMEOUT_MS : RETRY_TIMEOUT_MS,
+      });
 
-    const observations = res.data?.observations ?? [];
-    for (const obs of observations) {
-      if (obs.value != null && obs.value !== '.') {
-        return parseFloat(obs.value);
+      const observations = res.data?.observations ?? [];
+      for (const obs of observations) {
+        if (obs.value != null && obs.value !== '.') {
+          return { value: parseFloat(obs.value), failed: false };
+        }
       }
+      // FRED answered. Every recent observation is a placeholder, which is a fact about the
+      // series, not a fault — retrying returns the same placeholders.
+      return { value: null, failed: false };
+    } catch (err: any) {
+      const retryable = isTransient(err) && attempt === 0;
+      logger.error(
+        `[Regime] Failed to fetch FRED series ${seriesId}: ${err.message}` +
+          (retryable ? ` — retrying once in ${RETRY_BACKOFF_MS}ms` : ''),
+      );
+      if (!retryable) return { value: null, failed: true };
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
     }
-    return null;
-  } catch (err: any) {
-    logger.error(`[Regime] Failed to fetch FRED series ${seriesId}: ${err.message}`);
-    return null;
   }
+
+  return { value: null, failed: true };
 }
 
 // ── Scoring functions ────────────────────────────────────────────────────────
@@ -206,9 +262,12 @@ let _cache: RegimeClassification | null = null;
 let _cacheExpiresAt: number = 0;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — regime changes slowly
 /**
- * A classification drawn from NO indicators is cached only this long. The 6-hour TTL is
- * justified by the regime changing slowly; a fetch failure does not change slowly, and
- * pinning the fallback for six hours turned one FRED outage into a whole session of it.
+ * A classification drawn from a DEGRADED fetch — no indicators, or merely some of them — is
+ * cached only this long. The 6-hour TTL is justified by the regime changing slowly; a fetch
+ * failure does not change slowly, and pinning the result for six hours turned one FRED
+ * outage into a whole session of it. Measured 2026-08-26: a single 502 on `A191RL1Q225SBEA`
+ * dropped `growth` from 0.25 to 0.00, which is the boundary between `expansion` and
+ * `recovery` at `classifyRegime`'s `growth > 0.2` gate.
  *
  * Applies to a TRANSIENT failure only. A missing `FRED_API_KEY` cannot heal — `fetchFredSeries`
  * short-circuits before the network — so retrying it every 5 minutes buys nothing and costs six
@@ -228,15 +287,25 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
 
   logger.info('[Regime] Fetching macro indicators from FRED...');
 
-  // Parallel fetch of all indicators
-  const [gdpGrowth, unemployment, breakeven10y, treasury10y, treasury2y, vix] = await Promise.all([
-    fetchFredSeries('A191RL1Q225SBEA', 3),  // Real GDP growth annualized QoQ %
-    fetchFredSeries('UNRATE', 3),            // Unemployment rate %
-    fetchFredSeries('T10YIE', 5),            // 10Y breakeven inflation rate (market-implied CPI expectation %)
-    fetchFredSeries('DGS10', 5),             // 10Y treasury yield %
-    fetchFredSeries('DGS2', 5),              // 2Y treasury yield %
-    fetchFredSeries('VIXCLS', 5),            // VIX level
-  ]);
+  // Parallel fetch of all indicators. Labelled because a failure has to name the series it
+  // cost, and `caveats` below is read by the LLM, not only by whoever is watching the log.
+  const SERIES: Array<{ id: string; limit: number; label: string }> = [
+    { id: 'A191RL1Q225SBEA', limit: 3, label: 'gdpGrowth' },            // Real GDP growth annualized QoQ %
+    { id: 'UNRATE', limit: 3, label: 'unemployment' },                  // Unemployment rate %
+    { id: 'T10YIE', limit: 5, label: 'inflationExpectation' },          // 10Y breakeven inflation rate (market-implied CPI expectation %)
+    { id: 'DGS10', limit: 5, label: 'treasury10y' },                    // 10Y treasury yield %
+    { id: 'DGS2', limit: 5, label: 'treasury2y' },                      // 2Y treasury yield %
+    { id: 'VIXCLS', limit: 5, label: 'vix' },                           // VIX level
+  ];
+
+  const fetched = await Promise.all(SERIES.map((s) => fetchFredSeries(s.id, s.limit)));
+  const [gdpGrowth, unemployment, breakeven10y, treasury10y, treasury2y, vix] =
+    fetched.map((f) => f.value);
+  // Absent for two different reasons, and the difference is whether waiting helps.
+  const failedLabels = SERIES.filter((_, i) => fetched[i].failed).map((s) => s.label);
+  const blankLabels = SERIES
+    .filter((_, i) => !fetched[i].failed && fetched[i].value === null)
+    .map((s) => s.label);
 
   const yieldSpread = treasury10y !== null && treasury2y !== null
     ? treasury10y - treasury2y
@@ -258,6 +327,32 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     ? { regime: 'late_cycle' as Regime, confidence: 'low' as const }
     : classifyRegime(growth, inflation, financial);
 
+  // Facts about the data, never advice — the same division `metrics.ts` draws. A partial
+  // read used to be visible only in the log line, so the model was handed `recovery` with no
+  // way to know it was `expansion` with one indicator missing. It reads this; the log box
+  // does not talk to it.
+  const caveats: string[] = [];
+  if (!FRED_API_KEY) {
+    caveats.push('FRED_API_KEY is not set — no indicator was fetched and the regime is a fallback');
+  } else {
+    // Both branches say the same consequential thing — a dimension was scored from fewer
+    // inputs than it has — and differ only on whether the next fetch can fix it. A count
+    // alone ("5/6") left the model to guess which series and why.
+    if (failedLabels.length > 0) {
+      caveats.push(
+        `could not fetch ${failedLabels.join(', ')} (request failed, retrying shortly); ` +
+          `that dimension is scored from its remaining inputs, so this label may differ from a ` +
+          `complete read`,
+      );
+    }
+    if (blankLabels.length > 0) {
+      caveats.push(
+        `no recent published value for ${blankLabels.join(', ')} (FRED answered, the ` +
+          `observations are placeholders); that dimension is scored from its remaining inputs`,
+      );
+    }
+  }
+
   const result: RegimeClassification = {
     regime,
     confidence,
@@ -269,9 +364,19 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
       yieldSpread10y2y: yieldSpread,
       vix,
     },
+    indicatorsMeasured: measured,
+    indicatorsTotal: SERIES.length,
+    caveats,
     fetchedAt: new Date().toISOString(),
     source: FRED_API_KEY ? 'FRED' : 'fallback',
   };
+
+  // A partial read heals on the next attempt exactly as a total one does, so it earns the
+  // same short TTL. Keyed on `failed` rather than on a null value: pinning a 6-hour cache
+  // after one 502 turned a momentary gateway error into a whole session of the wrong label,
+  // while a series FRED genuinely publishes as blank must NOT drag all six back every 5
+  // minutes for the rest of the day.
+  const degraded = failedLabels.length > 0;
 
   if (noData) {
     logger.warn(
@@ -280,14 +385,21 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     );
   } else {
     logger.info(
-      `[Regime] Classification: ${regime} (${confidence}) — ${measured}/6 indicators, ` +
+      `[Regime] Classification: ${regime} (${confidence}) — ${measured}/${SERIES.length} indicators, ` +
         `growth=${growth.toFixed(2)} inflation=${inflation.toFixed(2)} financial=${financial.toFixed(2)}`,
     );
+    if (degraded) {
+      logger.warn(
+        `[Regime] Degraded read — could not fetch ${failedLabels.join(', ')}; ` +
+          `${regime} (${confidence}) may not survive a complete fetch, retrying in ` +
+          `${NO_DATA_TTL_MS / 60_000}m instead of caching for ${CACHE_TTL_MS / 3_600_000}h`,
+      );
+    }
   }
 
   _cache = result;
   // Retry soon only if retrying could change the answer: no key is a permanent condition.
-  _cacheExpiresAt = now + (noData && FRED_API_KEY ? NO_DATA_TTL_MS : CACHE_TTL_MS);
+  _cacheExpiresAt = now + ((noData || degraded) && FRED_API_KEY ? NO_DATA_TTL_MS : CACHE_TTL_MS);
   return result;
 }
 
