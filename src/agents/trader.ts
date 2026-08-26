@@ -211,7 +211,7 @@ export class Trader {
             });
           } else {
             const result = await executeTraderTool(block.name, block.input);
-            logger.tool('Trader', block.name, result);
+            logger.tool('Trader', block.name, result, block.input);
             results.push({
               type: 'tool_result',
               tool_use_id: block.id,
