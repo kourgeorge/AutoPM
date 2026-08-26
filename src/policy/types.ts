@@ -31,6 +31,8 @@ export interface TriggerPolicy {
   trailingDrawdownPct: number;
   positionSurgePct: number;
   hysteresisPct: number;
+  /** Consecutive breached readings required before a price-derived level fires. */
+  confirmTicks: number;
   defaultCooldownMs: number;
   criticalCooldownMs: number;
   heartbeatWithPositionsMs: number;

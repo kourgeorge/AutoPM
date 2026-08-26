@@ -51,6 +51,11 @@ triggers:
   trailingDrawdownPct: 2
   positionSurgePct: 4
   hysteresisPct: 0.5
+  # Consecutive breached readings required before a price-derived level fires. 1 fires on a
+  # single quote, and a single quote can be wrong in a way that looks exactly like the event
+  # (a book with one side emptied reports the missing side as 0, so the mid is half the real
+  # price — below any stop, and stamped fresh). Costs one tick of latency.
+  confirmTicks: 2
   defaultCooldownMs: 900000
   criticalCooldownMs: 300000
   heartbeatWithPositionsMs: 900000

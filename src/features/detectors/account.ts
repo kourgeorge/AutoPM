@@ -34,6 +34,9 @@ export const dailyLossDetector: Detector = {
         positionCount: a.positionCount,
       },
       suggestedAction: 'review',
+      // Day P&L is derived from one equity reading, so it inherits the same one-bad-number
+      // risk as a price level — and this is the event that HALTS ENTRIES for the day.
+      confirmTicks: policy.triggers.confirmTicks,
       crossing: {
         level: a.dayPnLPct,
         threshold,

@@ -5,6 +5,9 @@
  * the band — calling `bandOf` would take a percentage of a percentage and produce a band
  * ~200x too small, which is exactly the silent unit error this codebase is built to avoid.
  *
+ * All three are percentages OF A LIVE PRICE, which makes them the same one-reading risk as
+ * the stop: a single bad quote is a fabricated 50% drawdown. Hence `confirmTicks` here too.
+ *
  * `trailing_drawdown` is the detector the old alert watcher could not express: it measures
  * from the durable `sessionHigh`, not from a last-observed price that ratcheted down with
  * every reading, so a slow bleed accumulates instead of resetting.
@@ -34,6 +37,7 @@ export const trailingDrawdownDetector: Detector = {
           heldForMs: f.heldForMs,
         },
         suggestedAction: 'review',
+        confirmTicks: policy.triggers.confirmTicks,
         crossing: {
           level: f.drawdownFromHighPct,
           threshold: policy.triggers.trailingDrawdownPct,
@@ -71,6 +75,7 @@ export const positionDropDetector: Detector = {
           heldForMs: f.heldForMs,
         },
         suggestedAction: 'review',
+        confirmTicks: policy.triggers.confirmTicks,
         crossing: {
           level: f.pnlPct,
           threshold,
@@ -106,6 +111,7 @@ export const positionSurgeDetector: Detector = {
           heldForMs: f.heldForMs,
         },
         suggestedAction: 'review',
+        confirmTicks: policy.triggers.confirmTicks,
         crossing: {
           level: f.pnlPct,
           threshold: policy.triggers.positionSurgePct,

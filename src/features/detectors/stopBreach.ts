@@ -4,6 +4,11 @@
  * Both compare a spot price to an absolute price level, so both work in DOLLARS —
  * `bandOf` converts the policy's percentage hysteresis into that unit.
  *
+ * Both also carry `confirmTicks`: the level is a live spot price, so one bad quote is one
+ * false breach, and the stop is the single most expensive place in the system to be wrong
+ * about a number — a spurious breach at half the real price suggests `exit` on a position
+ * that never moved.
+ *
  * A position with no `stopLevel` is skipped rather than treated as a breach. Absence of a
  * stop is an entry-time failure for L4 to prevent, not something to report as a crossing.
  */
@@ -33,6 +38,7 @@ export const stopBreachDetector: Detector = {
           heldForMs: f.heldForMs,
         },
         suggestedAction: 'exit',
+        confirmTicks: policy.triggers.confirmTicks,
         crossing: {
           level: f.price,
           threshold: f.stopLevel,
@@ -69,6 +75,7 @@ export const takeProfitDetector: Detector = {
           heldForMs: f.heldForMs,
         },
         suggestedAction: 'review',
+        confirmTicks: policy.triggers.confirmTicks,
         crossing: {
           level: f.price,
           threshold: f.takeProfitLevel,
