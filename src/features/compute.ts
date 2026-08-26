@@ -53,6 +53,7 @@ export interface PositionData {
   pnlPct: number | null;
   drawdownFromHighPct: number | null;
   distanceToStopPct: number | null;
+  distanceToTargetPct: number | null;
   mfePct: number | null;
   maePct: number | null;
   // Indicators
@@ -227,6 +228,14 @@ function buildPositionData(
       spot === null || (snap?.stopLevel ?? null) === null
         ? null
         : pct(spot - snap!.stopLevel!, spot),
+    // Room LEFT to the target, so the sign carries the same meaning as distanceToStopPct's:
+    // positive is room remaining, negative once the level is through. Same guard shape, for the
+    // same reason — an unset target is null and never 0, or a position with no target at all
+    // would render as one sitting exactly on it.
+    distanceToTargetPct:
+      spot === null || (snap?.takeProfitLevel ?? null) === null
+        ? null
+        : pct(snap!.takeProfitLevel! - spot, spot),
     mfePct: pct(sessionHigh - entryPrice, entryPrice),
     maePct: pct(entryPrice - sessionLow, entryPrice),
     emaFast: ind.emaFast,
