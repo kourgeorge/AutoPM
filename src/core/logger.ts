@@ -22,10 +22,41 @@ function write(level: LogLevel, msg: string, data?: unknown): void {
   }
 }
 
-/** Log a tool call result. agent = e.g. 'Orchestrator', 'Monitor:AAPL', 'Research:TSLA' */
-function logTool(agent: string, toolName: string, result: string): void {
+/**
+ * Log a tool call result. agent = e.g. 'Orchestrator', 'Monitor:AAPL', 'Research:TSLA'
+ *
+ * `input` is rendered ONLY when the call failed. On the happy path the arguments are noise —
+ * the result already says what happened, and a snapshot's worth of them would crowd the log
+ * box. On a failure they are the whole diagnosis: `ack_event → ERROR: unknown or
+ * already-acked event id` cannot distinguish an id the model invented from one the registry
+ * evicted between context-build and the ack, and the id is the entire difference.
+ */
+function logTool(agent: string, toolName: string, result: string, input?: unknown): void {
   const summary = summarizeResult(toolName, result);
-  write('TOOL', `[${agent}] ${toolName} → ${summary}`);
+  // `undefined` means the caller did not offer the arguments, which is not the same as a
+  // call that took none — say nothing rather than claim it had none.
+  const args = input !== undefined && failed(result) ? ` ← ${compactInput(input)}` : '';
+  write('TOOL', `[${agent}] ${toolName} → ${summary}${args}`);
+}
+
+/** A tool reports failure in its body, not by throwing: either shape counts. */
+function failed(raw: string): boolean {
+  try {
+    const r = JSON.parse(raw);
+    return r != null && typeof r === 'object' && (r.error != null || r.ok === false);
+  } catch {
+    return false;
+  }
+}
+
+function compactInput(input: unknown): string {
+  try {
+    const s = JSON.stringify(input);
+    if (s === undefined) return String(input);
+    return s.length > 200 ? s.slice(0, 200) + '…' : s;
+  } catch {
+    return String(input);
+  }
 }
 
 function summarizeResult(tool: string, raw: string): string {

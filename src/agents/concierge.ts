@@ -221,7 +221,7 @@ export class ConciergeAgent {
       const toolResults: ContentBlock[] = [];
       for (const block of toolBlocks) {
         const result = await this.executeTool(block.name, block.input as Record<string, unknown>);
-        logger.tool('Concierge', block.name, result);
+        logger.tool('Concierge', block.name, result, block.input);
         toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
       }
 
