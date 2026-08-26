@@ -27,6 +27,7 @@ import type { Policy } from '../policy/types';
 import { getState, resetDailyState, updateState } from '../state/state';
 import { reconcileFills } from '../review/reconcile';
 import { publishReviewReady } from '../review/reviewReady';
+import { publishPortfolioReview } from '../review/scheduledReview';
 import { collectAndCompute, type TickData } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, releaseAllLatches, type Detector, type TriggerEvent } from './eventBus';
@@ -200,7 +201,7 @@ export class FeatureScheduler {
     // After routing, never before: reconciliation feeds review and must not delay a
     // critical event by the length of a broker call. `reconcileFills` swallows its own
     // errors, so this cannot cost the tick either.
-    await this.maybeReconcile(data.session);
+    await this.maybeReconcile(data);
     return events;
   }
 
@@ -215,10 +216,15 @@ export class FeatureScheduler {
    * `publishReviewReady` runs only after a reconcile, and only here: this is the one place
    * that knows the ledger may have changed, and a round trip cannot close without a fill
    * landing first.
+   *
+   * `publishPortfolioReview` rides the same detection for a different reason — this is the one
+   * place that knows the session just ended — and takes the whole tick rather than the session
+   * because the book it summarises is in there. It goes AFTER the round trips, so the trades
+   * that closed today land before the summary of the book that held them.
    */
-  private async maybeReconcile(session: MarketSession): Promise<void> {
-    const closing = this.lastSession === 'open' && session !== 'open';
-    this.lastSession = session;
+  private async maybeReconcile(data: TickData): Promise<void> {
+    const closing = this.lastSession === 'open' && data.session !== 'open';
+    this.lastSession = data.session;
 
     if (!closing && Date.now() - this.lastReconcileAt < RECONCILE_INTERVAL_MS) return;
     this.lastReconcileAt = Date.now();
@@ -227,6 +233,13 @@ export class FeatureScheduler {
 
     const reviewEvents = publishReviewReady(this.policyOf());
     if (reviewEvents.length > 0) this.route(reviewEvents);
+
+    // Gated on `closing` because everything above it also runs every 5 minutes, and the book is
+    // reviewed once a day rather than 78 times.
+    if (closing) {
+      const bookEvents = publishPortfolioReview(data, this.policyOf());
+      if (bookEvents.length > 0) this.route(bookEvents);
+    }
   }
 
   private async runTick(): Promise<void> {

@@ -39,6 +39,7 @@ export type EventKind =
   | 'data_stale'
   | 'heartbeat'
   | 'review_ready'
+  | 'portfolio_review'
   | 'policy_changed'
   | 'policy_reverted';
 

@@ -55,10 +55,13 @@ import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { GuardRejection, enterPosition } from '../strategy/orderManager';
 import {
   getState,
+  resetDailyState,
+  updateState,
   useEphemeralState,
   type PositionSnapshot,
   type SystemState,
 } from '../state/state';
+import { publishPortfolioReview } from '../review/scheduledReview';
 
 const VERBOSE = process.argv.includes('-v') || process.argv.includes('--verbose');
 const SOURCE: SourceId = 'alpaca';
@@ -977,6 +980,134 @@ function watchlistScanProjection(): void {
     getLastTick() === null && watchlistScan(getLastTick(), interval).error !== undefined);
 }
 
+/**
+ * P6 — the book, once per close.
+ *
+ * The only thing worth asserting about a once-a-day event is the count, in both directions:
+ * that it happens, and that nothing makes it happen twice. Everything else here exists to
+ * stop a future "fix" from quietly breaking one of those.
+ *
+ * Sector fields are deliberately NOT asserted. `getCachedSectors` reads `data/sectors.json`,
+ * so `bySector` depends on what the operator's cache happens to hold; the weights, the HHI and
+ * the firing do not. Asserting a sector here would make the suite pass or fail on a file
+ * nothing in the harness controls.
+ */
+function portfolioReviewLoop(): void {
+  const p = getPolicy();
+
+  // AAPL is stopped, MSFT is not — one of each, because "which positions are unwatched" is the
+  // one reading in this event that is a fact rather than a judgement.
+  const world: World = {
+    positions: [position('AAPL', 10, 101), position('MSFT', 100, 120)],
+    prices: { AAPL: 101, MSFT: 130 },
+    bars: {},
+  };
+  const monday = at(0);                 // 2026-03-02, 10:00 ET
+  const tuesday = at(1440);
+  const friday = at(4 * 1440);          // 2026-03-06
+
+  // `computeTick` without `publishTick`: the detectors would write their own cooldowns, and
+  // then "cooldowns untouched" below could only be a comparison rather than an absolute.
+  const snapshot = computeTick(bundle(world, monday), p);
+  check('the tick under review holds both positions and prices them',
+    Object.keys(snapshot.positions).sort().join(',') === 'AAPL,MSFT'
+      && snapshot.positions.MSFT.price === 130,
+    JSON.stringify(Object.keys(snapshot.positions)));
+
+  // 1. First run ANNOUNCES. It does not adopt — the deliberate departure from reviewReady,
+  //    which adopts only because a fills ledger has a backlog and a book does not.
+  const first = publishPortfolioReview(snapshot, p, monday);
+  check('a book never reviewed before announces on the first close, it does not adopt silently',
+    first.length === 1 && first[0].kind === 'portfolio_review',
+    JSON.stringify(first.map((e) => e.kind)));
+  checkCount(first, 'portfolio_review', 1);
+
+  const ev = first[0];
+  check('it is a warn that suggests reflection — the session is over, so it wakes nobody',
+    ev.severity === 'warn' && ev.suggestedAction === 'reflect' && ev.symbol === null,
+    JSON.stringify({ severity: ev.severity, action: ev.suggestedAction, symbol: ev.symbol }));
+
+  // 2. Numbers are the tick's, recomputed here from the seed rather than read back from the
+  //    event. AAPL 10 x 101 = 1010, MSFT 100 x 130 = 13000, on 100k of equity.
+  const e = ev.evidence as Record<string, any>;
+  check('the evidence measures the book that produced it',
+    e.positionCount === 2
+      && near(e.grossDeployedPct, 14.0, 0.05)
+      && e.maxWeightSymbol === 'MSFT'
+      && near(e.maxWeightPct, 13.0, 0.05)
+      && near(e.hhi, 0.866, 0.005),
+    JSON.stringify({ n: e.positionCount, gross: e.grossDeployedPct, max: e.maxWeightSymbol, w: e.maxWeightPct, hhi: e.hhi }));
+
+  check('a position with no stop recorded is named, and a stopped one is not',
+    Array.isArray(e.positionsWithoutStop)
+      && e.positionsWithoutStop.length === 1
+      && e.positionsWithoutStop[0] === 'MSFT',
+    JSON.stringify(e.positionsWithoutStop));
+
+  check('Monday is a daily review',
+    e.scope === 'daily' && ev.headline.startsWith('Daily portfolio review'), ev.headline);
+
+  check('what is missing names the tool that has it, rather than being left blank',
+    typeof e.omittedNote === 'string'
+      && e.omittedNote.includes('get_exposure')
+      && e.omittedNote.includes('get_scorecard'),
+    String(e.omittedNote));
+
+  // 3. Same close, called again. This is the whole point of the watermark: `maybeReconcile`
+  //    runs on a 5-minute cadence and a restart re-enters this path.
+  check('the same session close is never announced twice',
+    publishPortfolioReview(snapshot, p, monday).length === 0
+      && publishPortfolioReview(snapshot, p, new Date(monday.getTime() + 90 * MIN)).length === 0);
+
+  // 4. `publishDiscrete` bypasses the cooldown machinery on purpose — a cooldown key per close
+  //    would grow state.json forever, and there is no level here to recross.
+  check('no cooldown is written, so a daily event cannot leak into state.json forever',
+    Object.keys(getState().eventCooldowns).length === 0,
+    JSON.stringify(getState().eventCooldowns));
+
+  // 5. The next trading day is a new close.
+  const second = publishPortfolioReview(snapshot, p, tuesday);
+  checkCount(second, 'portfolio_review', 1);
+  check('the watermark advanced to the close it announced',
+    etDate(new Date(getState().lastPortfolioReviewAt)) === etDate(tuesday),
+    getState().lastPortfolioReviewAt);
+
+  // 6. Friday's close carries the week. One watermark, so this is a label on the same event —
+  //    a Friday the process misses is a weekly review skipped, not a queued one.
+  const weekly = publishPortfolioReview(snapshot, p, friday);
+  check('the week\'s last close is labelled weekly',
+    weekly.length === 1
+      && (weekly[0].evidence as any).scope === 'weekly'
+      && weekly[0].headline.startsWith('Weekly portfolio review'),
+    weekly.map((w) => w.headline).join(''));
+
+  // 7. The daily reset must not clear it. It is a watermark on the exchange's calendar, not
+  //    part of the day it describes.
+  const held = getState().lastPortfolioReviewAt;
+  resetDailyState(123_456, etDate(friday));
+  check('the daily reset leaves the review watermark alone',
+    getState().lastPortfolioReviewAt === held, getState().lastPortfolioReviewAt);
+
+  // 8. A corrupted watermark fails OPEN. Failing closed would mean a review that is silent at
+  //    every close forever, which is the one outcome this event cannot survive.
+  updateState({ lastPortfolioReviewAt: 'not-a-date' });
+  check('an unreadable watermark is treated as never reviewed, not as already reviewed',
+    publishPortfolioReview(snapshot, p, monday).length === 1,
+    getState().lastPortfolioReviewAt);
+
+  // 9. A flat book still fires. "You have been flat all week" is exactly what this is for, and
+  //    silence there would look identical to the process being down.
+  updateState({ lastPortfolioReviewAt: '' });
+  const empty = computeTick(bundle({ positions: [], prices: {}, bars: {} }, monday), p);
+  const flat = publishPortfolioReview(empty, p, monday);
+  check('a flat book is reviewed too, and says so',
+    flat.length === 1
+      && (flat[0].evidence as any).positionCount === 0
+      && flat[0].headline.includes('flat')
+      && (flat[0].evidence as any).concentrationCaveats.includes('no open positions'),
+    JSON.stringify({ headline: flat[0]?.headline, caveats: (flat[0]?.evidence as any)?.concentrationCaveats }));
+}
+
 // ── Run ───────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -1028,6 +1159,12 @@ async function main(): Promise<void> {
   await scenario('18. Watchlist scan — the table is the tick, and absent is not empty', {
     positionSnapshots: { AAPL: snapshotSeed('AAPL', { entryPrice: 101 }, OPENED) },
   }, watchlistScanProjection);
+  await scenario('19. Slow loop — the book, once per close, and never twice', {
+    positionSnapshots: {
+      AAPL: snapshotSeed('AAPL', { entryPrice: 101, stopLevel: 95 }, OPENED),
+      MSFT: snapshotSeed('MSFT', { entryPrice: 120 }, OPENED),   // no stop on purpose
+    },
+  }, portfolioReviewLoop);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

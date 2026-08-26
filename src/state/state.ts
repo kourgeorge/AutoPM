@@ -62,6 +62,21 @@ export interface SystemState {
    * is noise, not a lesson.
    */
   lastReviewedExitAt: string;
+
+  /**
+   * When the trader was last shown the shape of the whole book, ISO.
+   *
+   * Compared by ET DATE, not by value: there is one `portfolio_review` per session close, and
+   * the close is an event on the exchange's calendar. Slicing the ISO string would put a
+   * 20:00 ET close on the following UTC day for half the year, so `etDate` does the comparing.
+   *
+   * Empty means never reviewed, and unlike `lastReviewedExitAt` the first run ANNOUNCES rather
+   * than adopts. There is no backlog to suppress — the event describes the book as it stands
+   * right now — so adopting would skip the first close and gain nothing for it.
+   *
+   * `resetDailyState` must never clear this. The watermark outlives the day it describes.
+   */
+  lastPortfolioReviewAt: string;
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -76,6 +91,7 @@ const DEFAULT_STATE: SystemState = {
   eventCooldowns: {},
   armedTriggers: [],
   lastReviewedExitAt: '',
+  lastPortfolioReviewAt: '',
 };
 
 let _state: SystemState = { ...DEFAULT_STATE };
