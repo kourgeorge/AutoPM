@@ -57,6 +57,67 @@ export async function getSectorRaw(symbol: string): Promise<string | null> {
   }
 }
 
+/** The modules requested in one `quoteSummary` call. Absent ones are a fact, not an error. */
+export const FUNDAMENTAL_MODULES = [
+  'calendarEvents',
+  'defaultKeyStatistics',
+  'financialData',
+  'summaryDetail',
+  'earningsTrend',
+  'earningsHistory',
+] as const;
+
+export interface RawFundamentals {
+  /** The `quoteSummary` payload, unmapped. */
+  raw: any;
+  /**
+   * Which of `FUNDAMENTAL_MODULES` came back as keys. Measured, because Yahoo omits a module
+   * ENTIRELY rather than nulling its fields: XLE returns only `summaryDetail` and
+   * `defaultKeyStatistics` (measured 2026-08-26). "No `calendarEvents` for XLE" is a durable
+   * fact about the symbol and worth caching; a thrown call is not.
+   */
+  modulesPresent: string[];
+}
+
+/**
+ * Fetch fundamentals, THROWING on failure — like `getQuoteRaw` and `getBarsRaw`, and unlike
+ * `getSectorRaw`. The caller caches, and a cache that cannot tell a failed call from a
+ * genuinely empty answer would freeze a network blip into a permanent "unknown".
+ *
+ * Crypto is rejected before the call rather than mangled by it. A coin has no earnings date and
+ * no balance sheet, so there is nothing here to fetch for one; and the three spellings in play
+ * (`BTC/USD` as this system writes it, `BTCUSD` as Alpaca reports it, `BTC-USD` as Yahoo wants
+ * it) mean a `quoteSummary` on whichever one the caller holds returns nothing or something
+ * unrelated. The `/` test is the one both brokers already use to pick a time-in-force; the
+ * quote-currency suffix catches the venue's and Yahoo's spellings of the same pair.
+ *
+ * A ticker ending in a quote currency would be a false positive. None exists in US equities, and
+ * the cost if one appears is "unsupported" — a stated unknown, not a wrong number. `BRK-B` is
+ * deliberately NOT rejected: the hyphen there is Yahoo's own class-share spelling.
+ */
+const CRYPTO_PAIR = /(^|[/-])(BTC|ETH|LTC|BCH|SOL|DOGE|AVAX|LINK|UNI|AAVE|DOT|MATIC|XRP|ADA)?[/-]?(USD|USDT|USDC)$/;
+
+export async function getFundamentalsRaw(symbol: string): Promise<RawFundamentals> {
+  if (symbol.includes('/') || CRYPTO_PAIR.test(symbol.toUpperCase())) {
+    throw new Error(`${symbol}: fundamentals are equities-only — no earnings or balance sheet exists for a crypto pair`);
+  }
+
+  // validateResult:false, third positional — mandatory, for the reason in `getQuoteRaw`.
+  // `earningsTrend` drifts per symbol as much as `assetProfile` does.
+  const raw = await yf.quoteSummary(
+    symbol,
+    { modules: [...FUNDAMENTAL_MODULES] },
+    { validateResult: false },
+  ) as any;
+
+  if (raw == null || typeof raw !== 'object') {
+    throw new Error(`${symbol}: quoteSummary returned no object`);
+  }
+
+  const modulesPresent = FUNDAMENTAL_MODULES.filter(m => m in raw && raw[m] != null);
+  return { raw, modulesPresent };
+}
+
 export type Timeframe = '1Min' | '5Min' | '15Min' | '1Hour' | '1Day';
 
 // Yahoo interval + trading bars per calendar day (used to estimate lookback range)

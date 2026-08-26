@@ -96,7 +96,7 @@ So this is not a rebuild. It is a list of specific missing **edges**.
 | P2 | `get_benchmark` — one number vs SPY | 4 | S | no | no | no | unbuilt |
 | P3 | Portfolio Doctor: `equityPeak` + 2 portfolio detectors | 1 | M | **2** | **3** | no | unbuilt |
 | P4 | `update_stop` (tighten-only) + partial `execute_exit` | 5 | M | no | no | **yes** | unbuilt |
-| P5 | `get_calendar` — earnings dates | — | S | no | no | no | unbuilt |
+| P5 | `get_calendar` + `get_fundamentals` — earnings dates, crowding, revisions | — | S | no | no | no | **shipped** |
 | P6 | Slow loop: scheduled close / weekly review wake | 6 | S | **1** | no | no | unbuilt |
 
 **Ordering rationale.** P0 and P1 *repair defects that already exist* — a prompt that names a
@@ -585,9 +585,13 @@ A winner can be protected without being closed, and no path exists that widens a
 
 ---
 
-## 11. P5 — Earnings calendar
+## 11. P5 — Earnings calendar — **SHIPPED**
 
-**Size S. Independent of everything. Unbuilt.**
+**Size S. Independent of everything.** Shipped 2026-08-26, and **wider than this spec**: the same
+`quoteSummary` call that carries the earnings date also carries crowding, liquidity, balance sheet
+and estimate revisions, so a second tool over the same fetch and the same cache was built at the
+same time rather than scraping Yahoo twice later. The spec below describes the calendar half only;
+see *What shipped*.
 
 ### Why
 
@@ -618,15 +622,56 @@ Start with a POLICY.md rule ("do not open inside N days of earnings without nami
 Promote it to a guard rule in `enterPosition` **only if the journal shows it being ignored** — that
 is the same evidence standard the policy asks of the model.
 
+### What shipped
+
+Advisory only, as written above: `enterPosition` is untouched, and the rule lives in prose.
+
+- **`src/collect/yahoo.ts` → `getFundamentalsRaw(symbol)`.** Six modules in one call —
+  `calendarEvents`, `defaultKeyStatistics`, `financialData`, `summaryDetail`, `earningsTrend`,
+  `earningsHistory`. It **throws** where `getSectorRaw` swallows, because the cache has to be able
+  to tell a failed call from a genuinely empty answer. Crypto pairs are rejected before the call
+  (no earnings exists for `BTC/USD`); `BRK-B` is deliberately not, since the hyphen is Yahoo's own
+  class-share spelling.
+- **`src/collect/fundamentals.ts`** — `mapFundamentals()` is pure and owns every unit conversion
+  and every caveat; `getFundamentals()` / `getFundamentalsBatch()` / `getCachedFundamentals()`
+  follow the `sectorCache.ts` split. Cache is `data/fundamentals.json`, **not** the
+  `data/calendar.json` named above: one fetch produces one entry serving both tools, so two files
+  would mean two TTLs over one payload.
+- **TTL is 24h *plus* an early-expiry rule** the spec above does not have: an entry is also stale
+  once its `nextEarningsAt` has passed. The moment the print happens the cached date is wrong and
+  the statements behind it are about to be restated, so age alone is the wrong test. `daysUntil` is
+  recomputed on every read and never trusted from the file.
+- **`get_calendar(symbol)`** — dates, the confirmed/estimated distinction, dividend dates, and the
+  last four quarters of EPS surprise. **`get_fundamentals(symbol)`** — crowding, liquidity, balance
+  sheet, revisions. Both carry `caveats[]` and `modulesPresent`.
+- **`EARNINGS IN nD`** on venue-confirmed rows in PORTFOLIO CONTEXT, inside 14 days only, one
+  batched resolve before the loop. An unreachable Yahoo says nothing rather than announcing the
+  outage on every row.
+- **Excluded on purpose:** `targetMeanPrice`, `recommendationMean`, `recommendationKey`,
+  `numberOfAnalystOpinions`. Those are verdicts wearing numbers — someone else's conclusions, not
+  measurements — and this system does not launder a verdict into evidence.
+
+Three facts learned from the live feed, all of them now load-bearing:
+
+1. **Units are mixed inside a single module.** `financialData.profitMargins` is a fraction;
+   `financialData.debtToEquity` is already a percentage. Normalisation is per FIELD, never per
+   module, and every scaled field says its unit in its name (`debtToEquityPct`).
+2. **An ETF is a partial answer, not a blank.** XLE returns two of six modules — no
+   `calendarEvents`, but real volume, a real 52-week range and a real `totalAssets`. So the caveat
+   names *which modules are absent* and what each absence costs, and there is no `error` field on
+   that path (`logger.ts:34` would render a normal ETF answer as `ERROR:`).
+3. **`earningsHistory.history` is oldest-first**, and `earningsTrend` spells one field
+   `downLast7Days` with a capital D where its siblings use lowercase.
+
 ### Verify
 
-`npx tsc --noEmit`; `tmp/probe-calendar.ts` on 3–4 symbols including one ETF (which has no
-earnings and must return `null` + caveat, not an error) and one name with a known upcoming print;
-`npm run verify:policy`.
+`npx tsc --noEmit`; `tmp/probe-fundamentals.ts` on NVDA / AAPL / XLE / BTCUSD asserting the unit
+rules and the absent-module path; the TTL rules in **fresh processes** — `_cache` is memoized on
+first read, so an in-process file edit is invisible to it; `npm run verify:policy`.
 
 ### Done when
 
-The model can decline to hold through a print and cite a date it actually read.
+The model can decline to hold through a print and cite a date it actually read. ✅
 
 ---
 
@@ -702,9 +747,9 @@ Every session close puts the book — not a symbol — in front of the model exa
 | `src/strategy/exposure.ts` — `concentration()` (pure) + `exposure()` | P0 ✓, P3 |
 | `src/collect/sectorCache.ts` — `getSectors()` / `getCachedSectors()` (pure) | P0 ✓, P3 |
 | `src/strategy/portfolioRisk.ts` — `dailyReturns`, `pearsonCorrelation` (now exported) | P0 ✓ |
-| `src/collect/yahoo.ts` — `getSectorRaw`; `quoteSummary` + `{ validateResult: false }` | P0 ✓, P5 |
+| `src/collect/yahoo.ts` — `getSectorRaw`, `getFundamentalsRaw`; `quoteSummary` + `{ validateResult: false }` | P0 ✓, P5 ✓ |
 | `src/agents/trader.ts` — `buildPortfolioContext` / `buildCycleContext` (both async) | P0 ✓, P1 ✓ |
-| `src/tools/traderTools.ts` — tool defs + `executeTraderTool` switch | P0 ✓, P2, P4, P5 |
+| `src/tools/traderTools.ts` — tool defs + `executeTraderTool` switch | P0 ✓, P5 ✓, P2, P4 |
 | `src/review/benchmark.ts` *(new)* | P2 |
 | `src/tools/alpacaDataTools.ts` — portfolio history | P2 |
 | `src/features/compute.ts` — `TickData` + `PortfolioData`; NO-NEW-MATH invariant | P3 |

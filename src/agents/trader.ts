@@ -9,6 +9,7 @@ import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
+import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
 import { ui } from '../ui/ui';
 import {
@@ -239,6 +240,14 @@ export class Trader {
 /** Beyond this a rationale stops being a reminder and starts being the block. */
 const MAX_RATIONALE_CHARS = 140;
 
+/**
+ * How close a print has to be before it is worth a line on a held row. Fourteen days is roughly
+ * the horizon a multi-day momentum hold can actually reach, and past it the annotation would be
+ * on every row every cycle — noise crowding out the rules above it. `get_calendar` answers for
+ * any date at any distance; this is only about what is worth saying unasked.
+ */
+const EARNINGS_HORIZON_DAYS = 14;
+
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '…';
 }
@@ -347,6 +356,25 @@ async function buildPortfolioContext(
       : readDecisions().filter(r => needed.has(r.id)).map(r => [r.id, r] as const),
   );
 
+  // One batched resolve for every venue-confirmed holding, BEFORE the loop — never a fetch
+  // inside it. Same discipline as `getSectors`, and the same O(n)-fetches invariant
+  // `src/strategy/exposure.ts` documents. After the first cycle the day's cache makes it free.
+  //
+  // Wrapped, like the exposure read above: a context builder must never take down a cycle, and
+  // an unreachable Yahoo means the annotation is absent, not that no earnings are scheduled.
+  // Nothing is said in that case — an absent annotation already reads as "nothing inside the
+  // window", so announcing the failure on every row would put a Yahoo outage in front of the
+  // model instead of the book. `get_calendar` remains available to ask directly.
+  let earnings: Record<string, Fundamentals | null> = {};
+  const heldSymbols = rows.filter(r => r.e).map(r => r.e!.symbol);
+  if (heldSymbols.length > 0) {
+    try {
+      earnings = await getFundamentalsBatch(heldSymbols);
+    } catch (err: any) {
+      logger.warn(`[Trader] Earnings calendar unavailable for cycle context: ${err.message}`);
+    }
+  }
+
   for (const { label, snap, e } of rows) {
     const entry = snap?.entryPrice != null ? ` entry $${snap.entryPrice.toFixed(2)}` : '';
     const stop = snap?.stopLevel != null ? ` SL $${snap.stopLevel.toFixed(2)}` : '';
@@ -364,7 +392,20 @@ async function buildPortfolioContext(
     const flag = e && snap?.stopLevel == null
       ? '  NO STOP RECORDED HERE'
       : exp && !e ? '  NO LIVE POSITION AT THE VENUE' : '';
-    lines.push(`  ${label.padEnd(8)}${entry}${stop}${tp}${weight}${sector}${age ? `  age ${age}` : ''}${flag}`);
+
+    // Gated on `e`, like `weight` and `sector`: a venue-confirmed holding only. `(est)` is
+    // carried through because an unconfirmed date is a different input to a hold decision than
+    // a confirmed one, and a countdown that hides which it is invites treating a guess as a fact.
+    //
+    // Day zero reads as `EARNINGS TODAY`, not `EARNINGS IN 0D`: the highest-stakes row in the
+    // block is the one a skimming reader is most likely to mistake for a countdown with room
+    // left in it.
+    const cal = e ? earnings[e.symbol]?.calendar : undefined;
+    const dUntil = cal?.daysUntil;
+    const earningsFlag = dUntil != null && dUntil <= EARNINGS_HORIZON_DAYS
+      ? `  ${dUntil <= 0 ? 'EARNINGS TODAY' : `EARNINGS IN ${dUntil}D`}${cal!.isEstimate === true ? ' (est)' : ''}`
+      : '';
+    lines.push(`  ${label.padEnd(8)}${entry}${stop}${tp}${weight}${sector}${age ? `  age ${age}` : ''}${flag}${earningsFlag}`);
 
     // MFE/MAE from the same three fields `compute.ts` uses, so the numbers agree. A missing
     // baseline omits the clause rather than printing NaN.

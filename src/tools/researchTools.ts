@@ -1,10 +1,18 @@
 /**
- * The only tool that reaches outside the system.
+ * The only tool here that reaches outside the system for PROSE.
  *
- * Everything else that used to live here — earnings calendars, macro indicators, SEC
- * filings, bars, indicators — was either scraped from an unofficial endpoint or is now
- * carried by the feature store and delivered by `get_features`. What remains is the one
- * capability nothing else can supply: recent news in prose.
+ * Everything else that used to live in this file was scraped from an unofficial endpoint and
+ * removed. Each has since come back through a source that can be named, and each has its own
+ * tool: macro indicators from FRED (`get_macro_regime`), bars and quotes from the broker
+ * (`alpacaDataTools.ts`), indicators from the signal engine (`get_signals`), and earnings
+ * dates and fundamentals from Yahoo's `quoteSummary` (`get_calendar`, `get_fundamentals`,
+ * built on `src/collect/fundamentals.ts`). SEC filings are still absent; they belong to
+ * `data.sec.gov`, not to a scrape.
+ *
+ * So what remains here is the one capability nothing structured can supply: recent news in
+ * prose. Note the division that follows from it — a DATE is never news. An earnings date read
+ * out of a search result is a guess with a citation attached; `get_calendar` is the only
+ * source of one.
  */
 
 import { ToolDefinition } from '../core/types';

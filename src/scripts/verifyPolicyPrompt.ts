@@ -36,6 +36,7 @@ const REQUIRED = [
   'execute_exit',
   'ack_event',
   'get_journal',
+  'get_calendar',
 ];
 
 /**

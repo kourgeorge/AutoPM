@@ -42,6 +42,8 @@ const SHARED_WITH_TRADER = [
   'get_signals',
   'get_correlation',
   'get_exposure',
+  'get_calendar',
+  'get_fundamentals',
 ] as const;
 
 /**
