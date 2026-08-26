@@ -16,6 +16,7 @@ import {
 import { getRegime } from '../macro/regime';
 import { volatilityScaledQty, correlationGate } from '../strategy/portfolioRisk';
 import { exposure } from '../strategy/exposure';
+import { getFundamentals } from '../collect/fundamentals';
 import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
 import { isPresent } from '../collect/types';
 import { atr } from '../strategy/indicators';
@@ -212,6 +213,28 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'get_calendar',
+    description: 'Read the scheduled catalysts for one symbol: the next earnings date and how many days away it is, whether that date is confirmed or still an estimate, the window when Yahoo reports more than one candidate day, the ex-dividend and dividend dates, and the last four quarters of EPS actual vs estimate. This is the ONLY source of an earnings date in this system — a date you did not read here is a fabricated one, and a web search is not a substitute. An ATR stop does not protect across an earnings gap, because a gap is jumped and not hit, so check this before opening and before deciding to hold through a print. Fields are null where Yahoo reports nothing, never zero; ETFs have no earnings at all and the caveats say so. Where the date is an estimate, saying so is the honest answer.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol.' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
+    name: 'get_fundamentals',
+    description: 'Measure how crowded, liquid, leveraged and well-regarded one name is: short interest as a percentage of float and its direction of travel, float, institutional and insider holdings, beta, market cap, average and 10-day volume, the 52-week range, cash, debt, debt-to-equity, current ratio, profit margin, revenue and earnings growth, free cash flow, and how many analysts raised or cut their EPS estimate in the last 30 days. Estimates being cut into a momentum entry is the most useful thing here. Percentages are already scaled — do not re-scale them. Fields are null where Yahoo reports nothing, never zero, and short interest is published roughly biweekly so the caveats name its as-of date and age. Contains no price targets and no analyst recommendations by design: those are another system\'s verdicts, not measurements.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol.' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'sleep',
     description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240. Do NOT use 10 when the market is closed — that wastes cycles and burns tokens for no reason.',
     input_schema: {
@@ -250,6 +273,8 @@ export async function executeTraderTool(
       case 'get_signals':         return await toolGetSignals(input);
       case 'get_correlation':     return await toolGetCorrelation(input);
       case 'get_exposure':        return await toolGetExposure();
+      case 'get_calendar':        return await toolGetCalendar(input);
+      case 'get_fundamentals':    return await toolGetFundamentals(input);
       case 'execute_entry':       return await toolExecuteEntry(input);
       case 'annotate_position':   return await toolAnnotatePosition(input);
       case 'execute_exit':        return await toolExecuteExit(input);
@@ -459,6 +484,41 @@ async function toolGetExposure(): Promise<string> {
     maxHeldCorrelation: r(e.maxHeldCorrelation, 3),
     maxHeldPair: e.maxHeldPair,
     caveats: e.caveats,
+  });
+}
+
+/**
+ * Two projections of ONE cached fetch (`src/collect/fundamentals.ts`): the catalysts here, the
+ * measurements below. Thin on purpose — every unit conversion and every caveat is decided in the
+ * mapper, so there is one place where a number's meaning is fixed.
+ *
+ * No `error` field on a symbol Yahoo simply has nothing for: `logger.ts` short-circuits any
+ * result carrying `error` to `ERROR: …`, which would make an ETF's perfectly normal answer read
+ * as a failed call. A thrown fetch still surfaces as an error, via the executor's catch.
+ */
+async function toolGetCalendar(input: Record<string, unknown>): Promise<string> {
+  const symbol = String(input.symbol ?? '').toUpperCase();
+  const f = await getFundamentals(symbol);
+  return JSON.stringify({
+    symbol: f.symbol,
+    ...f.calendar,
+    source: f.source,
+    caveats: f.caveats,
+  });
+}
+
+async function toolGetFundamentals(input: Record<string, unknown>): Promise<string> {
+  const symbol = String(input.symbol ?? '').toUpperCase();
+  const f = await getFundamentals(symbol);
+  return JSON.stringify({
+    symbol: f.symbol,
+    crowding: f.crowding,
+    liquidity: f.liquidity,
+    balanceSheet: f.balanceSheet,
+    revisions: f.revisions,
+    modulesPresent: f.modulesPresent,
+    source: f.source,
+    caveats: f.caveats,
   });
 }
 

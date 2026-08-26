@@ -77,10 +77,14 @@ function summarizeResult(tool: string, raw: string): string {
         return Array.isArray(r) ? `${r.length} bars, last close $${r.at(-1)?.c?.toFixed(2)}` : raw.slice(0, 80);
       case 'get_indicators':
         return `RSI ${r.rsi?.toFixed(1)}, EMA9 $${r.ema9?.toFixed(2)}, EMA21 $${r.ema21?.toFixed(2)}, ATR ${r.atr?.toFixed(2)}`;
-      case 'get_earnings_calendar':
-        return Array.isArray(r) && r.length > 0
-          ? r.slice(0, 3).map((e: any) => `${e.symbol} ${e.date}`).join(', ')
-          : 'no upcoming earnings';
+      case 'get_calendar':
+        return r.nextEarningsAt
+          ? `earnings ${r.nextEarningsAt.slice(0, 10)} (${r.daysUntil}d${r.isEstimate === true ? ', est' : ''})`
+          : `${r.symbol}: no earnings date reported${r.caveats?.length ? ` — ${r.caveats.length} caveat(s)` : ''}`;
+      case 'get_fundamentals':
+        return `${r.symbol}: mcap ${r.liquidity?.marketCap != null ? `$${(r.liquidity.marketCap / 1e9).toFixed(1)}B` : 'n/a'}, ` +
+          `short ${r.crowding?.shortPctOfFloat ?? 'n/a'}%, margin ${r.balanceSheet?.profitMarginsPct ?? 'n/a'}%, ` +
+          `revisions +${r.revisions?.currentQuarter?.upLast30days ?? 'n/a'}/-${r.revisions?.currentQuarter?.downLast30days ?? 'n/a'} (30d)`;
       case 'get_macro_indicators':
         return `SPY ${r.spy?.change1dPct > 0 ? '+' : ''}${r.spy?.change1dPct?.toFixed(2)}%, VIX ${r.vix?.level?.toFixed(1)}`;
       case 'execute_entry':

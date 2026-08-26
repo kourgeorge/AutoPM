@@ -9,6 +9,7 @@ data/journal.jsonl
 data/fills.jsonl
 data/LESSONS.md
 data/sectors.json
+data/fundamentals.json
 package-lock.json
 # Throwaway probe scripts and their output. Under ./tmp rather than /tmp because
 # ts-node resolves against rootDir; kept out of git because each one answers a
