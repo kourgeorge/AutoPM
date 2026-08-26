@@ -42,6 +42,8 @@ export interface PositionRow {
   pnlPct: number | null;
   stopLevel: number | null;
   distanceToStopPct: number | null;
+  takeProfitLevel: number | null;
+  distanceToTargetPct: number | null;
   rsi: number | null;
   heldForMs: number;
 }
@@ -290,7 +292,7 @@ function sortedWatchlist(tick: TickSnapshot): WatchEntry[] {
  * `px sig rsi` used to be right-aligned to the panel border while its four values sat on the
  * left, so the labels named columns of empty space.
  */
-const POS_GRID = { sym: 5, px: 7, cost: 7, pnl: 7, stop: 6, qty: 5, rsi: 3, held: 6 } as const;
+const POS_GRID = { sym: 5, px: 7, cost: 7, pnl: 7, stop: 6, tgt: 6, qty: 5, rsi: 3, held: 6 } as const;
 const WATCH_GRID = { sym: 5, px: 7, sig: 5, rsi: 3 } as const;
 
 /**
@@ -315,6 +317,7 @@ const POS_LEGEND: Col[] = [
   { text: 'cost', w: POS_GRID.cost, right: true },
   { text: 'p&l', w: POS_GRID.pnl, right: true },
   { text: 'stop', w: POS_GRID.stop, right: true },
+  { text: 'tgt', w: POS_GRID.tgt, right: true },
   { text: 'qty', w: POS_GRID.qty, right: true },
   { text: 'rsi', w: POS_GRID.rsi, right: true },
   { text: 'held', w: POS_GRID.held, right: true },
@@ -331,6 +334,7 @@ function positionRow(m: DashboardModel, f: Fmt, p: PositionRow, width: number): 
   const g = m.glyphs;
   const dim = p.stale || p.price === null;
   const stopNear = p.distanceToStopPct != null && p.distanceToStopPct <= 1;
+  const targetNear = p.distanceToTargetPct != null && p.distanceToTargetPct <= 1;
 
   const cols: Col[] = [
     { text: p.symbol, w: POS_GRID.sym, color: dim ? 'gray-fg' : 'bold' },
@@ -360,6 +364,18 @@ function positionRow(m: DashboardModel, f: Fmt, p: PositionRow, width: number): 
       w: POS_GRID.stop,
       right: true,
       color: p.stopLevel == null ? 'red-fg' : stopNear ? 'yellow-fg' : 'gray-fg',
+    },
+    {
+      // Room left to the target, mirroring the stop cell so the two read on one scale. Two
+      // deliberate differences: a missing target is grey where a missing stop is red — an
+      // unstopped position is unwatched by the machine, an untargeted one is merely undecided —
+      // and proximity is green where the stop's is yellow, because arriving here is the good
+      // outcome. Once the level is through the figure goes negative and stays green, which is
+      // the same news the takeProfit detector is raising an event about.
+      text: p.takeProfitLevel == null ? g.dash : f.signedPct(p.distanceToTargetPct, 1),
+      w: POS_GRID.tgt,
+      right: true,
+      color: p.takeProfitLevel == null ? 'gray-fg' : targetNear ? 'green-fg' : 'gray-fg',
     },
     { text: String(p.qty), w: POS_GRID.qty, right: true, color: 'gray-fg' },
     { text: f.fixed(p.rsi, 0), w: POS_GRID.rsi, right: true, color: 'gray-fg' },
