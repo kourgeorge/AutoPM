@@ -35,7 +35,9 @@ import {
   type EventKind,
   type TriggerEvent,
 } from '../features/eventBus';
+import { getLastTick, recordTick, resetLastTick } from '../features/lastTick';
 import { createLiveRouter } from '../features/router';
+import { watchlistScan } from '../features/watchlistScan';
 import { ensureDailyReset } from '../features/scheduler';
 import {
   JOURNAL_FILE,
@@ -220,8 +222,9 @@ function near(actual: number | null, expected: number, tolerance = 1e-6): boolea
   return actual !== null && Math.abs(actual - expected) <= tolerance;
 }
 
-/** Every scenario starts from a known state and an empty event registry — a leaked
- * cooldown from a previous scenario would make the suite order-dependent. */
+/** Every scenario starts from a known state, an empty event registry and no stored tick — a
+ * leaked cooldown or a leaked snapshot from a previous scenario would make the suite
+ * order-dependent. */
 async function scenario(
   name: string,
   seed: Partial<SystemState>,
@@ -231,6 +234,7 @@ async function scenario(
   console.log(`\n${name}`);
   useEphemeralState({ startOfDayEquity: ACCOUNT.equity, ...seed });
   resetEventRegistry();
+  resetLastTick();
   try {
     await body();
   } catch (err: any) {
@@ -850,6 +854,129 @@ async function guardRules(): Promise<void> {
     JSON.stringify(veto));
 }
 
+/**
+ * 18. The watchlist scan reports the tick that produced it, and says so when there is none.
+ *
+ *     `get_watchlist_scan` is not a measurement — it is a second reading of numbers the tick
+ *     already computed. So the only thing worth asserting is that it does not become a
+ *     different truth about the same tick: score for score, symbol for symbol, against the
+ *     `TickData` handed to `recordTick`. Everything else here is a way a table can lie by
+ *     omission, and each one has to be visible in the output rather than absent from it:
+ *     no tick at all, a symbol the machine declined to score, a symbol with no price but
+ *     usable bars, a held symbol, and a table the scheduler has stopped refreshing.
+ */
+function watchlistScanProjection(): void {
+  const p = getPolicy();
+  const interval = p.triggers.tickIntervalMs;
+
+  // Before the first tick. An empty `rows` would read as "no candidates", which is a
+  // different claim and a false one.
+  const cold = watchlistScan(getLastTick(), interval, at(0).getTime());
+  check('before any tick the scan is an explicit error, not an empty watchlist',
+    cold.error !== undefined && cold.tickAt === null && cold.rows.length === 0 && cold.ageMs === null,
+    JSON.stringify(cold));
+
+  const uptrend = Array.from({ length: 60 }, (_, i) => 100 + 0.4 * i);   // scoreable
+  const short = Array.from({ length: 10 }, (_, i) => 50 + 0.2 * i);      // below minBars
+  const world: World = {
+    positions: [position('AAPL', 10, 101)],
+    prices: {
+      AAPL: 101,                    // held — excluded upstream by compute.ts
+      MSFT: uptrend[uptrend.length - 1],
+      NVDA: 51,                     // too little history to score
+      COIN: null,                   // feed failed; bars are still usable
+    },
+    bars: {
+      AAPL: series(uptrend, at(0)),
+      MSFT: series(uptrend, at(0)),
+      NVDA: series(short, at(0)),
+      COIN: series(uptrend, at(0)),
+    },
+  };
+
+  const { snapshot } = tickBoth(world, at(0), p);
+  recordTick(snapshot);
+  const scan = watchlistScan(getLastTick(), interval, at(0).getTime());
+
+  check('the scan is stamped with the tick that produced it',
+    scan.error === undefined && scan.tickAt === snapshot.tickAt && scan.ageMs === 0,
+    JSON.stringify({ tickAt: scan.tickAt, expected: snapshot.tickAt, ageMs: scan.ageMs }));
+
+  // Symbol for symbol against the source, in both directions: a row the tick did not
+  // produce is as wrong as a row it produced and the scan dropped.
+  const scanned = scan.rows.map((r) => r.symbol).sort();
+  const expected = Object.keys(snapshot.watchlist).sort();
+  check('every watchlist symbol of that tick is a row, and nothing else is',
+    JSON.stringify(scanned) === JSON.stringify(expected),
+    `scan ${JSON.stringify(scanned)} vs tick ${JSON.stringify(expected)}`);
+
+  // Score for score. Rounding to 3dp is the only transformation the projection is allowed.
+  const msft = scan.rows.find((r) => r.symbol === 'MSFT');
+  const srcMsft = snapshot.watchlist.MSFT;
+  const scoresMatch =
+    msft !== undefined
+    && msft.signals.length === srcMsft.signals.length
+    && msft.signals.length > 0
+    && msft.signals.every((s, i) =>
+      s.name === srcMsft.signals[i].name && near(s.score, srcMsft.signals[i].score, 5e-4));
+  check('the scores are the tick\'s scores, not a recomputation',
+    scoresMatch,
+    JSON.stringify({ scan: msft?.signals, tick: srcMsft.signals }));
+
+  check('the tally is derived from those same scores by signalTally',
+    msft !== undefined
+      && msft.tally.total === srcMsft.signals.length
+      && msft.tally.bullish === srcMsft.signals.filter((s) => s.score > 0.1).length,
+    JSON.stringify(msft?.tally));
+
+  // A row the machine declined to score STAYS, with the reason. Dropped, it would be
+  // indistinguishable from a symbol that is not on the watchlist.
+  const nvda = scan.rows.find((r) => r.symbol === 'NVDA');
+  check('too little history is a row with a reason, not a missing row',
+    nvda !== undefined && nvda.signals.length === 0 && nvda.notScored !== null,
+    JSON.stringify(nvda));
+  check('and the caveats name it',
+    scan.caveats.some((c) => c.includes('NVDA') && c.includes('Not scored')),
+    JSON.stringify(scan.caveats));
+
+  // The whole reason `stale` is renamed on the way out: the price is gone, the signals
+  // are not, and one flag beside five scores would be read as covering both.
+  const coin = scan.rows.find((r) => r.symbol === 'COIN');
+  check('a dead price feed leaves the bar-derived scores standing, and priceStale says which is which',
+    coin !== undefined
+      && coin.price === null
+      && coin.priceStale
+      && coin.priceStaleReason !== null
+      && coin.signals.length > 0,
+    JSON.stringify({ price: coin?.price, priceStale: coin?.priceStale, signals: coin?.signals.length }));
+
+  // Held names are skipped by compute.ts, so their absence has to be stated or it reads
+  // as "not on the watchlist".
+  check('a held symbol is named as excluded rather than silently missing',
+    scan.heldExcluded.includes('AAPL')
+      && !scanned.includes('AAPL')
+      && scan.caveats.some((c) => c.includes('AAPL') && c.includes('held')),
+    JSON.stringify({ heldExcluded: scan.heldExcluded, caveats: scan.caveats }));
+
+  check('rows are ordered by bullish count, descending',
+    scan.rows.every((r, i) => i === 0 || scan.rows[i - 1].tally.bullish >= r.tally.bullish),
+    JSON.stringify(scan.rows.map((r) => [r.symbol, r.tally.bullish])));
+
+  // A table the scheduler has stopped refreshing still reports its numbers — refusing
+  // would be a second opinion on staleness, which belongs to observe(). It says its age.
+  const stale = watchlistScan(getLastTick(), interval, at(0).getTime() + interval * 4);
+  check('a table older than a few tick intervals reports its age as a caveat, and still reports its rows',
+    stale.rows.length === scan.rows.length
+      && stale.ageMs === interval * 4
+      && stale.caveats.some((c) => c.includes('old')),
+    JSON.stringify({ ageMs: stale.ageMs, caveats: stale.caveats }));
+
+  // The seam `scenario()` relies on. Without it a tick leaks into the next scenario.
+  resetLastTick();
+  check('resetLastTick clears the store, so no tick leaks between scenarios',
+    getLastTick() === null && watchlistScan(getLastTick(), interval).error !== undefined);
+}
+
 // ── Run ───────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -898,6 +1025,9 @@ async function main(): Promise<void> {
   await scenario('17. Guard rules — a malformed or unstopped intent never reaches the venue', {
     startOfDayEquity: 1e12,
   }, guardRules);
+  await scenario('18. Watchlist scan — the table is the tick, and absent is not empty', {
+    positionSnapshots: { AAPL: snapshotSeed('AAPL', { entryPrice: 101 }, OPENED) },
+  }, watchlistScanProjection);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

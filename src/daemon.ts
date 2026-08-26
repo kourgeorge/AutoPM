@@ -5,6 +5,7 @@ import { ConciergeAgent } from './agents/concierge';
 import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
+import { recordTick } from './features/lastTick';
 import { reconcileOnStartup } from './review/reconcile';
 import { DATA_DIR } from './core/paths';
 import { config } from './core/config';
@@ -72,9 +73,11 @@ const scheduler = new FeatureScheduler({
     wakeTrader: () => trader.wake(),
     alertUser: (msg) => concierge.pushAlert(msg),
   }),
-  // The tick's features are already computed for the detectors; the panel is a second reader of
-  // the same snapshot, which is why the live dashboard costs no broker calls at all.
+  // The tick's features are already computed for the detectors; the panel and the trader's
+  // get_watchlist_scan are the second and third readers of the same snapshot, which is why
+  // the live dashboard and a full watchlist pass cost no broker calls at all.
   onTick: (data) => {
+    recordTick(data);
     ui.setTick(data);
     pushEnvironment(); // policy may have been reloaded since the last tick
   },
