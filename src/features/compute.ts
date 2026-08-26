@@ -175,6 +175,23 @@ function indicatorsFor(bars: Maybe<Bar[]>, p: Policy): Indicators {
  * Advance the durable session extremes.
  *
  * Monotonic by construction — only ever widen while the position is open.
+ *
+ * Which is exactly why a record needs a firmer price than a reading does. Everything else
+ * computed from a price is thrown away at the end of the tick and recomputed from the next
+ * one, so a single bad number shows up once and corrects itself. These two survive: they are
+ * written to `data/state.json`, they never narrow, and every drawdown, MFE and MAE afterwards
+ * is measured against them. One unbelievable quote becomes a permanent fake high, and the
+ * detectors then fire true events about a price that never existed.
+ *
+ * Measured 2026-08-26: CRM's recorded high was 215.54 against actual daily highs of 213.17,
+ * 210.31 and 206.44 over the three days it was held. That phantom sat above its own take-profit
+ * target, and the 4.60% "drawdown" it implied woke the trader every 15 minutes for an afternoon
+ * to re-refute the same non-event — the single largest consumer of cycles in the journal.
+ *
+ * So a price the feed itself cannot corroborate is still reported as the spot price (it is the
+ * best number available, and refusing to show one reads as a dead feed) but is not allowed to
+ * set a record. Undefined is permission, not suspicion — see `tradeConfirmed` in
+ * `collect/types.ts`; only a source that can tell the two cases apart ever says false.
  */
 function baselines(
   pos: Position,
@@ -185,7 +202,9 @@ function baselines(
   let sessionHigh = snap?.sessionHigh ?? entryPrice;
   let sessionLow = snap?.sessionLow ?? entryPrice;
 
-  if (isUsable(price)) {
+  // Both extremes, not just the high: a book gone wide is as capable of inventing a low, and
+  // the low feeds MAE and the stop-distance readings the same way.
+  if (isUsable(price) && price.tradeConfirmed !== false) {
     sessionHigh = Math.max(sessionHigh, price.value);
     sessionLow = Math.min(sessionLow, price.value);
   }

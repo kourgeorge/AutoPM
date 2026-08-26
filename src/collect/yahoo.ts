@@ -133,6 +133,14 @@ const TF_MAP: Record<Timeframe, { interval: string; barsPerDay: number }> = {
  * Fetch bars, THROWING on failure and on an empty series.
  * Use this from `src/collect/` where the error must be preserved as provenance.
  */
+/**
+ * NOT HERE: the high and low actually traded over a window. It was written here first and moved
+ * to `priceSource.ts` (`fetchTradedRange`) after measuring what this vendor serves intraday.
+ * Yahoo's `5m` series carries bars with `volume: 0` — CRM showed a 236.00 high in a bar where
+ * nothing traded, 14% above the regular session — so the one source used to decide whether a
+ * price is real was itself inventing prices. Alpaca's bars carry a trade count per bar.
+ */
+
 export async function getBarsRaw(
   symbol: string,
   limit = 60,
