@@ -213,13 +213,13 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240.',
+    description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240. Do NOT use 10 when the market is closed — that wastes cycles and burns tokens for no reason.',
     input_schema: {
       type: 'object',
       properties: {
         minutes: {
           type: 'number',
-          description: 'Maximum minutes of silence before the next cycle. 60 while the market is open, 240 while it is closed.',
+          description: 'Maximum minutes until next cycle. MUST be 60 when market is open, MUST be 240 when market is closed. Never use 10 during closed hours.',
         },
         reason: { type: 'string', description: 'Why this duration was chosen.' },
       },

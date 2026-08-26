@@ -72,7 +72,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'send_to_trader',
-    description: 'Send an instruction or message to the trader. It will wake up and process it on the next cycle.',
+    description: 'Send an instruction or message to the trader. Calling this tool IMMEDIATELY interrupts the trader\'s sleep and starts a new cycle — do not paraphrase this as "next cycle" or "when it wakes up". Use this any time the operator wants the trader to act now.',
     input_schema: {
       type: 'object',
       properties: {
@@ -133,8 +133,9 @@ a figure you did not read out of a tool result is one you invented.
 
 WHEN TO USE send_to_trader
 - Operator wants to change trading behavior ("stop trading", "exit all positions", "research TSLA")
-- Operator wants the trader to do something specific on its next cycle
-- Always tell the operator what you sent and that the trader has been woken
+- Operator wants the trader to act or wake up NOW — calling send_to_trader immediately interrupts the sleep timer
+- Always call the tool, never just say you did — if you don't call it, the trader is NOT woken
+- After calling, tell the operator: "Woken — it will run a cycle now and then sleep again." Do NOT say "awake and ready" — the cycle takes ~1 min and then the trader goes back to sleep automatically
 - A one-off instruction goes to the trader; a lasting rule change ("only trade these five names",
   "cut size to 3%") belongs in update_policy, or it dies with that cycle
 
