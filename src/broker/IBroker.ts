@@ -26,17 +26,33 @@ export interface OrderRequest {
   symbol: string;
   side: 'buy' | 'sell';
   qty: number;
-  type: 'market' | 'limit';
+  type: 'market' | 'limit' | 'stop';
   limitPrice?: number;
+  /**
+   * Trigger price, required for `type: 'stop'` and meaningless otherwise.
+   *
+   * A resting sell stop is how a position stays protected while this process is not running —
+   * the recorded `stopLevel` in `positionSnapshots` is watched once a minute by a detector, and
+   * a detector that is not running watches nothing.
+   *
+   * Crypto cannot use this: Alpaca supports `market`, `limit` and `stop_limit` for crypto and
+   * rejects a plain `stop`. `strategy/stopOrders.ts` decides that, so nothing here has to.
+   */
+  stopPrice?: number;
 }
 
 /**
  * An order resting at the venue, as the venue describes it.
  *
- * This system never places anything but a market order (`enterPosition`/`exitPosition`), so
- * everything here beyond `market` was placed outside it. That is exactly why the shape has to
- * be able to say so: `type` used to be `'market' | 'limit'` and both mappers coerced into it,
- * which reported a live stop as a limit order and threw its trigger price away.
+ * This system places market orders and protective sell stops. A stop whose id matches the
+ * position's `stopOrderId` is therefore ITS OWN; every other type here, and any stop with an
+ * unrecognised id, was placed outside it. Telling those two apart is the job of
+ * `brokerOrderView` in `tools/traderTools.ts`, and it matters: one is this system's protection
+ * working as designed, the other is a second actor setting a second level.
+ *
+ * The shape has to be able to say all of that. `type` used to be `'market' | 'limit'` and both
+ * mappers coerced into it, which reported a live stop as a limit order and threw its trigger
+ * price away.
  */
 export interface OpenOrder {
   id: string;
@@ -102,6 +118,19 @@ export interface IBroker {
   getOpenOrders(): Promise<OpenOrder[]>;
   placeOrder(order: OrderRequest): Promise<{ id: string }>;
   cancelOrder(id: string): Promise<void>;
+  /**
+   * Move a resting stop's trigger price, and return THE ID THE STOP NOW LIVES UNDER.
+   *
+   * The return value is not decoration: the venues disagree about identity. Alpaca's
+   * `PATCH /v2/orders/{id}` cancels and replaces, minting a NEW id; IBKR's `modifyOrder`
+   * amends in place and keeps the old one. A caller that assumed the id was stable would
+   * hold a dead id on Alpaca after every tighten, and lose track of the only order
+   * protecting the position.
+   *
+   * Why this exists at all rather than cancel-then-place: that sequence leaves a window with
+   * no protection resting anywhere, which is the exact thing a venue stop is for.
+   */
+  replaceStopOrder(id: string, stopPrice: number): Promise<{ id: string }>;
   isMarketOpen(): Promise<boolean>;
   /**
    * Recent executions, newest-last.

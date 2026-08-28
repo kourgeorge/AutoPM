@@ -5,6 +5,7 @@ import { etNow } from '../core/time';
 import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
 import { BrokerRejection } from './errors';
 import { logger } from '../core/logger';
+import { isCryptoSymbol } from '../core/symbols';
 
 const API_TIMEOUT_MS = parseInt(process.env.IBKR_API_TIMEOUT_MS ?? '10000');
 
@@ -20,6 +21,16 @@ const IB_ORDER_TYPES: Record<string, OpenOrder['type']> = {
   'STP LMT':  'stop_limit',
   'TRAIL':    'trailing_stop',
   'TRAIL LIMIT': 'trailing_stop',
+};
+
+/**
+ * The same mapping outbound. Separate from `IB_ORDER_TYPES` because it is not its inverse:
+ * two TWS strings read back as `trailing_stop`, and this system places only three of them.
+ */
+const IB_TYPE_OUT: Record<OrderRequest['type'], string> = {
+  market: 'MKT',
+  limit:  'LMT',
+  stop:   'STP',
 };
 
 /**
@@ -205,10 +216,14 @@ export class IBKRBroker implements IBroker {
     const order = {
       action:        req.side === 'buy' ? 'BUY' : 'SELL',
       totalQuantity: req.qty,
-      orderType:     req.type === 'market' ? 'MKT' : 'LMT',
+      orderType:     IB_TYPE_OUT[req.type],
       lmtPrice:      req.limitPrice,
-      // Crypto symbols contain '/' (e.g. BTC/USD); everything else is DAY.
-      tif:           req.symbol.includes('/') ? 'GTC' : 'DAY',
+      // TWS overloads `auxPrice`: it is the trigger on STP and the trail distance on TRAIL.
+      // Only meaningful for a stop, so only sent for one.
+      auxPrice:      req.type === 'stop' ? req.stopPrice : undefined,
+      // A STOP IS ALWAYS GTC — DAY would cancel the protection at every close, which is the
+      // window it exists to cover. Crypto is GTC because that is all the venue accepts for it.
+      tif:           req.type === 'stop' || isCryptoSymbol(req.symbol) ? 'GTC' : 'DAY',
     };
 
     let orderId: number;
@@ -228,6 +243,49 @@ export class IBKRBroker implements IBroker {
 
   async cancelOrder(id: string): Promise<void> {
     this.api.cancelOrder(parseInt(id, 10));
+  }
+
+  /**
+   * TWS amends in place, so the id is unchanged — unlike Alpaca, which mints a new one. The
+   * return value exists for that difference (see `IBroker.replaceStopOrder`), not for this side.
+   *
+   * `modifyOrder` takes a WHOLE order, not a patch: anything omitted is not "left alone", it is
+   * changed to the default. So the resting order is read back from the venue and re-sent with one
+   * field moved. Reconstructing it from our own records instead would quietly rewrite the qty or
+   * the TIF of an order we may not have placed.
+   *
+   * CAVEAT, and it is the same one `orderManager.ts` documents for `cancelOrder`: this is void
+   * and fire-and-forget. TWS confirms asynchronously, so a resolved promise here means the
+   * request was handed over, NOT that the stop moved. Alpaca's is a round trip that either
+   * returns the new order or throws.
+   */
+  async replaceStopOrder(id: string, stopPrice: number): Promise<{ id: string }> {
+    const orderId = parseInt(id, 10);
+    const open = await withTimeout(this.api.getAllOpenOrders(), 'getAllOpenOrders');
+    const existing = open.find(o => o.orderId === orderId);
+
+    if (!existing) {
+      // Not found means filled, cancelled, or placed by another client id. All three mean the
+      // stop is not where the caller believes it is, and only the caller can decide about that.
+      throw new BrokerRejection(
+        null,
+        `order ${id} is not resting at the venue — it filled, was cancelled, or belongs to another client id`,
+        null,
+        { replaceStopOrderId: id, stopPrice },
+      );
+    }
+
+    try {
+      this.api.modifyOrder(orderId, existing.contract, {
+        ...existing.order,
+        auxPrice: stopPrice,
+      } as any);
+    } catch (err: any) {
+      const inner: Error = err?.error ?? err;
+      throw new BrokerRejection(null, inner.message, null, { replaceStopOrderId: id, stopPrice });
+    }
+
+    return { id };
   }
 
   /**

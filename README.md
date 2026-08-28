@@ -146,9 +146,11 @@ get_exposure for the full breakdown.
 === END PORTFOLIO CONTEXT ===
 
 === BROKER ORDERS ===                     ← unconditional; what actually rests at the venue
-This system sends only market orders. Anything else below was placed outside it…
-Nothing is resting at the venue. No stop, target or bracket exists anywhere but
-in this system.
+This system sends market orders and protective sell stops. A stop matching a
+position's recorded SL is its own; anything else below was placed outside it…
+  NVDA    STP sell 44 @ 186.40  GTC          ← armed on entry, protects while asleep
+SL recorded here but NO stop resting at the venue — protected only while this
+process runs: BTC/USD.
 === END BROKER ORDERS ===
 
 === RECENT DECISIONS ===                  ← last 8 journal records, incl. vetoes
@@ -187,7 +189,7 @@ Reading the market:
 | `get_market_status` | Market open/closed, ET time, minutes to open/close |
 | `get_account` | Equity, cash, buying power, daily P&L, daily-loss-limit state |
 | `get_positions` | Live positions with qty, avg cost, market value, unrealized P&L |
-| `get_open_orders` | What is actually resting at the venue, grouped by position. This system places only market orders, so anything listed was placed outside it — and a venue stop is *not* the level the stop detector watches |
+| `get_open_orders` | What is actually resting at the venue, grouped by position. This system places market orders and protective sell stops; a stop whose id matches the position's recorded `stopOrderId` is its own, anything else was placed outside it. The recorded level and the resting order stay separate facts — the first is what the detector watches while this runs, the second is what protects the position while it does not |
 | `get_stock_bars`, `get_stock_snapshot`, `get_stock_latest_quote`, `get_most_active_stocks`, `get_market_movers`, `get_news`, `get_portfolio_history` | Native Alpaca market data (read-only; order placement is not exposed) |
 | `web_search(query)` | Anything Alpaca's market data does not cover |
 
@@ -206,9 +208,9 @@ Acting and recording:
 
 | Tool | What it does |
 |---|---|
-| `execute_entry(symbol, qty, price, stopLoss, takeProfit, atr, reason, eventId?)` | Buy at market. The stop and target are recorded as **baselines watched by this system** — they are *not* sent to the venue as bracket legs, and nothing exits a position but an `execute_exit` call. Filled qty may be smaller than requested if the macro regime caps it |
+| `execute_entry(symbol, qty, price, stopLoss, takeProfit, atr, reason, eventId?)` | Buy at market. The stop is recorded as a baseline **and** armed as a real GTC sell stop at the venue, so it can fill without an `execute_exit` call; the result's `venueStop` says whether it actually rests there, and why not when it does not. The target is recorded only. Filled qty may be smaller than requested if the macro regime caps it |
 | `execute_exit(symbol, reason, eventId?)` | Close at market, remove position baselines |
-| `annotate_position(symbol, stopLoss, thesis, takeProfit?, entryPrice?)` | Retrofit baselines onto a position opened without them — legacy, externally opened, or any row flagged `NO STOP RECORDED HERE`. Writes the stop so the detector starts watching immediately, and journals the thesis |
+| `annotate_position(symbol, stopLoss, thesis, takeProfit?, entryPrice?)` | Set or tighten the stop, target and thesis. Writes the stop so the detector starts watching immediately, moves the venue's resting stop to match, and journals the thesis. **Tighten-only** — a lower stop is refused as `stop_loosened` and the refusal is journalled |
 | `get_pending_events` | Full event objects from the registry (the evidence behind a headline) |
 | `ack_event(id, disposition, note?)` | Mark an event answered (`acting` / `acknowledged` / `ignoring`) — stops it escalating |
 | `get_journal(symbol?, limit?)` | Decision history with rationales, guard vetoes and venue rejections |

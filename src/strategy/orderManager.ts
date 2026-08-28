@@ -11,7 +11,8 @@ import { broker } from '../broker';
 import type { OpenOrder } from '../broker/IBroker';
 import { logger } from '../core/logger';
 import { sameSymbol } from '../core/symbols';
-import { getState } from '../state/state';
+import { getPositionSnapshot, getState, patchPositionSnapshot } from '../state/state';
+import { armStop, withStopLock, type ArmResult } from './stopOrders';
 import { SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
 import { getRegime, getCachedRegime } from '../macro/regime';
@@ -46,11 +47,16 @@ function reject(rule: string, message: string): never {
  * that was asked for: `applyRegimeSizing` may cut it. The caller journals what it is
  * given, so returning the requested number here would record a position size that never
  * existed.
+ *
+ * `venueStop` is the outcome of arming a real resting stop at the broker. It is returned rather
+ * than written here because the snapshot does not exist yet — `patchPositionSnapshot` is a no-op
+ * for an unknown symbol, and the caller's single `openPositionSnapshot` call is the one write.
+ * A failure there is reported, never thrown: see `armEntryStop`.
  */
 export async function enterPosition(
   signal: SignalResult,
   qty: number,
-): Promise<{ orderId: string; qty: number }> {
+): Promise<{ orderId: string; qty: number; venueStop: ArmResult }> {
   const { symbol, price, stopLoss, takeProfit, atr } = signal;
 
   // Local and free, so first: a NaN qty must be reported as a malformed intent, not as
@@ -123,7 +129,81 @@ export async function enterPosition(
   logger.trade(`Entering ${symbol}: qty=${regimeQty} @ ~$${price.toFixed(2)}, SL=$${stopLoss.toFixed(2)}, TP=$${takeProfit.toFixed(2)}`);
   const { id } = await broker.placeOrder({ symbol, side: 'buy', qty: regimeQty, type: 'market' });
   logger.trade(`Order ${id} submitted for ${symbol}`);
-  return { orderId: id, qty: regimeQty };
+
+  const venueStop = await armEntryStop(symbol, stopLoss);
+  return { orderId: id, qty: regimeQty, venueStop };
+}
+
+/**
+ * How long to wait for the buy to become shares that can be protected.
+ *
+ * The wait is unavoidable. Alpaca reserves against `qty_available`, so a sell stop placed before
+ * the buy has settled into the position is refused for shares that are not there yet — the same
+ * arithmetic `restingSells` describes, seen from the other side.
+ *
+ * The bound is just as necessary. A market order submitted pre-market fills at the open, which
+ * can be hours away, and this function sits in the middle of a tool call the model is waiting on.
+ * Four seconds covers a normal-hours fill on a liquid name with room to spare; anything slower is
+ * handed to `sweepStops`, which exists precisely so this deadline can be short.
+ */
+const FILL_WAIT_MS = 4_000;
+const FILL_POLL_MS = 400;
+
+/**
+ * Arm the venue stop for a position just opened, and report rather than throw.
+ *
+ * NEVER FAILS THE ENTRY. The shares are already bought by the time this runs, so throwing would
+ * report a failed entry for a position that exists — the worst of the available outcomes, because
+ * the caller would not journal it. Everything this can fail at is also repaired by the sweep on
+ * the next tick, and the recorded `stopLevel` and its detector are untouched either way.
+ *
+ * Under the stop lock, and this is not belt-and-braces. A LEFTOVER SNAPSHOT from a previous closed
+ * trade in the same symbol is a documented fact of this system, and it carries the OLD stop level.
+ * A sweep landing during the poll below sees a held position and that stale level, and would arm
+ * at last trade's stop while this arms at today's.
+ */
+async function armEntryStop(symbol: string, stopLoss: number): Promise<ArmResult> {
+  return withStopLock(symbol, async () => {
+    const deadline = Date.now() + FILL_WAIT_MS;
+    let lastRefusal: string | null = null;
+
+    while (Date.now() < deadline) {
+      let held = 0;
+      try {
+        const positions = await broker.getPositions();
+        held = positions.find((p) => sameSymbol(p.symbol, symbol))?.qty ?? 0;
+      } catch {
+        // A read failure is not a fill failure. Keep polling until the deadline; the sweep is
+        // the backstop if the venue is genuinely unreachable.
+      }
+
+      // The FILLED qty, not the requested one. A partial fill holds fewer shares than were
+      // ordered, and a stop for more than is held is refused in full rather than trimmed.
+      if (held > 0) {
+        const armed = await armStop(symbol, held, stopLoss);
+        if (armed.ok) return armed;
+        // KEEP TRYING until the deadline rather than surrendering to the first refusal. The
+        // position existing does not mean its shares can be sold yet: Alpaca reserves against
+        // `qty_available`, which trails the fill, so the first attempt after a fill can be
+        // refused for shares that are visibly held. Giving up there hands a position that could
+        // have been protected in another half-second to a sweep up to a minute away. A refusal
+        // that is permanent (crypto, a nonsense level) is a pure check that fails instantly, so
+        // retrying it costs one comparison per poll and nothing at the venue.
+        lastRefusal = armed.reason;
+      }
+
+      await new Promise((r) => setTimeout(r, FILL_POLL_MS));
+    }
+
+    return {
+      ok: false,
+      reason: lastRefusal
+        ? `the shares were held but the stop was refused for ${FILL_WAIT_MS / 1000}s: ${lastRefusal}`
+        : `the buy did not confirm as a position within ${FILL_WAIT_MS / 1000}s, so there were `
+          + `no settled shares to place a stop against. The recorded level is being watched by the `
+          + `breach detector, and the stop sweep will arm the venue stop on a later tick.`,
+    };
+  });
 }
 
 /**
@@ -236,44 +316,84 @@ export async function exitPosition(
 
   logger.trade(`Exiting ${symbol}: ${reason}`);
 
-  // Clear the reservation before selling, and only AFTER approval — cancelling the
-  // protection on an exit the operator then denies would leave the position worse off than
-  // if the tool had never been called.
-  //
-  // There is no restore path, and that is a property of the interface rather than an
-  // omission here: `OrderRequest.type` is `market | limit`, so this system cannot place a
-  // stop order at all. Nothing it opens has ever had venue-side protection — a stop here is
-  // a level in `positionSnapshots` that the `stop_breach` detector watches. Cancelling a
-  // hand-placed venue stop therefore returns the position to this system's normal posture,
-  // which is the only reason it is acceptable to do it unattended.
-  const cancelled: string[] = [];
-  for (const order of restingSells(await broker.getOpenOrders(), symbol)) {
-    try {
-      await broker.cancelOrder(order.id);
-    } catch (err: any) {
-      // Refuse the exit rather than sell into a reservation that is still standing. Nothing
-      // has changed at this point — the order still rests, the position is still protected —
-      // so aborting is the cheap outcome and the venue's own words are the reason.
-      //
-      // Strict on purpose. An order that had already filled or been cancelled would not have
-      // come back from `getOpenOrders`, so the only way here is a genuine venue failure or
-      // the narrow race between the list and the cancel; the retry after that race succeeds
-      // because the order is no longer listed.
-      reject(
-        'resting_order_not_cancelled',
-        `Cannot exit ${symbol}: ${describe(order)} reserves the shares and the venue refused `
-        + `to cancel it — ${err?.response?.data?.message ?? err?.message ?? String(err)}`,
-      );
-    }
-    cancelled.push(describe(order));
-    logger.trade(`Cancelled ${describe(order)} — it reserved the ${symbol} shares`);
-  }
+  // Under the stop lock for everything that follows. Between the cancel loop and the sell this
+  // position is held, has a recorded level, and has no stop resting — which is exactly the shape
+  // `needsArming` selects. A sweep landing in that gap would re-arm, re-reserve the shares, and
+  // the sell below would fail with `insufficient qty available`: the precise error the cancel loop
+  // exists to prevent, reintroduced by the thing meant to prevent it.
+  return withStopLock(symbol, async () => {
+    // Which resting stop is OURS, read before anything is cancelled. It decides what may be put
+    // back if the sell fails — see the restore below.
+    const ourStopId = getPositionSnapshot(symbol)?.stopOrderId;
+    const recordedStop = getPositionSnapshot(symbol)?.stopLevel;
 
-  // CAVEAT, IBKR ONLY: `IBKRBroker.cancelOrder` does not await anything — TWS takes the
-  // request and confirms asynchronously, so the loop above reports success it has not seen.
-  // A sell placed immediately after can still race the cancellation. Alpaca's is a DELETE
-  // that either returns or throws, so there the cancellation is settled before the sell.
-  const { id } = await broker.placeOrder({ symbol, side: 'sell', qty: pos.qty, type: 'market' });
-  logger.trade(`Exit order ${id} submitted for ${symbol}`);
-  return { orderId: id, cancelled };
+    // Clear the reservation before selling, and only AFTER approval — cancelling the
+    // protection on an exit the operator then denies would leave the position worse off than
+    // if the tool had never been called.
+    const cancelled: string[] = [];
+    let cancelledOurStop = false;
+    for (const order of restingSells(await broker.getOpenOrders(), symbol)) {
+      try {
+        await broker.cancelOrder(order.id);
+      } catch (err: any) {
+        // Refuse the exit rather than sell into a reservation that is still standing. Nothing
+        // has changed at this point — the order still rests, the position is still protected —
+        // so aborting is the cheap outcome and the venue's own words are the reason.
+        //
+        // Strict on purpose. An order that had already filled or been cancelled would not have
+        // come back from `getOpenOrders`, so the only way here is a genuine venue failure or
+        // the narrow race between the list and the cancel; the retry after that race succeeds
+        // because the order is no longer listed.
+        reject(
+          'resting_order_not_cancelled',
+          `Cannot exit ${symbol}: ${describe(order)} reserves the shares and the venue refused `
+          + `to cancel it — ${err?.response?.data?.message ?? err?.message ?? String(err)}`,
+        );
+      }
+      if (order.id === ourStopId) cancelledOurStop = true;
+      cancelled.push(describe(order));
+      logger.trade(`Cancelled ${describe(order)} — it reserved the ${symbol} shares`);
+    }
+
+    // Recorded the moment it is true. The order is gone from the venue, so an id still sitting in
+    // state would read as protection that is not there.
+    if (cancelledOurStop) patchPositionSnapshot(symbol, { stopOrderId: undefined });
+
+    // CAVEAT, IBKR ONLY: `IBKRBroker.cancelOrder` does not await anything — TWS takes the
+    // request and confirms asynchronously, so the loop above reports success it has not seen.
+    // A sell placed immediately after can still race the cancellation. Alpaca's is a DELETE
+    // that either returns or throws, so there the cancellation is settled before the sell.
+    let id: string;
+    try {
+      ({ id } = await broker.placeOrder({ symbol, side: 'sell', qty: pos.qty, type: 'market' }));
+    } catch (err) {
+      // The regression this feature creates, and its repair. Before venue stops the cancel loop
+      // could only ever remove protection this system had not placed, so a failed sell left the
+      // position exactly as protected as it had ever been. Now the loop takes down OUR stop
+      // first, and a failed sell would leave the position naked with nobody having decided that.
+      //
+      // Only ours goes back. A hand-placed order cancelled alongside it is not this system's to
+      // recreate — its qty, type and intent were somebody else's decision — and `cancelled[]`
+      // already tells the operator it is gone.
+      if (cancelledOurStop && recordedStop != null && recordedStop > 0) {
+        const restored = await armStop(symbol, pos.qty, recordedStop);
+        if (restored.ok) {
+          patchPositionSnapshot(symbol, { stopOrderId: restored.orderId });
+          logger.warn(
+            `[Guard] ${symbol} sell failed — its stop was put back at $${recordedStop} `
+              + `(order ${restored.orderId})`,
+          );
+        } else {
+          logger.error(
+            `[Guard] ${symbol} sell failed AND its stop could not be put back — the position is `
+              + `unprotected at the venue: ${restored.reason}`,
+          );
+        }
+      }
+      throw err;
+    }
+
+    logger.trade(`Exit order ${id} submitted for ${symbol}`);
+    return { orderId: id, cancelled };
+  });
 }

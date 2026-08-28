@@ -124,6 +124,8 @@ export function decision(
     orderId: null,
     vetoRule: null,
     venueMessage: null,
+    venueStopId: null,
+    venueStopMissing: null,
     pnl: null,
     policyVersion: getPolicy().version,
     ...fields,

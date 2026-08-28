@@ -53,6 +53,8 @@ import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { GuardRejection, enterPosition, restingSells } from '../strategy/orderManager';
+import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
+import { isCryptoSymbol } from '../core/symbols';
 import {
   getState,
   resetDailyState,
@@ -801,7 +803,8 @@ function journalSeam(): void {
     kind: 'entry', actor: 'trader', symbol: 'REPLAY',
     triggerEventId: null, rationale: 'replay harness — must never reach disk',
     executed: true, qty: 1, price: 1, intendedStop: 0.9, intendedTarget: 1.2,
-    atrAtEntry: 0.05, orderId: null, vetoRule: null, venueMessage: null, pnl: null,
+    atrAtEntry: 0.05, orderId: null, vetoRule: null, venueMessage: null,
+    venueStopId: null, venueStopMissing: null, pnl: null,
     policyVersion: getPolicy().version,
   });
 
@@ -1302,6 +1305,141 @@ function blockingOrders(): void {
   check('an empty book blocks nothing', restingSells([], 'AAPL').length === 0);
 }
 
+/**
+ * 22. Venue stops — which positions are naked, and which stop may replace which.
+ *
+ *     The recorded stop and the resting order are two different things, and every bug this
+ *     scenario guards is a place where they get confused for each other. Arming a second stop
+ *     over shares another order already reserves is refused by the venue on every tick forever;
+ *     failing to arm at all leaves a position with nothing behind it overnight; and loosening a
+ *     stop is the mechanism by which a small loss becomes a large one.
+ *
+ *     Only the pure selections are asserted. `broker` is a module-level const with no injection
+ *     seam — the same reason scenario 17 stops at the guards — but WHICH positions need a stop
+ *     and WHETHER a level may move are the parts that fail silently.
+ */
+function venueStops(): void {
+  const pos = (p: Partial<Position>): Position => ({
+    symbol: 'AAPL', qty: 10, avgCost: 100, marketValue: 1100, ...p,
+  });
+  const order = (o: Partial<OpenOrder>): OpenOrder => ({
+    id: 'o1', symbol: 'AAPL', side: 'sell', qty: 10, filled: 0,
+    type: 'stop', rawType: 'stop', status: 'new', ...o,
+  });
+
+  // ── stopOrderFor: what may be sent, and what may not
+  const equity = stopOrderFor('AAPL', 10, 95);
+  check(
+    'an equity with a level and shares gets a well-formed GTC-able sell stop',
+    equity.ok && equity.request.type === 'stop' && equity.request.side === 'sell'
+      && equity.request.qty === 10 && equity.request.stopPrice === 95,
+    JSON.stringify(equity),
+  );
+
+  // Both spellings, because the venue reports one and the caller holds the other. The slash
+  // test alone passes the first and fails the second, which is the bug this exists to prevent.
+  for (const sym of ['BTC/USD', 'BTCUSD']) {
+    const c = stopOrderFor(sym, 0.5, 40000);
+    check(
+      `no stop can rest for ${sym}, and the refusal says why`,
+      !c.ok && /crypto/i.test(c.reason),
+      c.ok ? 'placed anyway' : c.reason,
+    );
+  }
+  check('BRK-B is not mistaken for a pair', isCryptoSymbol('BRK-B') === false);
+
+  const short = stopOrderFor('AAPL', -10, 95);
+  check(
+    'a short is skipped rather than guessed at — a sell stop would double it',
+    !short.ok && /short/i.test(short.reason),
+    short.ok ? 'placed anyway' : short.reason,
+  );
+  check('no level recorded means no order', !stopOrderFor('AAPL', 10, 0).ok);
+
+  // ── needsArming: the join across positions, orders and snapshots
+  const snaps: Record<string, PositionSnapshot> = {
+    AAPL:   snapshotSeed('AAPL',   { entryPrice: 100, stopLevel: 95 }, OPENED),
+    MSFT:   snapshotSeed('MSFT',   { entryPrice: 120, stopLevel: 110 }, OPENED),
+    TSLA:   snapshotSeed('TSLA',   { entryPrice: 200 }, OPENED),          // no level on purpose
+    BTCUSD: snapshotSeed('BTC/USD', { entryPrice: 40000, stopLevel: 38000 }, OPENED),
+    XLE:    snapshotSeed('XLE',    { entryPrice: 80, stopLevel: 75 }, OPENED),
+    GE:     snapshotSeed('GE',     { entryPrice: 50, stopLevel: 60 }, OPENED),
+  };
+  const book = [
+    pos({ symbol: 'AAPL', qty: 10, marketValue: 1000 }),                  // naked → arm
+    pos({ symbol: 'MSFT', qty: 5,  marketValue: 600 }),                   // already stopped
+    pos({ symbol: 'TSLA', qty: 3,  marketValue: 600 }),                   // no level recorded
+    pos({ symbol: 'BTCUSD', qty: 0.5, marketValue: 20000 }),              // venue takes no stop
+    pos({ symbol: 'XLE',  qty: 100, marketValue: 8000 }),                 // half reserved by a TP
+    pos({ symbol: 'GE',   qty: 20, marketValue: 1100 }),                  // level already through
+  ];
+  const orders = [
+    order({ id: 'msft-stop', symbol: 'MSFT', qty: 5, stopPrice: 110 }),
+    order({ id: 'xle-tp', symbol: 'XLE', qty: 60, type: 'limit', rawType: 'limit', limitPrice: 90 }),
+    order({ id: 'aapl-buy', side: 'buy', qty: 5, type: 'market', rawType: 'market' }),
+  ];
+
+  const arm = needsArming(book, orders, snaps);
+  const names = arm.map(a => a.symbol).sort();
+  check(
+    'only the positions with a level and nothing enforcing it are selected',
+    JSON.stringify(names) === JSON.stringify(['AAPL', 'XLE']),
+    names.join(', ') || '(none)',
+  );
+  check(
+    'a stop already resting is found across the naming the venue uses, so nothing double-arms',
+    !names.includes('MSFT'),
+  );
+  check(
+    'a level already through the market is left to the breach detector, not fired instantly',
+    !names.includes('GE'),
+  );
+  check(
+    'a buy on the same symbol reserves no shares and does not reduce what can be stopped',
+    arm.find(a => a.symbol === 'AAPL')?.qty === 10,
+    String(arm.find(a => a.symbol === 'AAPL')?.qty),
+  );
+  // The alternative — asking for all 100 — is refused by the venue every tick, forever.
+  check(
+    'a take-profit over part of the position leaves the rest stoppable, and only the rest',
+    arm.find(a => a.symbol === 'XLE')?.qty === 40,
+    String(arm.find(a => a.symbol === 'XLE')?.qty),
+  );
+  check('the level armed is the level recorded', arm.find(a => a.symbol === 'AAPL')?.stopLevel === 95);
+  check('nothing held means nothing to arm', needsArming([], orders, snaps).length === 0);
+
+  // ── unheldSnapshots: which records have no position behind them
+  check(
+    'a book that covers every snapshot leaves nothing to prune',
+    unheldSnapshots(book, snaps).length === 0,
+    unheldSnapshots(book, snaps).join(','),
+  );
+  check(
+    'a snapshot with no position behind it is the one thing reported',
+    JSON.stringify(unheldSnapshots(book, { ...snaps, NFLX: snapshotSeed('NFLX', { entryPrice: 76 }, OPENED) })) === '["NFLX"]',
+    unheldSnapshots(book, { ...snaps, NFLX: snapshotSeed('NFLX', { entryPrice: 76 }, OPENED) }).join(','),
+  );
+  // The venue reports `BTCUSD` and the snapshot was written from `BTC/USD`. A raw-string set
+  // here would prune a live crypto position's recorded level — the one it cannot re-arm.
+  check(
+    'a pair held under the other spelling is still held',
+    !unheldSnapshots(book, snaps).includes('BTCUSD'),
+  );
+  // A short is held. `needsArming` refuses to arm a sell stop over it, which is a different
+  // question from whether its recorded level may be deleted.
+  check(
+    'a short position keeps its snapshot',
+    unheldSnapshots([pos({ symbol: 'AAPL', qty: -10 })], { AAPL: snaps.AAPL }).length === 0,
+  );
+
+  // ── canTighten: the one predicate the tool and the sweep share
+  check('raising a stop is allowed', canTighten(95, 97));
+  check('lowering a stop is refused', !canTighten(95, 93));
+  check('restating the same stop is not loosening, so a retry is not a violation', canTighten(95, 95));
+  check('nothing recorded yet means nothing to loosen', canTighten(undefined, 95));
+  check('a nonsense level is refused whatever is recorded', !canTighten(95, 0));
+}
+
 async function main(): Promise<void> {
   // Loaded once, before any state is faked — a failure here is a broken policy file,
   // not a failed scenario.
@@ -1359,6 +1497,7 @@ async function main(): Promise<void> {
   }, portfolioReviewLoop);
   await scenario('20. Confirmation and the all-clear — one reading is not a condition', stopped(99), confirmAndResolve);
   await scenario('21. Blocking orders — a resting sell reserves the shares an exit needs', plain, blockingOrders);
+  await scenario('22. Venue stops — which positions are naked, and which stop may replace which', plain, venueStops);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

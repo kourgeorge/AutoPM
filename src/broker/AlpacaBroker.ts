@@ -2,6 +2,7 @@ import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } fr
 import { BrokerRejection } from './errors';
 import { alpacaTimeToMs, alpacaTrading as trading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
+import { isCryptoSymbol } from '../core/symbols';
 
 /**
  * Alpaca's `type` strings, which happen to be our names already. The lookup exists so an
@@ -92,8 +93,9 @@ export class AlpacaBroker implements IBroker {
         qty:            req.qty,
         side:           req.side,
         type:           req.type,
-        time_in_force:  req.symbol.includes('/') ? 'gtc' : 'day',
+        time_in_force:  this.tifFor(req),
         limit_price:    req.limitPrice,
+        stop_price:     req.type === 'stop' ? req.stopPrice : undefined,
       });
       return { id: res.data.id };
     } catch (err: any) {
@@ -106,8 +108,46 @@ export class AlpacaBroker implements IBroker {
     }
   }
 
+  /**
+   * A STOP IS ALWAYS GTC. A `day` stop is cancelled at the close, and overnight-and-weekend is
+   * the window a resting stop exists to cover — a stop that expires every afternoon protects the
+   * position only while the process that could have watched it anyway was running.
+   *
+   * Crypto is `gtc` because Alpaca accepts nothing else for it (`day` is rejected outright);
+   * everything else stays `day`, which is what a market entry wants.
+   */
+  private tifFor(req: OrderRequest): 'gtc' | 'day' {
+    return req.type === 'stop' || isCryptoSymbol(req.symbol) ? 'gtc' : 'day';
+  }
+
   async cancelOrder(id: string): Promise<void> {
     await trading.delete(`/v2/orders/${id}`);
+  }
+
+  /**
+   * Alpaca replaces rather than amends: this returns a NEW order id and the one passed in is
+   * dead afterwards. Hence the return value — see `IBroker.replaceStopOrder`.
+   *
+   * Two documented refusals reach the caller as a `BrokerRejection` rather than being swallowed,
+   * because both mean the stop is not where the caller thinks it is and only the caller can
+   * decide what to do about that:
+   *  - the original already filled, so there is nothing left to move (and no position either);
+   *  - the order is `accepted` / `pending_new` / `pending_cancel` / `pending_replace`, i.e. the
+   *    venue is mid-transition and will not take a second instruction yet. A retry next sweep is
+   *    the right response, and swallowing this would report a tighten that never happened.
+   */
+  async replaceStopOrder(id: string, stopPrice: number): Promise<{ id: string }> {
+    try {
+      const res = await trading.patch(`/v2/orders/${id}`, { stop_price: stopPrice });
+      return { id: res.data.id };
+    } catch (err: any) {
+      throw new BrokerRejection(
+        err.response?.status ?? null,
+        err.response?.data?.message ?? err.message,
+        err.response?.data?.code ?? null,
+        { replaceStopOrderId: id, stopPrice },
+      );
+    }
   }
 
   /**
