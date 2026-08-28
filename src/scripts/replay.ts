@@ -20,7 +20,7 @@
  */
 
 import fs from 'fs';
-import type { AccountInfo, Position } from '../broker/IBroker';
+import type { AccountInfo, OpenOrder, Position } from '../broker/IBroker';
 import type { RawBundle } from '../collect';
 import { type Maybe, type Observation, type SourceId, missing } from '../collect/types';
 import { etDate } from '../core/time';
@@ -52,7 +52,7 @@ import { useEphemeralFillsLedger } from '../review/fillsLedger';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
-import { GuardRejection, enterPosition } from '../strategy/orderManager';
+import { GuardRejection, enterPosition, restingSells } from '../strategy/orderManager';
 import {
   getState,
   resetDailyState,
@@ -1250,6 +1250,58 @@ function confirmAndResolve(): void {
   checkCount(stillFine, 'condition_resolved', 0);
 }
 
+/**
+ * 21. Blocking orders — what stands between a decision to exit and the venue.
+ *
+ *     Alpaca does not count the shares you own, it counts the shares nothing else has a
+ *     claim on. A resting sell reserves them, so a market sell alongside one is refused with
+ *     `403 insufficient qty available (available: 0)` — which is a rejection the model can
+ *     do nothing with, because it has no cancellation tool. Measured live on CRM
+ *     2026-08-28: 25 held, 25 reserved by a hand-placed GTC stop, every exit impossible.
+ *
+ *     Only the selection is asserted here. Cancelling needs a venue, and this harness has
+ *     none by design — but WHICH orders are in the way is the part that can be wrong
+ *     silently, and a miss means the exit still walks into the wall.
+ */
+function blockingOrders(): void {
+  const order = (o: Partial<OpenOrder>): OpenOrder => ({
+    id: 'o1', symbol: 'AAPL', side: 'sell', qty: 10, filled: 0,
+    type: 'stop', rawType: 'stop', status: 'new', ...o,
+  });
+
+  const book: OpenOrder[] = [
+    order({ id: 'stop',      type: 'stop',  rawType: 'stop',  stopPrice: 95 }),
+    order({ id: 'target',    type: 'limit', rawType: 'limit', limitPrice: 120 }),
+    order({ id: 'partial',   qty: 10, filled: 4, stopPrice: 94 }),
+    order({ id: 'buy',       side: 'buy' }),
+    order({ id: 'other-sym', symbol: 'MSFT' }),
+  ];
+
+  const blocking = restingSells(book, 'AAPL').map((o) => o.id).sort();
+  check(
+    'every open sell on the symbol is in the way, whatever its type',
+    JSON.stringify(blocking) === JSON.stringify(['partial', 'stop', 'target']),
+    blocking.join(', '),
+  );
+  check(
+    'a buy reserves buying power, not shares, so it is not in the way',
+    !blocking.includes('buy'),
+  );
+  check(
+    "and another symbol's sell is not in the way",
+    !blocking.includes('other-sym'),
+  );
+
+  // The crypto naming split, which is what made `already_holding` and `no_position` wrong
+  // before `sameSymbol` existed. A blocking order the venue calls BTCUSD must be found by a
+  // caller asking about BTC/USD, or the exit is refused by the venue with no explanation
+  // this system can offer.
+  const crypto = restingSells([order({ id: 'btc', symbol: 'BTCUSD' })], 'BTC/USD');
+  check('a blocking order is found across the crypto naming split', crypto.length === 1);
+
+  check('an empty book blocks nothing', restingSells([], 'AAPL').length === 0);
+}
+
 async function main(): Promise<void> {
   // Loaded once, before any state is faked — a failure here is a broken policy file,
   // not a failed scenario.
@@ -1306,6 +1358,7 @@ async function main(): Promise<void> {
     },
   }, portfolioReviewLoop);
   await scenario('20. Confirmation and the all-clear — one reading is not a condition', stopped(99), confirmAndResolve);
+  await scenario('21. Blocking orders — a resting sell reserves the shares an exit needs', plain, blockingOrders);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {
