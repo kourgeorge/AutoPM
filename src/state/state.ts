@@ -19,7 +19,9 @@ import { DATA_DIR, ensureDataDir } from '../core/paths';
  *  - entry baselines (`entryPrice`, `stopLevel`, `takeProfitLevel`, `openedAt`,
  *    `entryDecisionId`) are written ONCE at fill and never again;
  *  - `sessionHigh` / `sessionLow` are advanced only by the L2 feature computation;
- *  - `lastPrice` is purely informational — nothing measures from it.
+ *  - `lastPrice` is purely informational — nothing measures from it;
+ *  - `stopOrderId` follows a DIFFERENT rule from the baselines above, spelled out on the
+ *    field itself: it is rewritten every time the stop moves.
  *
  * `sessionHigh` / `sessionLow` widen and never narrow, so they have NO PATH BACK: a bad
  * price is permanent for the life of the position. Do not add a startup pass that narrows
@@ -42,6 +44,23 @@ export interface PositionSnapshot {
   openedAt?: string;          // ISO
   /** Links to the L5 DecisionRecord that opened it — where `atrAtEntry` now lives. */
   entryDecisionId?: string;
+
+  /**
+   * The venue's id for the sell stop resting at `stopLevel`, when one is resting.
+   *
+   * NOT a write-once baseline like the fields above, and the exception is deliberate: Alpaca's
+   * replace mints a NEW id, so every tighten changes this. The rule is
+   *  - written when the stop is armed (`strategy/stopOrders.ts`),
+   *  - rewritten on every tighten, to whatever id the venue now uses,
+   *  - cleared when the order leaves the venue, or on exit.
+   * Its write path is `patchPositionSnapshot`, the in-life path — never `openPositionSnapshot`.
+   *
+   * `undefined` means NO STOP IS RESTING, which is a real and common state: crypto cannot have
+   * one, an entry whose fill was not confirmed in time has not been armed yet, and a stop that
+   * already triggered is gone. It never means "unknown" — the sweep clears a stale id rather
+   * than leaving it to be trusted, because a stale id reads as protection that is not there.
+   */
+  stopOrderId?: string;
 }
 
 export interface SystemState {
@@ -110,6 +129,35 @@ let _ephemeral = false;
  * a stop level recorded under one spelling is never dropped in favour of an entry that has
  * none.
  */
+/**
+ * Every field `PositionSnapshot` declares, as data — the load-time whitelist.
+ *
+ * The map has carried retired fields for weeks at a time: `qty`, `lastPrice` and `lastCheckedAt`
+ * outlived the split described above, because nothing rewrites a snapshot wholesale and nothing
+ * read them again to notice. Undeclared fields are dropped here, on the one pass that already
+ * touches every entry, so the file cannot drift from the interface a second time.
+ *
+ * A field added to the interface must be added here too, or it will be silently discarded on the
+ * next load — the cost of the guarantee, and the reason the list sits directly under the type.
+ */
+const SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
+  'symbol',
+  'entryPrice',
+  'sessionHigh',
+  'sessionLow',
+  'stopLevel',
+  'takeProfitLevel',
+  'openedAt',
+  'entryDecisionId',
+  'stopOrderId',
+]);
+
+function keepDeclaredFields(snap: PositionSnapshot): PositionSnapshot {
+  return Object.fromEntries(
+    Object.entries(snap).filter(([k]) => SNAPSHOT_FIELDS.has(k)),
+  ) as unknown as PositionSnapshot;
+}
+
 function canonicaliseSnapshots(
   raw: Record<string, PositionSnapshot> | undefined,
 ): Record<string, PositionSnapshot> {
@@ -117,7 +165,7 @@ function canonicaliseSnapshots(
   for (const [key, snap] of Object.entries(raw ?? {})) {
     if (!snap || typeof snap !== 'object') continue;
     // `symbol` keeps the spelling it was written with — it is the label; the key is the join.
-    const withSymbol: PositionSnapshot = { ...snap, symbol: snap.symbol ?? key };
+    const withSymbol: PositionSnapshot = keepDeclaredFields({ ...snap, symbol: snap.symbol ?? key });
     const canon = canonicalSymbol(withSymbol.symbol);
     const prior = out[canon];
     out[canon] = prior ? { ...prior, ...stripUndefined(withSymbol) } : withSymbol;

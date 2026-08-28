@@ -439,7 +439,7 @@ async function buildPortfolioContext(
   // and reports nothing, which is indistinguishable from a position behaving well.
   const unstopped = rows.filter(r => r.e && r.snap?.stopLevel == null).map(r => r.label);
   if (unstopped.length > 0) {
-    lines.push(`Held at the venue with no stop recorded here — the stop detector has no level to compare against and will report nothing: ${unstopped.join(', ')}.`);
+    lines.push(`Held at the venue with no stop recorded here — the stop detector has no level to compare against and will report nothing, and since the venue stop is placed FROM that level, this system has armed nothing at the venue either: ${unstopped.join(', ')}. Fix with annotate_position; BROKER ORDERS shows what actually rests there.`);
   }
 
   if (exp) {
@@ -573,15 +573,19 @@ const MAX_LESSONS = 20;
 /**
  * What is actually resting at the venue.
  *
- * Rendered EVERY cycle, including when the book is empty, and that is the point: the model has
- * asserted a "bracket in place" for positions this system opened with a bare market order, and
- * the correction has to be present unprompted rather than waiting for someone to ask. The
- * section reports the venue and this system's own recorded stop as two separate facts — it never
- * merges them into "protected", because which of the two holds the stop determines who exits.
+ * Rendered EVERY cycle, including when the book is empty, and that is the point: this section
+ * exists because the model asserted a "bracket in place" for positions that had none, and the
+ * correction has to be present unprompted rather than waiting for someone to ask.
+ *
+ * The correction has changed shape. A stop IS now sent to the venue, so the false claim to guard
+ * against is no longer "the broker is protecting you" — it is the assumption that a level recorded
+ * here is necessarily resting there. Two separate facts, never merged into "protected", because
+ * which of the two holds the stop determines who exits: the detector while this runs, or the venue
+ * while it does not.
  */
 async function buildBrokerOrders(): Promise<string> {
   const lines = ['=== BROKER ORDERS ==='];
-  lines.push('This system sends only market orders. Anything else below was placed outside it, and a stop resting at the venue is NOT what the stop detector watches — that is the SL recorded in PORTFOLIO CONTEXT.');
+  lines.push('This system sends market orders and protective sell stops. A stop matching a position\'s recorded SL is its own; anything else below was placed outside it. A stop resting here can fill without an execute_exit call.');
 
   let view: Awaited<ReturnType<typeof brokerOrderView>>;
   try {
@@ -594,7 +598,7 @@ async function buildBrokerOrders(): Promise<string> {
   }
 
   if (view.orders.length === 0) {
-    lines.push('Nothing is resting at the venue. No stop, target or bracket exists anywhere but in this system.');
+    lines.push('Nothing is resting at the venue. Every stop is a level in this system only, watched by the breach detector while this process runs and by nothing at all while it does not.');
   } else {
     for (const row of view.byPosition) {
       for (const o of row.orders) {
@@ -604,8 +608,22 @@ async function buildBrokerOrders(): Promise<string> {
     for (const o of view.ordersWithoutPosition) {
       lines.push(`  ${o.symbol.padEnd(8)}${describeOrder(o)}  NO OPEN POSITION`);
     }
+    // The second axis, restated as a list for the same reason PORTFOLIO CONTEXT restates
+    // `unstopped`: a per-row absence is easy to read past, and this one is the difference between
+    // protected-while-watched and protected-full-stop.
+    const noVenueStop = view.byPosition
+      .filter(r => r.stopLevelRecordedHere != null && r.venueStop == null)
+      .map(r => r.symbol);
+    if (noVenueStop.length > 0) {
+      lines.push(`SL recorded here but NO stop resting at the venue — protected only while this process runs: ${noVenueStop.join(', ')}. Permanent for a crypto pair (the venue rejects a plain stop on a coin); for an equity the stop sweep retries every minute, so it is either seconds old or being refused.`);
+    }
+
     for (const m of view.stopMismatches) {
-      lines.push(`${m.symbol}: SL recorded here $${m.recordedHere.toFixed(2)}, stop order at the venue $${m.atVenue.toFixed(2)}. Both are real and they are different levels.`);
+      lines.push(
+        m.kind === 'ours'
+          ? `${m.symbol}: DEFECT — this system's own stop rests at the venue at $${m.atVenue.toFixed(2)} while the SL recorded here is $${m.recordedHere.toFixed(2)}. One order, two accounts of it; the venue's is what will fire.`
+          : `${m.symbol}: SL recorded here $${m.recordedHere.toFixed(2)}, and a stop placed outside this system rests at the venue at $${m.atVenue.toFixed(2)}. Both are real and they are different levels.`,
+      );
     }
   }
 

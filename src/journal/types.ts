@@ -52,6 +52,24 @@ export interface DecisionRecord {
   vetoRule: string | null;
   /** The venue's own words. Only ever set on `rejected` — the antidote to an invented cause. */
   venueMessage: string | null;
+
+  /**
+   * The protective stop resting at the venue for this entry: its order id.
+   *
+   * Only meaningful on an executed `entry`. Exactly one of this and `venueStopMissing` is set
+   * there — a stop is either resting or it is not, and both being null would mean nobody asked.
+   */
+  venueStopId: string | null;
+  /**
+   * Why no stop rests at the venue, when one was expected.
+   *
+   * This is the ONLY durable account of that. `armEntryStop` reports its outcome to the model in
+   * the tool result and to the terminal log, and both are gone by the next cycle — so a position
+   * that sat unprotected until the next sweep left no trace of why, which is exactly the question
+   * asked afterwards. Measured on 2026-08-28: MA filled 2.9s after submit, inside the fill-wait,
+   * and was still armed 38s later by the sweep rather than by the entry. Unanswerable at the time.
+   */
+  venueStopMissing: string | null;
   pnl: number | null;
 
   /** `Policy.version` at the moment of the decision — a number, as declared. */

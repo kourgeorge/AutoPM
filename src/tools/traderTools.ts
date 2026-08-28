@@ -30,7 +30,8 @@ import {
   upsertPositionSnapshot,
   removePositionSnapshot,
 } from '../state/state';
-import { canonicalSymbol, sameSymbol } from '../core/symbols';
+import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
+import { canTighten, moveStopTo, type ArmResult } from '../strategy/stopOrders';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
@@ -60,19 +61,19 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_open_orders',
-    description: 'Read the orders actually resting at the venue right now, grouped by position. This system places only market orders, so anything else listed was placed outside it. A stop order resting at the venue is NOT what the stop detector watches — that is the stopLevel recorded here, reported alongside it. Use this to answer "is there a stop on my positions" instead of assuming either way.',
+    description: 'Read the orders actually resting at the venue right now, grouped by position. This system places market orders and protective sell stops; a stop whose orderId matches the position\'s stopOrderIdRecordedHere is its own, and anything else was placed outside it. Two separate facts per position: stopLevelRecordedHere is the level the stop detector watches while this process runs, venueStop is the order that protects the position when it is not. Use this to answer "is there a stop on my positions, and where" instead of assuming either way.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'execute_entry',
-    description: 'Buy at market. The stop and target are recorded as YOUR baselines and watched by this system, not sent to the venue as bracket legs — nothing exits the position but an execute_exit call. Risk rules (max positions, buying power, daily loss limit) are enforced and return an error if violated. The filled qty may be smaller than requested if the macro regime caps it; the result reports what was actually bought.',
+    description: 'Buy at market. The stop is recorded as YOUR baseline AND placed at the venue as a real resting GTC sell stop, so the position stays protected while this process is not running — which means the stop can fill on its own, without an execute_exit call. The target is recorded only and is not sent anywhere. The result reports under venueStop whether the stop actually rests at the venue, and why not when it does not (crypto cannot have one; a fill that did not confirm in time is retried by the stop sweep). Risk rules (max positions, buying power, daily loss limit) are enforced and return an error if violated. The filled qty may be smaller than requested if the macro regime caps it; the result reports what was actually bought.',
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string' },
         qty: { type: 'number', description: 'Number of shares to buy.' },
         price: { type: 'number', description: 'Current/expected entry price.' },
-        stopLoss: { type: 'number', description: 'Absolute stop-loss price.' },
+        stopLoss: { type: 'number', description: 'Absolute stop-loss price. A real sell stop is placed at the venue at this level, so choose it as a price you are content to be sold at unattended, not as a rough marker.' },
         takeProfit: { type: 'number', description: 'Absolute take-profit price.' },
         atr: { type: 'number', description: 'ATR at entry. Recorded as the baseline the stop was sized against.' },
         reason: { type: 'string', description: 'One-sentence reason for the entry.' },
@@ -83,7 +84,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'annotate_position',
-    description: 'Retrofit baselines (stop, target, thesis) onto a position that was opened without them — legacy positions, externally opened positions, or any holding where NO STOP RECORDED HERE appears. Writes the stop into the state so the stop detector begins watching it immediately. Records a hold decision in the journal so the thesis survives cycle boundaries. Call this before reasoning further about any unstopped position.',
+    description: 'Set or tighten the stop, target and thesis on a position — one opened without them (legacy or external holdings, anything showing NO STOP RECORDED HERE) or one whose stop you now want raised. Writes the stop into the state so the stop detector begins watching it immediately, AND moves the real sell stop resting at the venue to match, so the level holds while this process is not running. TIGHTEN-ONLY: a stop can be raised or restated, never widened — a lower stop is refused as stop_loosened. If the thesis has changed enough that the old stop is wrong, exit rather than giving the position more room. Records a hold decision in the journal so the thesis survives cycle boundaries.',
     input_schema: {
       type: 'object',
       properties: {
@@ -579,11 +580,15 @@ async function toolGetAccount(): Promise<string> {
 }
 
 /**
- * What this system placed at the venue: nothing but market orders. Stated here once because
- * both the tool and the cycle context have to say it, and it is the fact the model got wrong.
+ * What this system places at the venue, stated once because both the tool and the cycle context
+ * have to say it, and it is the fact the model got wrong in both directions.
+ *
+ * It used to say "only market orders", which was true and is now false: entries arm a real
+ * resting sell stop. The correction that matters is the one about IDENTITY — the id, not the
+ * type, is what says whose order it is.
  */
 const VENUE_STOPS_CAVEAT =
-  'This system places only market orders — it never sends a stop, bracket or trailing order to the venue. Any order listed here that is not a market order was placed outside this system. Stop coverage as this system measures it is stopLevelRecordedHere, which is what the stop detector compares the price against; a stop resting at the venue is not.';
+  'This system places market orders and protective sell stops. A stop whose orderId matches the position\'s stopOrderIdRecordedHere is this system\'s own, placed from the recorded stopLevel; any other order listed here was placed outside this system. The two facts stay separate on purpose: stopLevelRecordedHere is what the stop detector compares the price against while this process runs, and venueStop is what protects the position when it is not running. Crypto can have no venue stop at all — the venue rejects a plain stop on a coin.';
 
 export interface BrokerOrderView {
   /** Every order resting at the venue, ungrouped. */
@@ -591,13 +596,38 @@ export interface BrokerOrderView {
   byPosition: Array<{
     symbol: string;
     qty: number;
+    /** The level the `stop_breach` detector compares the price against, while this runs. */
     stopLevelRecordedHere: number | null;
+    /** The order id this system believes its own stop rests under, if it armed one. */
+    stopOrderIdRecordedHere: string | null;
+    /**
+     * The stop actually resting at the venue, and whether it is this system's.
+     *
+     * `null` means NOTHING protects this position when the process is down. That is the fact
+     * worth surfacing, and it stays a separate field from `stopLevelRecordedHere` rather than
+     * being merged into "has a stop", because which place the stop lives in is the question.
+     */
+    venueStop: { orderId: string; level: number; isOurs: boolean } | null;
     orders: OpenOrder[];
   }>;
   /** Resting orders with no matching open position — a buy waiting to fill, or an orphan. */
   ordersWithoutPosition: OpenOrder[];
-  /** Symbols where a stop exists in both places and the two levels differ. */
-  stopMismatches: Array<{ symbol: string; recordedHere: number; atVenue: number }>;
+  /**
+   * Symbols where a stop exists in both places and the two levels differ — which is TWO
+   * different situations, and reading them as one was the old shape's mistake.
+   *
+   *  - `kind: 'ours'` — the venue stop is this system's own, and state disagrees with it about
+   *    the level. That is a DEFECT: one order, two accounts of it. A tighten that the venue
+   *    accepted while the state write failed, or the reverse.
+   *  - `kind: 'other_actor'` — two real levels, set by two actors, both standing. Not a defect;
+   *    the earlier one will fire first and neither is wrong.
+   */
+  stopMismatches: Array<{
+    symbol: string;
+    recordedHere: number;
+    atVenue: number;
+    kind: 'ours' | 'other_actor';
+  }>;
 }
 
 /**
@@ -621,27 +651,39 @@ export async function brokerOrderView(): Promise<BrokerOrderView> {
     mine.forEach(o => claimed.add(o.id));
 
     const snap = Object.values(snapshots).find(s => canonicalSymbol(s.symbol) === key);
+    const recordedId = snap?.stopOrderId ?? null;
+
+    // Ours FIRST, by id, before falling back to "any resting stop". On a position carrying both
+    // this system's stop and a hand-placed one, taking whichever came back first would report
+    // someone else's level as ours and call a perfectly consistent state a mismatch.
+    const resting = mine.filter(
+      o => o.side === 'sell' && (o.type === 'stop' || o.type === 'stop_limit') && o.stopPrice != null,
+    );
+    const ours = recordedId ? resting.find(o => o.id === recordedId) : undefined;
+    const chosen = ours ?? resting[0];
+
     return {
       symbol: p.symbol,
       qty: p.qty,
       stopLevelRecordedHere: snap?.stopLevel ?? null,
+      stopOrderIdRecordedHere: recordedId,
+      venueStop: chosen
+        ? { orderId: chosen.id, level: chosen.stopPrice!, isOurs: chosen.id === recordedId }
+        : null,
       orders: mine,
     };
   });
 
   const stopMismatches: BrokerOrderView['stopMismatches'] = [];
   for (const row of byPosition) {
-    if (row.stopLevelRecordedHere == null) continue;
-    const venueStop = row.orders.find(
-      o => (o.type === 'stop' || o.type === 'stop_limit') && o.stopPrice != null,
-    );
-    if (!venueStop) continue;
+    if (row.stopLevelRecordedHere == null || row.venueStop == null) continue;
     // A cent of tolerance: the same level rounded differently is not a disagreement.
-    if (Math.abs(venueStop.stopPrice! - row.stopLevelRecordedHere) > 0.01) {
+    if (Math.abs(row.venueStop.level - row.stopLevelRecordedHere) > 0.01) {
       stopMismatches.push({
         symbol: row.symbol,
         recordedHere: row.stopLevelRecordedHere,
-        atVenue: venueStop.stopPrice!,
+        atVenue: row.venueStop.level,
+        kind: row.venueStop.isOurs ? 'ours' : 'other_actor',
       });
     }
   }
@@ -660,7 +702,23 @@ async function toolGetOpenOrders(): Promise<string> {
   const caveats = [VENUE_STOPS_CAVEAT];
   for (const m of view.stopMismatches) {
     caveats.push(
-      `${m.symbol}: stop recorded here is $${m.recordedHere} and a stop order rests at the venue at $${m.atVenue}. Both are real; they are different levels set by different actors.`,
+      m.kind === 'ours'
+        ? `${m.symbol}: THIS SYSTEM'S OWN stop rests at the venue at $${m.atVenue} while the level recorded here is $${m.recordedHere}. One order, two accounts of it — the venue's is the one that will actually fire. This is a defect, not two actors; report it rather than trading around it.`
+        : `${m.symbol}: stop recorded here is $${m.recordedHere} and a stop order placed OUTSIDE this system rests at the venue at $${m.atVenue}. Both are real; they are different levels set by different actors, and the higher one fires first.`,
+    );
+  }
+
+  // A recorded level with nothing resting behind it means the position is protected only while
+  // this process runs. Said out loud, because a quiet `venueStop: null` in a JSON blob is the
+  // kind of absence that reads as "fine".
+  const naked = view.byPosition.filter(r => r.stopLevelRecordedHere != null && r.venueStop == null);
+  if (naked.length > 0) {
+    caveats.push(
+      `No stop is resting at the venue for ${naked.map(r => r.symbol).join(', ')}. `
+      + `The recorded level is watched by the breach detector, which only watches while this `
+      + `process is running — these positions are unprotected overnight and through a crash. `
+      + `For a crypto pair that is permanent (the venue rejects a plain stop on a coin); for an `
+      + `equity the stop sweep retries every minute, so it is either very new or being refused.`,
     );
   }
   const unrecognised = view.orders.filter(o => o.type === 'other');
@@ -765,6 +823,19 @@ function journalRefusal(
  * The stop is validated against the CURRENT price, not the entry price. An inherited
  * position can be far underwater, and every sane stop on it is then above the old entry —
  * validating against entry would reject exactly the levels worth setting.
+ *
+ * BEHAVIOUR CHANGE, and the one worth knowing about: this used to accept any stop below the
+ * current price, in either direction, so the same tool that tightened risk could widen it. It is
+ * now TIGHTEN-ONLY. A stop may be raised or restated; moving it down is refused as
+ * `stop_loosened`, and the refusal is journalled with that rule name so
+ * `grep '"vetoRule":"stop_loosened"'` can answer "how often did the model try to widen its risk"
+ * months later. Widening a stop as a position moves against you is the mechanism by which a small
+ * loss becomes a large one, and it always has a reason at the time.
+ *
+ * The venue stop moves with the recorded level, which is the point of the whole feature: one
+ * number, in both places. It is moved AFTER the state write and its failure is reported rather
+ * than thrown — the recorded level and its detector are the fallback, and losing that write over
+ * a venue refusal would be the worse outcome.
  */
 async function toolAnnotatePosition(input: Record<string, unknown>): Promise<string> {
   const { symbol, stopLoss, takeProfit, thesis } = input as {
@@ -807,6 +878,30 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     return JSON.stringify({ error: `takeProfit $${takeProfit} must be above the current price $${currentPrice.toFixed(2)}` });
   }
 
+  // Tighten-only. `canTighten` is shared with the stop sweep so the tool and the repair pass
+  // cannot come to different conclusions about what counts as loosening.
+  //
+  // Journalled as a veto with a machine-readable rule, exactly like the guards in
+  // `orderManager`, because the interesting question is not this one refusal — it is the pattern
+  // across a month.
+  if (!canTighten(snap?.stopLevel, stopLoss)) {
+    recordDecision(decision('veto', 'guard', {
+      symbol,
+      rationale: thesis,
+      vetoRule: 'stop_loosened',
+      intendedStop: stopLoss,
+      price: currentPrice,
+    }));
+    return JSON.stringify({
+      error: `stopLoss $${stopLoss} is below the stop already recorded for ${symbol} ($${snap!.stopLevel}). `
+        + `Stops are tighten-only: they can be raised or restated, never widened. If the thesis has `
+        + `changed enough that the old stop is wrong, exit the position rather than giving it more room.`,
+      rejectedBy: 'guard',
+      rule: 'stop_loosened',
+      recordedStop: snap!.stopLevel,
+    });
+  }
+
   // Record a hold decision: this becomes the entryDecisionId the portfolio context resolves
   // as the thesis, so "rationale not recorded" is replaced by the supplied text next cycle.
   const record = recordDecision(decision('hold', 'trader', {
@@ -838,7 +933,20 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     return JSON.stringify({ error: `Failed to record the stop for ${symbol} — state still shows ${written?.stopLevel ?? 'no stop'}` });
   }
 
-  return JSON.stringify({ ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null, entryPrice: effectiveEntry, entryDecisionId: record.id });
+  // Now make the venue agree. `moveStopTo` replaces a resting stop rather than cancelling and
+  // re-placing it — cancel-then-place would leave a window with no protection at all — and arms
+  // one if none rests, which covers an inherited position being annotated for the first time.
+  const venueStop = isCryptoSymbol(symbol)
+    ? { ok: false as const, reason: `${symbol} is a crypto pair and the venue rejects a plain stop on a coin, so no stop can rest there.` }
+    : await moveStopTo(symbol, held.qty, stopLoss);
+
+  return JSON.stringify({
+    ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
+    entryPrice: effectiveEntry, entryDecisionId: record.id,
+    venueStop: venueStop.ok
+      ? { orderId: venueStop.orderId, note: `The stop resting at the venue is now $${stopLoss}, so this level holds while this process is not running.` }
+      : { orderId: null, note: `The level is recorded and the breach detector is watching it, but the venue stop was NOT moved: ${venueStop.reason} Until the stop sweep succeeds, this level only holds while this process runs.` },
+  });
 }
 
 async function toolExecuteEntry(input: Record<string, unknown>): Promise<string> {
@@ -856,8 +964,9 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
   // the number the model asked for would record a position that was never opened.
   let orderId: string;
   let filledQty: number;
+  let venueStop: ArmResult;
   try {
-    ({ orderId, qty: filledQty } = await enterPosition(signal, qty));
+    ({ orderId, qty: filledQty, venueStop } = await enterPosition(signal, qty));
   } catch (err) {
     const refusal = journalRefusal(err, {
       symbol,
@@ -886,8 +995,15 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
     intendedTarget: takeProfit,
     atrAtEntry: atr,
     orderId,
+    // The only durable account of whether the position is actually protected at the venue. The
+    // tool result below says the same thing, but the model reads that once and the cycle ends;
+    // this answers "why did that position sit naked until the sweep found it" a week later.
+    venueStopId: venueStop.ok ? venueStop.orderId : null,
+    venueStopMissing: venueStop.ok ? null : venueStop.reason,
   }));
 
+  // The one write, which is why `enterPosition` returns the stop's id instead of recording it
+  // itself: until this call runs there is no snapshot to patch.
   openPositionSnapshot({
     symbol,
     entryPrice: price,
@@ -897,11 +1013,18 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
     takeProfitLevel: takeProfit,
     openedAt: record.at,
     entryDecisionId: record.id,
+    ...(venueStop.ok && { stopOrderId: venueStop.orderId }),
   });
 
   return JSON.stringify({
     ok: true, symbol, qty: filledQty, requestedQty: qty,
     price, stopLoss, takeProfit, decisionId: record.id,
+    // Whether the stop is only a level here or also an order at the venue, and WHY when it is
+    // only a level. A quiet `null` would read as "no stop", which is wrong — the level is
+    // recorded and watched either way — and an unexplained one invites a guess.
+    venueStop: venueStop.ok
+      ? { orderId: venueStop.orderId, level: stopLoss, note: 'A real sell stop rests at the venue at this level, so the position is protected while this process is not running.' }
+      : { orderId: null, level: stopLoss, note: `No stop rests at the venue: ${venueStop.reason} The recorded level is still watched by the breach detector, but only while this process runs.` },
   });
 }
 
@@ -930,10 +1053,11 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
 
   let orderId: string;
-  // Resting sell orders this exit had to cancel to free the shares. Reported back because
-  // the model is the only thing that can act on it: a hand-placed venue stop that this exit
-  // removed is protection that no longer exists, and if the sell somehow leaves a remainder
-  // held, nothing at the venue is watching it any more.
+  // Resting sell orders this exit had to cancel to free the shares — which now includes THIS
+  // SYSTEM'S OWN stop, since the position was protected at the venue. Reported back because the
+  // model is the only thing that can act on it: if the sell somehow leaves a remainder held,
+  // nothing at the venue is watching it any more, and a hand-placed order cancelled alongside
+  // ours is not put back by anything (only ours is, and only if the sell itself fails).
   let cancelled: string[] = [];
   try {
     ({ orderId, cancelled } = await exitPosition(symbol, reason));
