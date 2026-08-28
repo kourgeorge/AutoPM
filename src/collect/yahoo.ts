@@ -1,4 +1,5 @@
 import { Bar } from '../core/types';
+import { isCryptoSymbol } from '../core/symbols';
 
 // yahoo-finance2 v4 requires instantiation
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -88,17 +89,14 @@ export interface RawFundamentals {
  * no balance sheet, so there is nothing here to fetch for one; and the three spellings in play
  * (`BTC/USD` as this system writes it, `BTCUSD` as Alpaca reports it, `BTC-USD` as Yahoo wants
  * it) mean a `quoteSummary` on whichever one the caller holds returns nothing or something
- * unrelated. The `/` test is the one both brokers already use to pick a time-in-force; the
- * quote-currency suffix catches the venue's and Yahoo's spellings of the same pair.
+ * unrelated.
  *
- * A ticker ending in a quote currency would be a false positive. None exists in US equities, and
- * the cost if one appears is "unsupported" — a stated unknown, not a wrong number. `BRK-B` is
- * deliberately NOT rejected: the hyphen there is Yahoo's own class-share spelling.
+ * The test itself lives in `core/symbols.ts` as `isCryptoSymbol`, alongside `canonicalSymbol`:
+ * the brokers pick a time-in-force with it and the venue stop path decides whether a stop can
+ * exist at all with it, and two copies of that regex would eventually be two answers.
  */
-const CRYPTO_PAIR = /(^|[/-])(BTC|ETH|LTC|BCH|SOL|DOGE|AVAX|LINK|UNI|AAVE|DOT|MATIC|XRP|ADA)?[/-]?(USD|USDT|USDC)$/;
-
 export async function getFundamentalsRaw(symbol: string): Promise<RawFundamentals> {
-  if (symbol.includes('/') || CRYPTO_PAIR.test(symbol.toUpperCase())) {
+  if (isCryptoSymbol(symbol)) {
     throw new Error(`${symbol}: fundamentals are equities-only — no earnings or balance sheet exists for a crypto pair`);
   }
 
