@@ -38,3 +38,13 @@ ibkr-data/
 # variants, which is where credentials land.
 .claude/
 .bob/
+
+# Conversation artifacts in the repo root, ignored for the same reason .bob/ is: generated
+# by a session, not source. The architecture JSON/HTML and its visual-check renders are
+# ~1.9MB of output regenerable from the code they describe.
+autotrade-architecture.json
+autotrade-system-architecture.html
+autotrade-system-architecture.visual-check.*
+
+# A real position export — actual holdings and cost basis. This repo is PUBLIC.
+autotrade-positions-import.csv
