@@ -8,6 +8,7 @@
  */
 
 import { broker } from '../broker';
+import type { OpenOrder } from '../broker/IBroker';
 import { logger } from '../core/logger';
 import { sameSymbol } from '../core/symbols';
 import { getState } from '../state/state';
@@ -171,10 +172,40 @@ async function applyRegimeSizing(qty: number): Promise<number> {
   }
 }
 
+/**
+ * The open orders that would make a sell of this symbol impossible.
+ *
+ * Alpaca does not count the shares you own, it counts the shares nothing else has a claim
+ * on: `qty_available` is the position minus everything reserved by open SELL orders. A
+ * resting sell stop for the whole position therefore reserves the whole position, and a
+ * market sell alongside it is refused with `403 insufficient qty available (available: 0)`
+ * — measured on CRM 2026-08-28, 25 shares held, 25 reserved by a GTC stop at 186.40.
+ *
+ * Every open sell counts, not only stops. A take-profit limit reserves shares by exactly
+ * the same arithmetic, and a partially filled sell reserves its remainder. Buys are
+ * irrelevant: they reserve buying power, not shares.
+ *
+ * Pure and exported so the replay harness can assert the selection without a venue — the
+ * decision about what is in the way is the part worth pinning, and the cancelling is the
+ * part that needs a broker.
+ */
+export function restingSells(orders: OpenOrder[], symbol: string): OpenOrder[] {
+  // `sameSymbol` for the same reason it is used below: the venue says `BTCUSD` where the
+  // caller says `BTC/USD`, and with `===` the blocking order would be invisible.
+  return orders.filter((o) => o.side === 'sell' && sameSymbol(o.symbol, symbol));
+}
+
+/** One line per cancelled order, for the log and for the model's tool result. */
+function describe(o: OpenOrder): string {
+  const trigger = o.stopPrice ?? o.limitPrice;
+  return `${o.rawType} sell ${o.qty}${o.filled > 0 ? ` (${o.filled} filled)` : ''}`
+    + `${trigger !== undefined ? ` @ ${trigger}` : ''} [${o.id}]`;
+}
+
 export async function exitPosition(
   symbol: string,
   reason: string,
-): Promise<{ orderId: string }> {
+): Promise<{ orderId: string; cancelled: string[] }> {
   const positions = await broker.getPositions();
   // `sameSymbol`, for the same reason as `already_holding` above — with `===` a crypto
   // position could not be exited AT ALL: the venue reports `BTCUSD`, the caller says
@@ -204,7 +235,45 @@ export async function exitPosition(
   if (!nod.granted) reject(nod.rule, nod.message);
 
   logger.trade(`Exiting ${symbol}: ${reason}`);
+
+  // Clear the reservation before selling, and only AFTER approval — cancelling the
+  // protection on an exit the operator then denies would leave the position worse off than
+  // if the tool had never been called.
+  //
+  // There is no restore path, and that is a property of the interface rather than an
+  // omission here: `OrderRequest.type` is `market | limit`, so this system cannot place a
+  // stop order at all. Nothing it opens has ever had venue-side protection — a stop here is
+  // a level in `positionSnapshots` that the `stop_breach` detector watches. Cancelling a
+  // hand-placed venue stop therefore returns the position to this system's normal posture,
+  // which is the only reason it is acceptable to do it unattended.
+  const cancelled: string[] = [];
+  for (const order of restingSells(await broker.getOpenOrders(), symbol)) {
+    try {
+      await broker.cancelOrder(order.id);
+    } catch (err: any) {
+      // Refuse the exit rather than sell into a reservation that is still standing. Nothing
+      // has changed at this point — the order still rests, the position is still protected —
+      // so aborting is the cheap outcome and the venue's own words are the reason.
+      //
+      // Strict on purpose. An order that had already filled or been cancelled would not have
+      // come back from `getOpenOrders`, so the only way here is a genuine venue failure or
+      // the narrow race between the list and the cancel; the retry after that race succeeds
+      // because the order is no longer listed.
+      reject(
+        'resting_order_not_cancelled',
+        `Cannot exit ${symbol}: ${describe(order)} reserves the shares and the venue refused `
+        + `to cancel it — ${err?.response?.data?.message ?? err?.message ?? String(err)}`,
+      );
+    }
+    cancelled.push(describe(order));
+    logger.trade(`Cancelled ${describe(order)} — it reserved the ${symbol} shares`);
+  }
+
+  // CAVEAT, IBKR ONLY: `IBKRBroker.cancelOrder` does not await anything — TWS takes the
+  // request and confirms asynchronously, so the loop above reports success it has not seen.
+  // A sell placed immediately after can still race the cancellation. Alpaca's is a DELETE
+  // that either returns or throws, so there the cancellation is settled before the sell.
   const { id } = await broker.placeOrder({ symbol, side: 'sell', qty: pos.qty, type: 'market' });
   logger.trade(`Exit order ${id} submitted for ${symbol}`);
-  return { orderId: id };
+  return { orderId: id, cancelled };
 }

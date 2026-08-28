@@ -930,8 +930,13 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
 
   let orderId: string;
+  // Resting sell orders this exit had to cancel to free the shares. Reported back because
+  // the model is the only thing that can act on it: a hand-placed venue stop that this exit
+  // removed is protection that no longer exists, and if the sell somehow leaves a remainder
+  // held, nothing at the venue is watching it any more.
+  let cancelled: string[] = [];
   try {
-    ({ orderId } = await exitPosition(symbol, reason));
+    ({ orderId, cancelled } = await exitPosition(symbol, reason));
   } catch (err) {
     const refusal = journalRefusal(err, {
       symbol,
@@ -972,6 +977,7 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   return JSON.stringify({
     ok: true, symbol, qty, price: exitPrice,
     pnl, reason, decisionId: record.id,
+    ...(cancelled.length > 0 ? { cancelledOrders: cancelled } : {}),
   });
 }
 
