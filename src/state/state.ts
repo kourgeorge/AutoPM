@@ -113,6 +113,35 @@ const DEFAULT_STATE: SystemState = {
   lastPortfolioReviewAt: '',
 };
 
+/**
+ * Every field `SystemState` declares, as data — the top-level load-time whitelist.
+ *
+ * `SNAPSHOT_FIELDS` below guards the inside of each snapshot; this guards the object that holds
+ * them, and it was missing for the whole life of the file. `loadFromDisk` merged with a spread,
+ * which keeps EVERY key the file happens to carry, and every debounced save writes `_state` back
+ * out whole — so a field this code has never heard of is re-committed on each write, forever.
+ * Four were riding along that way (`ideaCandidates`, `recentAlerts`, `watchlistExtension`,
+ * `shadowWatch`); they appear in no commit of `src/` ever made, and an architecture note had
+ * already begun treating their presence as a feature to build on.
+ *
+ * Derived from `DEFAULT_STATE` rather than hand-listed, which makes it self-maintaining: the
+ * literal is typed `SystemState`, so a new required field that is not added there fails to
+ * compile, and the whitelist grows with it. That is the one thing `SNAPSHOT_FIELDS` cannot do —
+ * every snapshot field is optional, so its list has to be maintained by hand.
+ *
+ * Dropping is SILENT, like its sibling. A load-time log is written before `attachUI`, and the
+ * blessed screen clears the terminal as it is built, so on the daemon the message would be
+ * erased before anyone could read it. The file's own contents are the report.
+ */
+const STATE_FIELDS: ReadonlySet<string> = new Set(Object.keys(DEFAULT_STATE));
+
+function keepDeclaredStateFields(raw: unknown): Partial<SystemState> {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter(([k]) => STATE_FIELDS.has(k)),
+  ) as Partial<SystemState>;
+}
+
 let _state: SystemState = { ...DEFAULT_STATE };
 let _writeTimer: ReturnType<typeof setTimeout> | null = null;
 let _ephemeral = false;
@@ -183,7 +212,7 @@ function loadFromDisk(): void {
   try {
     if (fs.existsSync(STATE_FILE)) {
       const raw = fs.readFileSync(STATE_FILE, 'utf8');
-      const parsed = { ...DEFAULT_STATE, ...JSON.parse(raw) };
+      const parsed = { ...DEFAULT_STATE, ...keepDeclaredStateFields(JSON.parse(raw)) };
       _state = { ...parsed, positionSnapshots: canonicaliseSnapshots(parsed.positionSnapshots) };
     }
   } catch {
