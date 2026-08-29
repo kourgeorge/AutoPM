@@ -93,7 +93,7 @@ So this is not a rebuild. It is a list of specific missing **edges**.
 |---|---|---|---|---|---|---|---|
 | P0 | `get_exposure` + weights/sectors in PORTFOLIO CONTEXT | 1, 2 | S | no | no | no | **shipped** |
 | P1 | Thesis + age + MFE/MAE in PORTFOLIO CONTEXT | 3 | XS | no | no | no | **shipped** |
-| P2 | `get_benchmark` — one number vs SPY | 4 | S | no | no | no | unbuilt |
+| P2 | `get_benchmark` — one number vs SPY | 4 | S | no | no | no | **shipped** |
 | P3 | Portfolio Doctor: `equityPeak` + 2 portfolio detectors | 1 | M | **2** | **3** | no | unbuilt |
 | P4 | `update_stop` (tighten-only) + partial `execute_exit` | 5 | M | no | no | **yes** | unbuilt |
 | P5 | `get_calendar` + `get_fundamentals` — earnings dates, crowding, revisions | — | S | no | no | no | **shipped** |
@@ -297,76 +297,90 @@ having called `get_journal`.
 
 ---
 
-## 8. P2 — One benchmark number
+## 8. P2 — One benchmark number — **SHIPPED**
 
-**Closes gap 4. Size S. Unbuilt.**
+**Closes gap 4. Size S.**
 
 ### Why
 
 Nine absolute statistics cannot answer "is this worth doing instead of holding SPY". One number
 can.
 
-### The conflation to avoid
+### The conflation avoided
 
-- `scorecard()` (`src/review/metrics.ts`) measures **realised round trips**. Comparing that sum to
-  SPY's return is meaningless: it excludes open positions and has no denominator.
-- The honest comparison is **equity-curve total return vs SPY total return over the same window**.
+- `scorecard()` (`src/review/metrics.ts`) measures **realised round trips**, in dollars, with no
+  capital base. Setting that sum beside SPY's percentage compares closed trades to continuous
+  exposure — not a comparison at all.
+- The honest pairing is **equity-curve total return vs SPY total return over the same sessions**,
+  which needs a different source and a different unit.
 
-So this is **not** a field inside `Scorecard`.
+So this is **not** a field inside `Scorecard`, and `Scorecard` now carries a caveat on every call
+saying so and naming `get_benchmark`.
 
-### New file: `src/review/benchmark.ts`
+### What shipped
 
-```ts
-export interface Benchmark {
-  window: { from: string; to: string; days: number; sessions: number };
-  portfolioReturnPct: number;    // equity curve, first → last, percentage points
-  spyReturnPct: number;          // SPY close → close, same window
-  excessPct: number;             // portfolio − spy
-  maxDrawdownPct: number;        // equity-curve peak-to-trough — the risk half
-  caveats: string[];
-}
+**`src/review/benchmark.ts`** — `benchmark({ days = 30 }): Promise<Benchmark>`:
 
-export async function benchmark(opts?: { days?: number }): Promise<Benchmark>;
+```
+window: { from, to, days, sessions }   // sessions = dates present in BOTH series
+portfolioReturnPct  spyReturnPct  excessPct
+portfolioSharpe     spySharpe            // annualised, ZERO risk-free on both legs
+portfolioVolPct     spyVolPct            // annualised sd of daily returns
+maxDrawdownPct      spyMaxDrawdownPct
+caveats[]
 ```
 
-`maxDrawdownPct` here is an **equity-curve peak-to-trough** and is *not* the same statistic as
-`Scorecard.maxDrawdown`, which is a running sum over round-trip P&L. Say so in the field comment
-so nobody later "unifies" them.
+`maxDrawdownPct` is an **equity-curve peak-to-trough in percent** and is *not*
+`Scorecard.maxDrawdown`, which is a running sum over round-trip P&L in dollars and cannot see the
+mark-to-market path of an open position. The two disagree and both are right; the field comment
+says so.
 
-### Reuse
+Legs: `alpacaTrading.get('/v2/account/portfolio/history', { period: '<days>D', timeframe: '1D' })`
+and `collectBars('SPY', days + 10, '1Day')`, fetched in parallel, then aligned **by ET date, never
+by index**. Either leg can be absent and the other is still returned with a caveat naming which —
+a zero standing in for the portfolio leg would read as "flat" rather than "unknown".
 
-- The Alpaca portfolio-history path already wired in `src/tools/alpacaDataTools.ts`:
-  `tradingClient.get('/v2/account/portfolio/history', { params: { period, timeframe } })`. Use
-  `timeframe: '1D'`. That helper returns raw `res.data`; extract the equity series in
-  `benchmark.ts` rather than teaching the tool layer arithmetic.
-- `collectBars('SPY', n)` + `isPresent` for the benchmark leg. Align windows by **date**, not by
-  index — the two series can differ in length around holidays.
+**Sharpe uses a zero risk-free rate on both legs**, deliberately: the comparison that matters is
+against doing nothing, and the reference point is `spySharpe` beside it rather than a textbook
+threshold. Stated as a caveat whenever a Sharpe is reported.
 
-### Mandatory caveats
+**`src/review/metrics.ts`** also gained the dispersion half of its own means, which needed no
+network and no benchmark: `returnPctStdev`, `perTradeSharpe` (mean return over its sd),
+`perTradeSharpeR` (same in units of declared risk), and `expectancyTStat` — how many standard
+errors the mean return sits above **zero**, not above the sample's own mean, because a noisy mean
+is an artificially low bar. `perTradeSharpe` is documented as *not* the Sharpe ratio: there is no
+time in it, so an hourly and a weekly strategy score identically.
 
-- `"window is N sessions — too short for a meaningful comparison"` when `sessions < 30`.
-- `"equity curve includes cash movements — this is not a pure return series"` whenever a deposit
-  or withdrawal falls in the window. **State it; do not adjust for it.** Detect via
-  `get_account_activities` with `activity_types: ['CSD','CSW','JNLC']`, or state it
-  unconditionally as a caveat about the method if that call is unavailable.
-- `"portfolio history unavailable"` → return the SPY leg honestly rather than a zero.
+**Tool `get_benchmark(days?)`**, added to the concierge's shared set too. POLICY.md ADAPTATION:
+*the benchmark is the scoreboard, the scorecard explains it* — plus the line that losing to the
+index while making money is the finding most worth a `write_lesson`, since it is invisible without
+the call.
 
-### Tool: `get_benchmark`
+### Traps this hit
 
-Optional `days` (default 30). Per §5.2.
+- Alpaca reports **equity 0** for sessions before the account was funded. Treated as a level, that
+  manufactures a −100 % day; they are dropped, which is why `sessions` ran 17 of 22 raw points on
+  the first live probe.
+- The two series must join on a date in **exchange time**. Equity is stamped at the ET close and a
+  daily bar at the ET open; read in UTC, some of them roll onto the neighbouring date and the join
+  goes one day out of step.
+- `excessPct` is computed from **unrounded** returns, so it can differ by 0.01 from the two
+  rounded fields beside it. That is correct and the alternative is worse.
+- Cash movements are **detected and stated, never adjusted for** — `/v2/account/activities` with
+  `activity_types: CSD,CSW,JNLC`, re-filtered locally because Alpaca's `after` is on activity
+  creation. A flow-weighted return is not derivable from a daily series.
+- Under `BROKER=ibkr` there is no equity curve to read: `alpacaTrading` reaches the Alpaca account
+  only when that is the active broker. Returns the SPY leg plus an explicit caveat.
 
-### POLICY.md
+### Verified
 
-One line in ADAPTATION: the benchmark is the scoreboard, the scorecard explains it. Same
-discipline as `get_scorecard` — never state a number you did not read from the tool.
+`npx tsc --noEmit`, `npm run verify:policy`, and `tmp/probe-benchmark.ts` — 10 assertions against
+live data, all passing: `spyReturnPct` against SPY closes fetched independently, sessions against
+the independent bar count, `portfolioReturnPct` against the raw payload's first/last funded equity,
+`excessPct` identity, non-negative drawdowns, the short-window and zero-risk-free caveats firing,
+and `perTradeSharpe` / `expectancyTStat` against hand arithmetic.
 
-### Verify
-
-`npx tsc --noEmit`; then `tmp/probe-benchmark.ts` cross-checking `spyReturnPct` against SPY closes
-fetched independently, and `portfolioReturnPct` against the first/last equity values in the raw
-portfolio-history payload. Then `npm run verify:policy`.
-
-### Done when
+### Done when — met
 
 `get_benchmark` returns one number the model can quote, and the scorecard's role is explaining
 that number rather than standing in for it.
