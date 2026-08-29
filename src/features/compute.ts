@@ -27,6 +27,8 @@ import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { atr, crossedAbove, ema, rsi } from '../strategy/indicators';
 import { computeSignals, signalSummary, type SignalScore } from '../strategy/signals';
+import { reversalFilter, type ReversalFilter } from '../strategy/reversal';
+import { getCachedFundamentals } from '../collect/fundamentals';
 import {
   getPositionSnapshot,
   getState,
@@ -78,6 +80,12 @@ export interface WatchlistData {
   /** Multi-signal scores for judge-style synthesis by the trader LLM. */
   signals: SignalScore[];
   signalSummary: string;
+  /**
+   * The contrarian entry filter, kept beside the five trend signals and out of their
+   * composite. Present even when the row was not scored — it needs 22 bars where the signals
+   * need `strategy.minBars`, and it says for itself when it had too few.
+   */
+  reversal: ReversalFilter;
 }
 
 export interface AccountData {
@@ -272,6 +280,7 @@ function buildWatchlistData(
   price: Maybe<number>,
   rawBars: Maybe<Bar[]>,
   p: Policy,
+  marketCap: number | null,
 ): WatchlistData {
   const ind = indicatorsFor(rawBars, p);
   const { value, stale, reason: staleReason } = resolve(price);
@@ -281,6 +290,10 @@ function buildWatchlistData(
   const barsArray = isUsable(rawBars) ? rawBars.value : [];
   const signals = barsArray.length >= p.strategy.minBars ? computeSignals(barsArray, p) : [];
   const summary = signals.length > 0 ? signalSummary(signals) : 'insufficient data';
+
+  // Not gated on `minBars`: the reversal window is 22 bars, and refusing it at 50 would make a
+  // shorter series look like a name that has not run when nobody has looked.
+  const reversal = reversalFilter(barsArray, marketCap);
 
   return {
     symbol,
@@ -294,6 +307,7 @@ function buildWatchlistData(
     atr: ind.atr,
     signals,
     signalSummary: summary,
+    reversal,
   };
 }
 
@@ -341,8 +355,18 @@ function buildAccountData(
  *
  * Separate from `collectAndCompute` so the replay harness can feed a synthetic
  * `RawBundle` through the exact code path the daemon uses.
+ *
+ * `marketCaps` is INJECTED rather than read from the fundamentals cache here, and that is the
+ * point: reading `data/fundamentals.json` inside this function would make the replay harness's
+ * verdict depend on whatever happens to be cached on the machine running it. Absent, every
+ * reversal filter reports `sizeBucket: 'unknown'` and says so — which is also what a cold
+ * cache legitimately means.
  */
-export function computeTick(raw: RawBundle, p: Policy): TickData {
+export function computeTick(
+  raw: RawBundle,
+  p: Policy,
+  marketCaps: Record<string, number | null> = {},
+): TickData {
   const state = getState();
   const computedAt = raw.collectedAt;
   const held = isUsable(raw.positions) ? raw.positions.value : [];
@@ -371,7 +395,13 @@ export function computeTick(raw: RawBundle, p: Policy): TickData {
   const watchlist: Record<string, WatchlistData> = {};
   for (const symbol of raw.prices.keys()) {
     if (heldSymbols.has(symbol)) continue;
-    watchlist[symbol] = buildWatchlistData(symbol, price(symbol), bars(symbol), p);
+    watchlist[symbol] = buildWatchlistData(
+      symbol,
+      price(symbol),
+      bars(symbol),
+      p,
+      marketCaps[symbol] ?? null,
+    );
   }
 
   return {
@@ -400,5 +430,20 @@ export async function collectAndCompute(p: Policy = getPolicy()): Promise<TickDa
     watchlist: [...p.strategy.watchlist],
     maxQuoteAgeMs: p.triggers.maxQuoteAgeMs,
   });
-  return computeTick(raw, p);
+  return computeTick(raw, p, marketCaps([...p.strategy.watchlist]));
+}
+
+/**
+ * Market caps for the reversal filter's size leg, cache-only.
+ *
+ * `getCachedFundamentals` and not `getFundamentalsBatch`: one file read per tick, and never a
+ * Yahoo round trip inside the 60s loop. The cost is that a symbol nobody has fetched
+ * fundamentals for reads as `null` and gets the unknown-size threshold — visible in the
+ * filter's own `sizeBucket` and detail line, which is the honest version of "we did not know".
+ */
+function marketCaps(symbols: string[]): Record<string, number | null> {
+  const cached = getCachedFundamentals(symbols);
+  const out: Record<string, number | null> = {};
+  for (const s of symbols) out[s] = cached[s]?.liquidity.marketCap ?? null;
+  return out;
 }

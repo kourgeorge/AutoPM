@@ -219,6 +219,17 @@ function macdSignal(bars: Bar[]): SignalScore {
 /**
  * Compute all signal scores for a symbol given its bar history and policy.
  * Returns an array of 5 signal scores. All computation is deterministic.
+ *
+ * **These five are one family.** Every one of them measures trend: an EMA spread, ADX with
+ * price against EMA50, a 20-day breakout, a MACD histogram, and volume on an up day. In a
+ * trending tape they move together, so their pairwise correlation is high and a 5/5 tally is
+ * closer to one confirmation counted five times than to five independent ones. That is why
+ * `signalTally` reports a `composite` — averaging cannot make correlated evidence independent,
+ * but it stops a vote count from advertising five confirmations that are not there.
+ *
+ * The genuinely decorrelated reading lives in `strategy/reversal.ts`, deliberately outside
+ * this array and outside the composite: it is contrarian and monthly, so it answers "has this
+ * already run?" rather than "is this trending?".
  */
 export function computeSignals(bars: Bar[], policy: Policy): SignalScore[] {
   return [
@@ -235,40 +246,71 @@ export interface SignalTally {
   bearish: number;
   neutral: number;
   total: number;
+  /**
+   * Mean of the raw scores, -1..+1, or null when nothing was scored.
+   *
+   * The number to act on. The vote counts above pass a score of +0.15 and a score of +0.95
+   * through the same dead band, so "3/5 bullish" is identical for a barely-positive tape and a
+   * screaming one; the composite keeps the magnitude the five signals actually produced.
+   * Rounded here, once, so no reader has to decide how much precision a mean of five 2dp
+   * numbers deserves.
+   */
+  composite: number | null;
 }
 
 /**
- * How many signals lean which way.
+ * The five scores reduced two ways: how many lean which way, and what they average to.
  *
- * Exported on purpose. The dead band that decides "bullish" is a judgement, not an
- * arithmetic fact, and it used to be inlined in `signalSummary` alone — so the terminal
- * dashboard, which wants the same verdict in three columns rather than a sentence, would have
- * had to restate `> 0.1` and become a second, silently divergent truth about the same five
- * numbers. One owner, two renderings.
+ * Exported on purpose. Both readings are judgements rather than arithmetic facts — the dead
+ * band that decides "bullish", and the choice to weight the five equally in the mean — and
+ * `> 0.1` used to be inlined in `signalSummary` alone, so the terminal dashboard, which wants
+ * the same verdict in three columns rather than a sentence, would have had to restate it and
+ * become a second, silently divergent truth about the same five numbers. One owner, many
+ * renderings.
+ *
+ * The counts are kept because a reader still wants to know whether the mean came from broad
+ * agreement or from one extreme score dragging four neutrals; they are context for the
+ * composite, not a substitute for it.
  */
 export function signalTally(signals: SignalScore[]): SignalTally {
   let bullish = 0;
   let bearish = 0;
   let neutral = 0;
+  let sum = 0;
 
   for (const s of signals) {
     if (s.score > 0.1) bullish++;
     else if (s.score < -0.1) bearish++;
     else neutral++;
+    sum += s.score;
   }
 
-  return { bullish, bearish, neutral, total: signals.length };
+  // Null, not 0: an unscored symbol and a symbol whose signals cancel out are different
+  // claims, and 0 would read as the second.
+  const composite = signals.length === 0
+    ? null
+    : parseFloat((sum / signals.length).toFixed(3));
+
+  return { bullish, bearish, neutral, total: signals.length, composite };
 }
 
 /**
- * One-line summary: "3/5 bullish, 1 neutral, 1 bearish"
+ * One-line summary: "composite +0.42 - 3/5 bullish, 1 neutral, 1 bearish"
+ *
+ * Composite first, because it is the number POLICY.md thresholds on and the counts are its
+ * context. No surrounding parentheses: callers wrap this themselves (the `entry_signal`
+ * headline appends it in brackets), and a self-parenthesising summary nested inside those
+ * produced `((composite ...))`.
  */
 export function signalSummary(signals: SignalScore[]): string {
-  const { bullish, bearish, neutral } = signalTally(signals);
+  const { bullish, bearish, neutral, composite } = signalTally(signals);
 
   const parts: string[] = [];
   if (bullish > 0) parts.push(`${bullish}/${signals.length} bullish`);
   if (neutral > 0) parts.push(`${neutral} neutral`);
   if (bearish > 0) parts.push(`${bearish} bearish`);
-  return parts.join(', ');
+
+  const lean = parts.join(', ');
+  if (composite === null) return lean;
+  return `composite ${composite >= 0 ? '+' : ''}${composite.toFixed(2)}${lean ? ` - ${lean}` : ''}`;
 }

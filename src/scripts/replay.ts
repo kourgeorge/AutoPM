@@ -52,6 +52,8 @@ import { useEphemeralFillsLedger } from '../review/fillsLedger';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
+import { REVERSAL_LOOKBACK, reversalFilter } from '../strategy/reversal';
+import { signalTally } from '../strategy/signals';
 import { GuardRejection, enterPosition, restingSells } from '../strategy/orderManager';
 import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
@@ -977,6 +979,36 @@ function watchlistScanProjection(): void {
       && msft.tally.bullish === srcMsft.signals.filter((s) => s.score > 0.1).length,
     JSON.stringify(msft?.tally));
 
+  // The number POLICY.md thresholds on, checked against the tick's own scores rather than
+  // against a constant: a hard-coded +0.42 would keep passing while the mean was being taken
+  // over the wrong array.
+  const meanOfSrc = srcMsft.signals.reduce((sum, s) => sum + s.score, 0) / srcMsft.signals.length;
+  check('the composite is the mean of those same scores, not a second reading of the bars',
+    msft !== undefined && near(msft.tally.composite, meanOfSrc, 5e-4),
+    JSON.stringify({ composite: msft?.tally.composite, mean: meanOfSrc }));
+
+  // Reversal travels with the row but stays out of the five. A "consistency" fix that folded it
+  // into `signals` would average a monthly contrarian reading into a same-day trend one, and the
+  // filter would stop being a filter.
+  check('reversal is not a sixth signal: the scored array is still the five trend measures',
+    msft !== undefined
+      && msft.signals.length === 5
+      && !msft.signals.some((s) => /reversal/i.test(s.name)),
+    JSON.stringify(msft?.signals.map((s) => s.name)));
+
+  // The tick reads market caps from cache only and the harness injects none, so `unknown` here
+  // is the contract working. An unknown cap must never be quietly treated as a large one.
+  check('every scored row carries a reversal reading, and a missing market cap says so',
+    msft !== undefined
+      && msft.reversal.oneMonthReturnPct !== null
+      && msft.reversal.sizeBucket === 'unknown'
+      && msft.reversal.marketCap === null,
+    JSON.stringify(msft?.reversal));
+
+  check('and the caveats say the size adjustment did not happen, and where to get it',
+    scan.caveats.some((c) => c.includes('MSFT') && c.includes('get_fundamentals')),
+    JSON.stringify(scan.caveats));
+
   // A row the machine declined to score STAYS, with the reason. Dropped, it would be
   // indistinguishable from a symbol that is not on the watchlist.
   const nvda = scan.rows.find((r) => r.symbol === 'NVDA');
@@ -1006,9 +1038,21 @@ function watchlistScanProjection(): void {
       && scan.caveats.some((c) => c.includes('AAPL') && c.includes('held')),
     JSON.stringify({ heldExcluded: scan.heldExcluded, caveats: scan.caveats }));
 
-  check('rows are ordered by bullish count, descending',
-    scan.rows.every((r, i) => i === 0 || scan.rows[i - 1].tally.bullish >= r.tally.bullish),
-    JSON.stringify(scan.rows.map((r) => [r.symbol, r.tally.bullish])));
+  // Ordered by the continuous reading, not by the vote count: three signals barely past the
+  // dead band outrank two strong ones on a count, and at a screen height that shows six of
+  // eighteen rows that keeps the wrong six.
+  check('rows are ordered by composite, descending',
+    scan.rows.every((r, i) =>
+      i === 0
+      || (scan.rows[i - 1].tally.composite ?? -Infinity) >= (r.tally.composite ?? -Infinity)),
+    JSON.stringify(scan.rows.map((r) => [r.symbol, r.tally.composite])));
+
+  // Unscored sorts last rather than as neutral: no evidence is not the middle of the range.
+  check('an unscored row reports composite null, not 0, and sorts last',
+    nvda !== undefined
+      && nvda.tally.composite === null
+      && scan.rows[scan.rows.length - 1].symbol === 'NVDA',
+    JSON.stringify(scan.rows.map((r) => [r.symbol, r.tally.composite])));
 
   // A table the scheduler has stopped refreshing still reports its numbers — refusing
   // would be a second opinion on staleness, which belongs to observe(). It says its age.
@@ -1440,6 +1484,114 @@ function venueStops(): void {
   check('a nonsense level is refused whatever is recorded', !canTighten(95, 0));
 }
 
+/**
+ * Reversal — the sign convention, and the size interaction that needs a market cap.
+ *
+ * Two things are worth asserting here and the rest is arithmetic nobody will break. First the
+ * SIGN: this score reads the opposite way to the five signal scores, so a future "consistency"
+ * fix that flipped it would silently turn "don't chase" into "do", with nothing else in the
+ * suite noticing. Second the SIZE leg: the same month is chasing in a small cap and not in a
+ * mega cap, which is the only reason a market cap is threaded through `computeTick` at all — so
+ * the injected cap has to arrive at the row, and a missing one has to stay visible instead of
+ * defaulting to a permissive bucket.
+ *
+ * The fixtures are built so the move over the window is an exact percentage: with 60 bars the
+ * window runs from index 38 to index 59, so holding everything up to 38 flat at 100 makes the
+ * return the ramp's end value minus 100, and the expected scores can be written down rather
+ * than copied out of a previous run.
+ */
+function reversalEntryFilter(): void {
+  const p = getPolicy();
+
+  /** 60 closes, flat at 100 until the reversal window opens, then a straight ramp to +pct. */
+  const ranBy = (pct: number): number[] => {
+    const closes = Array.from({ length: 60 }, () => 100);
+    for (let i = 39; i < 60; i++) closes[i] = 100 * (1 + (pct / 100) * ((i - 38) / 21));
+    return closes;
+  };
+
+  const MEGA = 3e12;
+  const SMALL = 1e9;
+  const up12 = series(ranBy(12), at(0));
+
+  // ── The sign, first, because everything else reads off it.
+  const chased = reversalFilter(up12, MEGA);
+  check('a name that ran scores NEGATIVE — the opposite way to a signal score',
+    near(chased.oneMonthReturnPct, 12, 5e-3) && chased.score < 0,
+    JSON.stringify(chased));
+
+  const pulled = reversalFilter(series(ranBy(-10), at(0)), MEGA);
+  check('a name that pulled back scores positive',
+    near(pulled.oneMonthReturnPct, -10, 5e-3) && pulled.score > 0,
+    JSON.stringify(pulled));
+
+  // ── The interaction: one move, two verdicts, and the only difference is the cap.
+  const asSmall = reversalFilter(up12, SMALL);
+  check('the same +12% month is chasing in a small cap and not in a mega cap',
+    asSmall.chasing && !chased.chasing
+      && asSmall.chaseThresholdPct === 8 && chased.chaseThresholdPct === 15,
+    JSON.stringify({ small: asSmall, mega: chased }));
+
+  check('and it is scored harder there, because the threshold it cleared is lower',
+    asSmall.score < chased.score && near(asSmall.score, -0.75, 5e-3) && near(chased.score, -0.4, 5e-3),
+    JSON.stringify({ small: asSmall.score, mega: chased.score }));
+
+  // The threshold is where chasing STARTS, so -1 must sit at twice it, not at it.
+  const doubled = reversalFilter(series(ranBy(30), at(0)), MEGA);
+  check('the score saturates at twice the threshold, not at the threshold',
+    near(chased.score, -0.4, 5e-3) && near(doubled.score, -1, 5e-3),
+    JSON.stringify({ atThreshold: chased.score, atDouble: doubled.score }));
+
+  // ── An unknown cap is a stated gap, never a bucket.
+  const noCap = reversalFilter(up12);
+  check('no market cap means bucket unknown, a middle threshold, and a detail line that says so',
+    noCap.sizeBucket === 'unknown'
+      && noCap.marketCap === null
+      && noCap.chaseThresholdPct === 12
+      && noCap.detail.includes('market cap unknown'),
+    JSON.stringify(noCap));
+  check('and it is not the most permissive case: the mega bucket still tolerates more',
+    noCap.chaseThresholdPct < chased.chaseThresholdPct,
+    JSON.stringify({ unknown: noCap.chaseThresholdPct, mega: chased.chaseThresholdPct }));
+
+  // ── Too little history is a null reading, not a zero move.
+  const short = reversalFilter(series(ranBy(12).slice(-REVERSAL_LOOKBACK), at(0)), MEGA);
+  check('a window that does not fit reports null, scores 0 and never claims chasing',
+    short.oneMonthReturnPct === null && short.score === 0 && !short.chasing
+      && short.detail.includes('insufficient'),
+    JSON.stringify(short));
+
+  // ── And the cap has to survive the trip through the real tick.
+  const world: World = {
+    positions: [],
+    prices: { MSFT: 112, NVDA: 112 },
+    bars: { MSFT: up12, NVDA: up12 },
+  };
+  const snapshot = computeTick(bundle(world, at(0)), p, { MSFT: MEGA, NVDA: SMALL });
+  const megaRow = snapshot.watchlist.MSFT.reversal;
+  const smallRow = snapshot.watchlist.NVDA.reversal;
+  check('computeTick hands each symbol its own market cap, and identical bars still disagree',
+    megaRow.sizeBucket === 'mega' && smallRow.sizeBucket === 'small'
+      && !megaRow.chasing && smallRow.chasing,
+    JSON.stringify({ MSFT: megaRow, NVDA: smallRow }));
+
+  // Injecting nothing is a supported call, not a degraded one — that is what the 60s loop does
+  // for any symbol whose fundamentals have never been fetched.
+  const uncapped = computeTick(bundle(world, at(0)), p);
+  check('and a tick with no caps injected still produces the reading, marked unknown',
+    uncapped.watchlist.MSFT.reversal.oneMonthReturnPct !== null
+      && uncapped.watchlist.MSFT.reversal.sizeBucket === 'unknown',
+    JSON.stringify(uncapped.watchlist.MSFT.reversal));
+
+  // The filter must not leak into the thing it filters: the composite is still the mean of the
+  // five, on a tape where reversal is firmly negative and would drag it if it were folded in.
+  const scores = snapshot.watchlist.NVDA.signals;
+  const mean = scores.length === 0 ? null : scores.reduce((sum, x) => sum + x.score, 0) / scores.length;
+  check('the composite is the mean of the five and excludes the reversal score',
+    mean !== null && near(signalTally(scores).composite, mean, 5e-4) && smallRow.score < 0,
+    JSON.stringify({ composite: signalTally(scores).composite, mean, reversal: smallRow.score }));
+}
+
 async function main(): Promise<void> {
   // Loaded once, before any state is faked — a failure here is a broken policy file,
   // not a failed scenario.
@@ -1498,6 +1650,7 @@ async function main(): Promise<void> {
   await scenario('20. Confirmation and the all-clear — one reading is not a condition', stopped(99), confirmAndResolve);
   await scenario('21. Blocking orders — a resting sell reserves the shares an exit needs', plain, blockingOrders);
   await scenario('22. Venue stops — which positions are naked, and which stop may replace which', plain, venueStops);
+  await scenario('23. Reversal — the reading that disagrees, and the cap that changes it', plain, reversalEntryFilter);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

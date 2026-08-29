@@ -30,6 +30,7 @@
 import type { TickData } from './compute';
 import { signalTally, type SignalTally } from '../strategy/signals';
 import type { SignalScore } from '../strategy/signals';
+import type { ReversalFilter } from '../strategy/reversal';
 
 /**
  * How many missed tick intervals before the table's age is worth a caveat.
@@ -48,6 +49,11 @@ export interface ScanRow {
   signals: SignalScore[];
   tally: SignalTally;
   summary: string;
+  /**
+   * The contrarian filter, kept out of `tally.composite` on purpose. Its `score` reads the
+   * other way round to a signal score: negative means the name has already run.
+   */
+  reversal: ReversalFilter;
   atr: number | null;
   rsi: number | null;
   emaFast: number | null;
@@ -108,6 +114,7 @@ export function watchlistScan(
       signals: w.signals.map((s) => ({ ...s, score: round(s.score, 3) as number })),
       tally: signalTally(w.signals),
       summary: w.signalSummary,
+      reversal: w.reversal,
       atr: round(w.atr, 2),
       rsi: round(w.rsi, 1),
       emaFast: round(w.emaFast, 2),
@@ -119,13 +126,15 @@ export function watchlistScan(
     };
   });
 
-  // A sort on the tally, not a ranking of quality. `signalTally` owns the dead band that
-  // decides "bullish", so ordering by it introduces no new judgement; symbol is the final
-  // tiebreak purely so the same tick always renders in the same order.
+  // A sort on the composite, not a ranking of quality. It orders on the magnitude the five
+  // signals actually produced rather than on how many cleared a dead band, so a name at +0.9
+  // no longer sorts level with one at +0.15; `signalTally` owns that mean, so ordering by it
+  // introduces no new judgement. Unscored rows (composite null) sort last rather than as zero,
+  // because "nobody looked" is not "the signals cancelled out". Symbol is the final tiebreak
+  // purely so the same tick always renders in the same order.
   rows.sort(
     (a, b) =>
-      b.tally.bullish - a.tally.bullish ||
-      a.tally.bearish - b.tally.bearish ||
+      (b.tally.composite ?? -Infinity) - (a.tally.composite ?? -Infinity) ||
       a.symbol.localeCompare(b.symbol),
   );
 
@@ -148,6 +157,30 @@ export function watchlistScan(
   if (stalePrices.length > 0) {
     caveats.push(
       `No usable price this tick: ${stalePrices.join(', ')}. Signals come from bars and may still be present on those rows.`,
+    );
+  }
+
+  // A fact about what the five numbers ARE, not advice about them. Without it a reader counts
+  // five agreeing scores as five confirmations, when every one of them is measuring trend.
+  if (rows.some((r) => r.tally.total > 0)) {
+    caveats.push(
+      'The five signals are one trend family (EMA spread, ADX, breakout, MACD, volume-on-up-day) and are highly correlated, so a 5/5 tally is closer to one confirmation counted five times than to five independent ones. composite is their mean; reversal is the only reading here that can disagree with them.',
+    );
+  }
+
+  const chasing = rows.filter((r) => r.reversal.chasing).map((r) => r.symbol);
+  if (chasing.length > 0) {
+    caveats.push(
+      `Already up more than their size bucket's chase threshold over the last 21 bars: ${chasing.join(', ')}. Each row's reversal field carries the move and the threshold it cleared.`,
+    );
+  }
+
+  const unknownSize = rows
+    .filter((r) => r.reversal.sizeBucket === 'unknown' && r.reversal.oneMonthReturnPct !== null)
+    .map((r) => r.symbol);
+  if (unknownSize.length > 0) {
+    caveats.push(
+      `No cached market cap, so the reversal threshold got no size adjustment: ${unknownSize.join(', ')}. get_fundamentals fills this in for the next tick.`,
     );
   }
 
