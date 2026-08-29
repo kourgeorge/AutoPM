@@ -95,7 +95,7 @@ So this is not a rebuild. It is a list of specific missing **edges**.
 | P1 | Thesis + age + MFE/MAE in PORTFOLIO CONTEXT | 3 | XS | no | no | no | **shipped** |
 | P2 | `get_benchmark` — one number vs SPY | 4 | S | no | no | no | **shipped** |
 | P3 | Portfolio Doctor: `equityPeak` + 2 portfolio detectors | 1 | M | **2** | **3** | no | unbuilt |
-| P4 | `update_stop` (tighten-only) + partial `execute_exit` | 5 | M | no | no | **yes** | half-shipped — tighten-only stops (`canTighten`/`moveStopTo`) are live; partial `execute_exit` is unbuilt |
+| P4 | `update_stop` (tighten-only) + partial `execute_exit` | 5 | M | no | no | **yes** | **shipped** |
 | P5 | `get_calendar` + `get_fundamentals` — earnings dates, crowding, revisions | — | S | no | no | no | **shipped** |
 | P6 | Slow loop: scheduled close / weekly review wake | 6 | S | **1** | no | no | **shipped** |
 
@@ -638,7 +638,18 @@ is the same evidence standard the policy asks of the model.
 
 ### What shipped
 
-Advisory only, as written above: `enterPosition` is untouched, and the rule lives in prose.
+Advisory only, as written above, from 2026-08-26: `enterPosition` was untouched and the rule lived
+in prose. **Promoted to a guard on 2026-08-29**, once the evidence standard in *Prose first, guard
+later* above was met (Rank 3 of #15: the rule was ignorable, and unlike a stop-loss violation an
+earnings gap is not bounded by `stopLossAtrMult`). `earningsVeto` (pure) / `refuseIfEarningsWindow`
+(fetch) in `src/strategy/orderManager.ts`, wired into `enterPosition` before the signal gate.
+Refuses as `earnings_window` inside `risk.earningsBlackoutDays` (default 5, new policy field) of
+`nextEarningsAt` — confirmed and estimated dates blocked identically, since the uncertainty POLICY.md
+already named is about the day, not the risk, and gating only on confirmed dates would flap open the
+moment an estimate firmed up. Fails **closed** as `earnings_unavailable` when the calendar can't be
+read, mirroring `signals_unavailable`: no evidence, no position. Crypto is skipped before the fetch —
+`getFundamentals` throws unconditionally for a crypto pair (no earnings calendar exists for one), so
+without the skip every crypto entry would be refused forever, not just ones near a print.
 
 - **`src/collect/yahoo.ts` → `getFundamentalsRaw(symbol)`.** Six modules in one call —
   `calendarEvents`, `defaultKeyStatistics`, `financialData`, `summaryDetail`, `earningsTrend`,

@@ -10,8 +10,9 @@
 import { broker } from '../broker';
 import type { OpenOrder, Position } from '../broker/IBroker';
 import { collectBars, DEFAULT_COLLECT_REQUEST, isPresent, type Maybe } from '../collect';
+import { getFundamentals, type Fundamentals } from '../collect/fundamentals';
 import { logger } from '../core/logger';
-import { sameSymbol } from '../core/symbols';
+import { isCryptoSymbol, sameSymbol } from '../core/symbols';
 import { getPositionSnapshot, getState, patchPositionSnapshot } from '../state/state';
 import { armStop, withStopLock, type ArmResult } from './stopOrders';
 import { computeSignals, signalTally } from './signals';
@@ -229,6 +230,87 @@ export function exposureVeto(
 }
 
 /**
+ * Why this entry falls inside the earnings blackout, or null when it's clear.
+ *
+ * Two rules, same split as `SignalVeto` above and for the same reason: `earnings_window`
+ * answers "is a print imminent" and `earnings_unavailable` answers "could we tell" — filed
+ * under one name, the journal could no longer distinguish an operator who keeps entering
+ * into prints from a fortnight of Yahoo trouble.
+ *
+ * FAILS CLOSED on missing data, matching `signals_unavailable` and `daily_loss_unmeasurable`:
+ * an earnings gap jumps straight past a resting stop, so "cannot tell" is not a case this
+ * guard can wave through — no evidence, no position.
+ *
+ * Confirmed and estimated dates are treated identically. POLICY.md already says why: "the
+ * uncertainty is about the day, not about the risk" — an estimate sliding a few days either
+ * side is still the same print, and a guard that only blocked confirmed dates would flap open
+ * the moment Yahoo's estimate firmed up.
+ *
+ * Pure and exported for the same reason `entrySignalVeto` is: the judgement — is the next
+ * print inside the window — needs no network call once the calendar is in hand.
+ */
+export type EarningsVeto = {
+  rule: 'earnings_window' | 'earnings_unavailable';
+  message: string;
+};
+
+export function earningsVeto(
+  symbol: string,
+  calendar: Fundamentals | null,
+  blackoutDays: number,
+): EarningsVeto | null {
+  // Crypto trades 24/7 against no scheduled print — there is no gap for this guard to catch,
+  // and `getFundamentals` throws for a crypto pair by design (fundamentals are equities-only).
+  if (isCryptoSymbol(symbol)) return null;
+
+  if (!calendar) {
+    return {
+      rule: 'earnings_unavailable',
+      message: `Cannot read ${symbol}'s earnings calendar, so the ${blackoutDays}-day blackout cannot `
+        + `be checked. No entry is opened without knowing whether a print is imminent — retry once `
+        + `get_calendar(${symbol}) succeeds.`,
+    };
+  }
+
+  const { nextEarningsAt, daysUntil, isEstimate } = calendar.calendar;
+  if (nextEarningsAt === null || daysUntil === null) return null;
+  if (daysUntil >= blackoutDays) return null;
+
+  const when = isEstimate === true ? `an estimated ${nextEarningsAt.slice(0, 10)}` : nextEarningsAt.slice(0, 10);
+  return {
+    rule: 'earnings_window',
+    message: `${symbol} reports ${when} — ${daysUntil} day(s) away, inside the ${blackoutDays}-day `
+      + `earnings blackout. An earnings gap jumps past a resting stop, so this entry is refused.`,
+  };
+}
+
+/**
+ * `earningsVeto` against the live calendar.
+ *
+ * Skips the fetch entirely for crypto — see the comment on `earningsVeto` — rather than
+ * calling `getFundamentals` and turning its designed-in throw into a spurious
+ * `earnings_unavailable` on every crypto entry.
+ *
+ * A fetch failure (network, or Yahoo's schema drifting past what `validateResult: false`
+ * absorbs) resolves to `null` calendar, which the pure veto above turns into
+ * `earnings_unavailable` — the fetch failing and the fetch succeeding with nothing scheduled
+ * are different claims, and only the pure function can tell them apart.
+ */
+async function refuseIfEarningsWindow(symbol: string): Promise<void> {
+  if (isCryptoSymbol(symbol)) return;
+
+  let calendar: Fundamentals | null;
+  try {
+    calendar = await getFundamentals(symbol);
+  } catch {
+    calendar = null;
+  }
+
+  const veto = earningsVeto(symbol, calendar, getPolicy().risk.earningsBlackoutDays);
+  if (veto) reject(veto.rule, veto.message);
+}
+
+/**
  * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
  * that was asked for: `applyRegimeSizing` may cut it. The caller journals what it is
  * given, so returning the requested number here would record a position size that never
@@ -338,6 +420,13 @@ export async function enterPosition(
   // straw that puts the whole account over its gross exposure ceiling.
   const overExposed = exposureVeto(qty * price, positions, account.equity, getPolicy());
   if (overExposed) reject('exposure_too_high', overExposed);
+
+  // BEFORE the signal gate: a refusal that was going to happen anyway does not deserve a bar
+  // fetch, and an imminent print refuses regardless of how strong the setup looks. POLICY.md
+  // stated this window as prose for as long as it existed and nothing enforced it — the same
+  // gap this repo's other unenforced-rule fixes have closed, except here the risk a stop-loss
+  // cannot bound is the one a gap jumps straight past.
+  await refuseIfEarningsWindow(symbol);
 
   // The entry gate, and the first check here that needs the network. Placed AFTER the broker
   // guards on purpose: `already_holding` and `max_positions` are structural refusals the model
@@ -530,7 +619,8 @@ function describe(o: OpenOrder): string {
 export async function exitPosition(
   symbol: string,
   reason: string,
-): Promise<{ orderId: string; cancelled: string[] }> {
+  qty?: number,
+): Promise<{ orderId: string; cancelled: string[]; qty: number }> {
   const positions = await broker.getPositions();
   // `sameSymbol`, for the same reason as `already_holding` above — with `===` a crypto
   // position could not be exited AT ALL: the venue reports `BTCUSD`, the caller says
@@ -544,14 +634,26 @@ export async function exitPosition(
     reject('no_position', `No open position in ${symbol} — nothing to exit`);
   }
 
+  // Omitted `qty` keeps the full-exit behaviour verbatim, including fractional crypto qty.
+  // A supplied `qty` is a partial exit and must be a whole share count within the position —
+  // `enterPosition` never fractions a share count either, so a partial sell can't either.
+  if (qty !== undefined && (!Number.isInteger(qty) || qty <= 0 || qty > pos.qty)) {
+    reject(
+      'invalid_intent',
+      `qty must be a positive integer no greater than the ${pos.qty} held, got ${qty}`,
+    );
+  }
+  const sellQty = qty ?? pos.qty;
+
   // Below the `no_position` guard, so a phantom exit never wakes anyone. The operator sees
   // the venue's own qty and unrealized P&L — the numbers that make the decision — not the
   // model's account of them.
+  const price = pos.marketValue != null && pos.qty !== 0 ? pos.marketValue / pos.qty : null;
   const nod = await requestApproval('exit', {
     symbol,
-    qty: pos.qty,
-    price: pos.marketValue != null && pos.qty !== 0 ? pos.marketValue / pos.qty : null,
-    notional: pos.marketValue ?? null,
+    qty: sellQty,
+    price,
+    notional: price != null ? price * sellQty : null,
     stopLoss: null,
     takeProfit: null,
     pnl: pos.unrealizedPnL ?? null,
@@ -610,7 +712,7 @@ export async function exitPosition(
     // that either returns or throws, so there the cancellation is settled before the sell.
     let id: string;
     try {
-      ({ id } = await broker.placeOrder({ symbol, side: 'sell', qty: pos.qty, type: 'market' }));
+      ({ id } = await broker.placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'market' }));
     } catch (err) {
       // The regression this feature creates, and its repair. Before venue stops the cancel loop
       // could only ever remove protection this system had not placed, so a failed sell left the
@@ -639,6 +741,6 @@ export async function exitPosition(
     }
 
     logger.trade(`Exit order ${id} submitted for ${symbol}`);
-    return { orderId: id, cancelled };
+    return { orderId: id, cancelled, qty: sellQty };
   });
 }

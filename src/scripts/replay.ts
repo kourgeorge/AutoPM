@@ -55,7 +55,8 @@ import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { REVERSAL_LOOKBACK, reversalFilter } from '../strategy/reversal';
 import { computeSignals, signalTally } from '../strategy/signals';
 import { dailyLossStatus } from '../strategy/riskManager';
-import { GuardRejection, enterPosition, entrySignalVeto, exposureVeto, positionSizeVeto, restingSells } from '../strategy/orderManager';
+import { GuardRejection, earningsVeto, enterPosition, entrySignalVeto, exposureVeto, positionSizeVeto, restingSells } from '../strategy/orderManager';
+import type { Fundamentals } from '../collect/fundamentals';
 import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
 import {
@@ -1091,6 +1092,55 @@ async function guardRules(): Promise<void> {
   check('a position with no market value contributes nothing to the book sum',
     exposureVeto(expCeiling * 0.5, noValue, expEquity, expPol) === null,
     'a missing market value was not excluded from the sum');
+
+  // ── Earnings blackout ──────────────────────────────────────────────────────────
+  //
+  // Asserted on `earningsVeto` rather than through `enterPosition`, for the same reason as
+  // `entrySignalVeto` below: the judgement is pure once the calendar is in hand, and the
+  // live path's fetch is not what this scenario is testing.
+  const blackoutDays = getPolicy().risk.earningsBlackoutDays;
+
+  const asCalendar = (nextEarningsAt: string | null, daysUntil: number | null, isEstimate: boolean | null): Fundamentals => ({
+    symbol: 'MSFT',
+    calendar: { nextEarningsAt, daysUntil, isEstimate, earningsWindow: null, exDividendDate: null, dividendDate: null, surpriseHistory: [] },
+    crowding: { shortPctOfFloat: null, sharesShort: null, sharesShortPriorMonth: null, shortInterestAsOf: null, floatShares: null, heldPctInstitutions: null, heldPctInsiders: null, beta: null },
+    liquidity: { marketCap: null, avgVolume10Day: null, avgVolume: null, fiftyTwoWeekHigh: null, fiftyTwoWeekLow: null },
+    balanceSheet: { totalCash: null, totalDebt: null, debtToEquityPct: null, currentRatio: null, profitMarginsPct: null, revenueGrowthPct: null, earningsGrowthPct: null, freeCashflow: null },
+    revisions: { currentQuarter: null, currentYear: null },
+    modulesPresent: ['calendarEvents'],
+    source: 'yahoo',
+    caveats: [],
+  });
+
+  check('nothing scheduled clears the gate',
+    earningsVeto('MSFT', asCalendar(null, null, null), blackoutDays) === null,
+    JSON.stringify(earningsVeto('MSFT', asCalendar(null, null, null), blackoutDays)));
+  check('a print well outside the window clears the gate',
+    earningsVeto('MSFT', asCalendar(at(0).toISOString(), blackoutDays + 5, false), blackoutDays) === null,
+    JSON.stringify(earningsVeto('MSFT', asCalendar(at(0).toISOString(), blackoutDays + 5, false), blackoutDays)));
+
+  const confirmedSoon = earningsVeto('MSFT', asCalendar(at(0).toISOString(), blackoutDays - 1, false), blackoutDays);
+  check('earnings_window — a confirmed print inside the window is refused',
+    confirmedSoon?.rule === 'earnings_window', JSON.stringify(confirmedSoon));
+
+  // The hard part named in the task: an estimate is not exempt. Gating only on confirmed
+  // dates would flap open the moment an estimate firmed up — same rule, either way.
+  const estimatedSoon = earningsVeto('MSFT', asCalendar(at(0).toISOString(), blackoutDays - 1, true), blackoutDays);
+  check('earnings_window — an ESTIMATED print inside the window is refused identically',
+    estimatedSoon?.rule === 'earnings_window', JSON.stringify(estimatedSoon));
+  check('an estimated date is named as such in the refusal message',
+    estimatedSoon !== null && estimatedSoon.message.includes('estimated'), estimatedSoon?.message ?? 'none');
+
+  // Fail closed on "cannot tell", mirroring signals_unavailable: no evidence, no position.
+  const noCalendar = earningsVeto('MSFT', null, blackoutDays);
+  check('earnings_unavailable — no calendar data at all refuses rather than waving the entry through',
+    noCalendar?.rule === 'earnings_unavailable', JSON.stringify(noCalendar));
+
+  // Crypto has no scheduled print and `getFundamentals` throws for a crypto pair by design —
+  // the pure function has to skip it before the null-calendar case above can fire.
+  check('crypto is exempt even with no calendar data — there is no print for this guard to catch',
+    earningsVeto('BTC/USD', null, blackoutDays) === null,
+    JSON.stringify(earningsVeto('BTC/USD', null, blackoutDays)));
 
   // ── The entry gate ────────────────────────────────────────────────────────────
   //

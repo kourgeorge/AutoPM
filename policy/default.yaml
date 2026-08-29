@@ -9,6 +9,10 @@ risk:
   # defaults. Enforced by `exposureVeto` in orderManager.ts: ten correctly-sized positions can
   # still add up past this with nothing else checking the book as a whole.
   maxGrossExposurePct: 1
+  # Minimum days until the next earnings print required to open a new position. Enforced by
+  # `earningsVeto` in orderManager.ts — a gap at the open jumps past any resting stop, so this
+  # is the one entry risk `stopLossAtrMult` cannot bound.
+  earningsBlackoutDays: 5
 strategy:
   watchlist:
     - AAPL

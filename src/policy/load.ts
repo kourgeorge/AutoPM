@@ -101,6 +101,15 @@ const DEFAULT_COMPOSITE_MIN = 0.2;
 const DEFAULT_MAX_GROSS_EXPOSURE_PCT = 1.0;
 const DEFAULT_MAX_GROSS_EXPOSURE_PCT_CEILING = 1.5;
 
+/**
+ * Fallback for `risk.earningsBlackoutDays` when absent — same reason as `compositeMin` above:
+ * every policy.yaml written before the guard existed is missing this key, and the first load
+ * THROWS on a validation error. 5 is the number POLICY.md stated as prose for as long as this
+ * was unenforced, so an operator who has never heard of the field inherits the rule they were
+ * already meant to be following.
+ */
+const DEFAULT_EARNINGS_BLACKOUT_DAYS = 5;
+
 function num(
   src: Record<string, unknown>,
   where: string,
@@ -193,6 +202,9 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     maxGrossExposurePct: r.maxGrossExposurePct === undefined
       ? DEFAULT_MAX_GROSS_EXPOSURE_PCT
       : num(r, 'risk', 'maxGrossExposurePct', errs, { min: 0, max: immutable.maxGrossExposurePctCeiling }),
+    earningsBlackoutDays: r.earningsBlackoutDays === undefined
+      ? DEFAULT_EARNINGS_BLACKOUT_DAYS
+      : num(r, 'risk', 'earningsBlackoutDays', errs, { int: true, min: 0, max: 30 }),
   };
 
   const s = block(root, 'strategy', errs);
