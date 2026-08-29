@@ -39,8 +39,10 @@ nobody checked, so energy entries need a scheduled-events check" is a lesson. "T
 choppy" is noise. Most cycles add nothing here, and that is correct — a file that grows
 every cycle is a file nobody rereads.
 
-Hand-editing is expected: delete a lesson that turned out wrong. Nothing reads this file
-but the trader's cycle context, and nothing writes it but \`write_lesson\`.
+Hand-editing is expected: delete a lesson that turned out wrong. An entry begins at its
+\`## <timestamp> — policy vN\` heading and runs to the next one, so a lesson added by hand
+needs a heading in that form to be read at all. Nothing reads this file but the trader's
+cycle context, and nothing writes it but \`write_lesson\`.
 `;
 
 let _ephemeral = false;
@@ -78,11 +80,25 @@ export function recordLesson(text: string): string {
 }
 
 /**
- * Every lesson, oldest first, each as the raw markdown of its own section.
+ * The entry boundary: a level-2 heading whose text starts with an ISO timestamp, which is
+ * exactly what `recordLesson` writes and nothing else in a body plausibly is.
  *
- * Splitting on `^## ` means a hand-written `## ` inside a body reads as two lessons. That
- * is the whole failure mode, it is cosmetic, and the alternative is a delimiter the
- * operator would have to know about to edit the file safely.
+ * This used to split on bare `^## `, on the assumption that a `## ` inside a body would be
+ * rare and cosmetic when it happened. It is neither: the model opens essentially every
+ * lesson with a `## ` title line, so each entry was cut into a bare header section and an
+ * orphaned body. That halved the number of lessons the 20-section cap in `trader.ts` could
+ * fit, and severed every lesson from the date and policy version it was written under —
+ * while several lessons refer to those versions by name.
+ *
+ * The cost is a contract the operator has to know: a hand-added lesson needs a
+ * `## <iso> — policy v<n>` header to be seen at all. `FILE_HEADER` says so, since the
+ * operator reads that file far more often than this one.
+ */
+const ENTRY_HEADER = /^## \d{4}-\d{2}-\d{2}T/;
+
+/**
+ * Every lesson, oldest first, each as the raw markdown of its own section — header line
+ * included, and any `## ` the body uses for itself left alone inside it.
  */
 export function readLessons(): string[] {
   let raw: string;
@@ -92,9 +108,12 @@ export function readLessons(): string[] {
     return [];
   }
 
+  // A lookahead split, so the header stays attached to the section it opens. Sections are
+  // then kept or dropped by testing them, rather than by assuming the file header is first:
+  // anything that is not an entry — the file header, an operator's loose note — is not a
+  // lesson, wherever in the file it sits.
   return raw
-    .split(/^## /m)
-    .slice(1) // the file header, which is not a lesson
-    .map((s) => '## ' + s.trim())
-    .filter((s) => s !== '##');
+    .split(/^(?=## \d{4}-\d{2}-\d{2}T)/m)
+    .map((s) => s.trim())
+    .filter((s) => ENTRY_HEADER.test(s));
 }
