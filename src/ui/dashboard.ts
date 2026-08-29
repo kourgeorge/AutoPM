@@ -211,6 +211,25 @@ function priceText(f: Fmt, n: number | null): string {
   return Math.abs(n) >= 10_000 ? f.money(n).replace('$', '') : n.toFixed(2);
 }
 
+/**
+ * What a holding is worth, in whole dollars — `842`, `5,900`, `118,433`, `1.2M`.
+ *
+ * No cents, ever: this column answers "how big is this position", and at that question a dollar
+ * is already below the noise. Compacted above a million so the cell can never need more columns
+ * than it has, because a truncated `1,23…` reads as a smaller number rather than as a cut one.
+ *
+ * No `$` either, for the same reason `priceText` drops it: the columns beside this one are bare
+ * numbers, and a currency mark repeated down a fixed grid is three columns spent saying nothing
+ * that the `val` label above has not already said.
+ */
+function valueText(f: Fmt, n: number | null): string {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return f.dash;
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  // `money` owns the thousands grouping and the sign placement; the cents it adds below $1,000
+  // come straight back off, so one implementation still groups every number on the panel.
+  return f.money(n).replace('$', '').replace(/\.\d\d$/, '');
+}
+
 /** What a lane is doing, as text plus colour. The countdown is computed from `until`. */
 function laneChunk(m: DashboardModel, lane: Lane, spinner: boolean): Chunk {
   const f = makeFormat(m.glyphs);
@@ -305,7 +324,7 @@ function sortedWatchlist(tick: TickSnapshot): WatchEntry[] {
  * `px sig rsi` used to be right-aligned to the panel border while its four values sat on the
  * left, so the labels named columns of empty space.
  */
-const POS_GRID = { sym: 5, px: 7, cost: 7, pnl: 7, stop: 6, tgt: 6, qty: 5, rsi: 3, held: 6 } as const;
+const POS_GRID = { sym: 5, px: 7, cost: 7, pnl: 7, stop: 6, tgt: 6, val: 8, qty: 5, rsi: 3, held: 6 } as const;
 const WATCH_GRID = { sym: 5, px: 7, sig: 5, rsi: 3 } as const;
 
 /**
@@ -331,6 +350,7 @@ const POS_LEGEND: Col[] = [
   { text: 'p&l', w: POS_GRID.pnl, right: true },
   { text: 'stop', w: POS_GRID.stop, right: true },
   { text: 'tgt', w: POS_GRID.tgt, right: true },
+  { text: 'val', w: POS_GRID.val, right: true },
   { text: 'qty', w: POS_GRID.qty, right: true },
   { text: 'rsi', w: POS_GRID.rsi, right: true },
   { text: 'held', w: POS_GRID.held, right: true },
@@ -389,6 +409,23 @@ function positionRow(m: DashboardModel, f: Fmt, p: PositionRow, width: number): 
       w: POS_GRID.tgt,
       right: true,
       color: p.takeProfitLevel == null ? 'gray-fg' : targetNear ? 'green-fg' : 'gray-fg',
+    },
+    {
+      // What the holding is worth right now: qty times the price on this row. The one thing `qty`
+      // alone cannot tell anyone — 434 shares is $38k of XLE or $4k of a $9 name — so this is the
+      // column that says how much of the book a row actually is.
+      //
+      // Deliberately NOT a decomposition of the `inv` figure in the head: that one is
+      // `equity - cash` as the VENUE reports it, this is our quote times our share count, and a
+      // stale row contributes nothing here. The column adds up to roughly `inv`, never exactly,
+      // and the two disagreeing is a feed telling on itself rather than an arithmetic error.
+      //
+      // Dimmed with the quote for the reason `px` is: a value computed from a price we are
+      // refusing to show is a number the reader has no way to check.
+      text: dim || p.price == null ? g.stale : valueText(f, p.qty * p.price),
+      w: POS_GRID.val,
+      right: true,
+      color: dim ? 'gray-fg' : undefined,
     },
     { text: String(p.qty), w: POS_GRID.qty, right: true, color: 'gray-fg' },
     { text: f.fixed(p.rsi, 0), w: POS_GRID.rsi, right: true, color: 'gray-fg' },
