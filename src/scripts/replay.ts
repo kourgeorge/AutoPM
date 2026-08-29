@@ -1906,6 +1906,114 @@ function reversalEntryFilter(): void {
     JSON.stringify({ composite: signalTally(scores).composite, mean, reversal: smallRow.score }));
 }
 
+/**
+ * 25. Portfolio drawdown — a slow, book-wide bleed in equity itself, not in any one
+ *     position. The first tick sets the peak; ~0.4%/tick decline crosses the 6% threshold
+ *     around k=16. One fire on the confirming reading, not one per tick, and the peak does
+ *     not follow the bleed down.
+ */
+function portfolioDrawdownGrind(): void {
+  const flat = { positions: [], prices: {} };
+
+  tick({ ...flat, account: { ...ACCOUNT, equity: 100_000 } }, at(0));
+  check('the first reading sets the peak', getState().equityPeak === 100_000, `got ${getState().equityPeak}`);
+
+  const all: TriggerEvent[] = [];
+  for (let k = 1; k <= 25; k++) {
+    const equity = 100_000 * Math.pow(0.996, k);
+    all.push(...tick({ ...flat, account: { ...ACCOUNT, equity } }, at(k)));
+  }
+
+  checkCount(all, 'portfolio_drawdown', 1);
+  check('the peak does not follow the bleed down', getState().equityPeak === 100_000, `got ${getState().equityPeak}`);
+}
+
+/**
+ * 26. Portfolio drawdown — recover past the hysteresis band, then re-breach. Same two
+ *     gates as scenario 3 (recoverThenRebreach), now on the portfolio-level level:
+ *     recrossing the band re-arms the key, but the cooldown still holds it quiet until it
+ *     expires.
+ */
+function portfolioDrawdownRecoverRebreach(): void {
+  const flat = { positions: [], prices: {} };
+  tick({ ...flat, account: { ...ACCOUNT, equity: 100_000 } }, at(0)); // peak
+
+  const all: TriggerEvent[] = [];
+  all.push(...tick({ ...flat, account: { ...ACCOUNT, equity: 93_000 } }, at(1)));  // -7%, confirming
+  all.push(...tick({ ...flat, account: { ...ACCOUNT, equity: 93_000 } }, at(2)));  // fire
+  all.push(...tick({ ...flat, account: { ...ACCOUNT, equity: 96_000 } }, at(3)));  // -4% -> re-arm
+  const inCooldown = [
+    ...tick({ ...flat, account: { ...ACCOUNT, equity: 93_000 } }, at(4)),
+    ...tick({ ...flat, account: { ...ACCOUNT, equity: 93_000 } }, at(5)),
+  ];
+  all.push(...inCooldown);
+  all.push(...tick({ ...flat, account: { ...ACCOUNT, equity: 93_000 } }, at(20))); // cooldown done
+
+  checkCount(all, 'portfolio_drawdown', 2);
+  check(
+    're-armed key stays quiet inside the cooldown',
+    countOf(inCooldown, 'portfolio_drawdown') === 0,
+  );
+}
+
+/**
+ * 27. Portfolio drawdown — the daily reset must not touch the peak. `resetDailyState`
+ *     resets `startOfDayEquity` for the daily-loss guard; the equity peak is a different,
+ *     durable baseline and survives it exactly like `sessionHigh`/`sessionLow` do.
+ */
+function portfolioDrawdownSurvivesReset(): void {
+  const flat = { positions: [], prices: {} };
+  tick({ ...flat, account: { ...ACCOUNT, equity: 100_000 } }, at(0));
+  check('the peak is set at 100,000', getState().equityPeak === 100_000, `got ${getState().equityPeak}`);
+
+  const before = tick({ ...flat, account: { ...ACCOUNT, equity: 97_000 } }, at(1)); // -3%, below the 6% threshold
+  check('a shallow dip does not breach the drawdown threshold', countOf(before, 'portfolio_drawdown') === 0);
+
+  resetDailyState(97_000, etDate(at(1)));
+  check('the daily reset leaves the equity peak untouched', getState().equityPeak === 100_000, `got ${getState().equityPeak}`);
+
+  const after = tick({ ...flat, account: { ...ACCOUNT, equity: 97_000 } }, at(2));
+  check('and fires nothing on its own', countOf(after, 'portfolio_drawdown') === 0);
+}
+
+/**
+ * 28. Concentration flutter — a single name oscillating either side of the 15% single-
+ *     name limit. Same hysteresis proof as scenario 2 (flutter), for the portfolio-level
+ *     detector: one fire total, not one per oscillation.
+ */
+function concentrationFlutter(): void {
+  const hold = [position('AAPL', 100, 100)];
+  const all: TriggerEvent[] = [];
+  for (let k = 1; k <= 10; k++) {
+    // 15.2% / 14.8%: back across the threshold but nowhere near the 0.5pp re-arm band.
+    const price = k % 2 === 1 ? 152 : 148;
+    all.push(...tick({ positions: hold, prices: { AAPL: price } }, at(k)));
+  }
+  checkCount(all, 'concentration_breach', 1);
+}
+
+/**
+ * 29. Concentration — a single name alone breaching the 15% limit, next to a second
+ *     position that stays under it. Only the single-name breach is asserted: a sector
+ *     breach would need `maxSectorName`/`maxSectorWeightPct` from `getCachedSectors`,
+ *     which reads the real, harness-uncontrolled `data/sectors.json` — the same reason
+ *     scenario 19 (portfolioReviewLoop) never asserts sector fields. What this DOES prove,
+ *     portably: the sector crossing is evaluated independently (its own `cooldownKey`) and
+ *     never fires on data this harness cannot see, so it cannot mask, or be masked by, the
+ *     single-name event.
+ */
+function concentrationSingleBreach(): void {
+  const hold = [position('AAPL', 250, 100), position('MSFT', 120, 100)];
+  const all: TriggerEvent[] = [];
+  for (let k = 1; k <= 3; k++) {
+    all.push(...tick({ positions: hold, prices: { AAPL: 100, MSFT: 100 } }, at(k)));
+  }
+  // AAPL: 250 * 100 = 25,000 = 25% of the $100,000 book, above the 15% limit.
+  // MSFT: 120 * 100 = 12,000 = 12%, below it — exactly one symbol breaching, and the
+  // sector hit (no cached sector data here) correctly contributes zero events of its own.
+  checkCount(all, 'concentration_breach', 1);
+}
+
 async function main(): Promise<void> {
   // Loaded once, before any state is faked — a failure here is a broken policy file,
   // not a failed scenario.
@@ -1970,6 +2078,11 @@ async function main(): Promise<void> {
   await scenario('24. Daily loss with no baseline — silence is not a flat day', {
     startOfDayEquity: 0,
   }, dailyLossWithoutBaseline);
+  await scenario('25. Portfolio drawdown — a slow bleed crosses 6% from the peak', plain, portfolioDrawdownGrind);
+  await scenario('26. Portfolio drawdown — recover past the band, then re-breach', plain, portfolioDrawdownRecoverRebreach);
+  await scenario('27. Portfolio drawdown — the daily reset does not touch the peak', plain, portfolioDrawdownSurvivesReset);
+  await scenario('28. Concentration flutter — one name either side of the 15% limit', plain, concentrationFlutter);
+  await scenario('29. Concentration — a single name alone breaching the limit', plain, concentrationSingleBreach);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

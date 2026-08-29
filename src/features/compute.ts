@@ -29,10 +29,13 @@ import { atr, crossedAbove, ema, rsi } from '../strategy/indicators';
 import { computeSignals, signalSummary, type SignalScore } from '../strategy/signals';
 import { reversalFilter, type ReversalFilter } from '../strategy/reversal';
 import { getCachedFundamentals } from '../collect/fundamentals';
+import { getCachedSectors } from '../collect/sectorCache';
+import { concentration } from '../strategy/exposure';
 import {
   getPositionSnapshot,
   getState,
   patchPositionSnapshot,
+  updateState,
   type PositionSnapshot,
 } from '../state/state';
 import { dayPnLPercent } from '../strategy/riskManager';
@@ -110,11 +113,29 @@ export interface AccountData {
   positionCount: number;
 }
 
+/** Book-wide shape, computed via `concentration()` so a 60s tick and an on-demand read agree. */
+export interface PortfolioData {
+  grossDeployedPct: number;
+  maxWeightPct: number;
+  maxWeightSymbol: string | null;
+  hhi: number;
+  maxSectorWeightPct: number;
+  maxSectorName: string | null;
+  /** Dollars, monotonic, durable — never narrows. */
+  equityPeak: number;
+  /**
+   * Percentage points, >= 0. Null when equity is stale/unavailable this tick — never
+   * computed against a peak the account can't currently corroborate.
+   */
+  drawdownFromPeakPct: number | null;
+}
+
 /** The complete derived state of one tick. Ephemeral — never stored. */
 export interface TickData {
   positions: Record<string, PositionData>;
   watchlist: Record<string, WatchlistData>;
   account: AccountData;
+  portfolio: PortfolioData;
   session: MarketSession;
   tickAt: string;
   policyVersion: number;
@@ -405,14 +426,46 @@ export function computeTick(
     );
   }
 
+  const sectors = getCachedSectors(Object.keys(positions));
+  // Mirrors scheduledReview.ts's bookOf() (P6) — same formula, kept separate rather than
+  // imported across the L2/L6 boundary. If one changes, check the other.
+  const book: Position[] = Object.values(positions).map((pd) => ({
+    symbol: pd.symbol,
+    qty: pd.qty,
+    avgCost: pd.entryPrice,
+    marketValue: pd.price === null ? undefined : pd.qty * pd.price,
+  }));
+  const accountData = buildAccountData(raw.account, held.length, state.startOfDayEquity);
+  const shape = concentration(book, accountData.equity ?? NaN, sectors);
+
+  const priorPeak = state.equityPeak;
+  let equityPeak = priorPeak;
+  if (accountData.equity !== null && Number.isFinite(accountData.equity) && accountData.equity > priorPeak) {
+    equityPeak = accountData.equity;
+  }
+  if (equityPeak !== priorPeak) updateState({ equityPeak });
+
+  const drawdownFromPeakPct =
+    accountData.equity === null || equityPeak <= 0
+      ? null
+      : pct(equityPeak - accountData.equity, equityPeak);
+
+  const portfolio: PortfolioData = {
+    grossDeployedPct: shape.grossDeployedPct,
+    maxWeightPct: shape.maxWeightPct,
+    maxWeightSymbol: shape.maxWeightSymbol,
+    hhi: shape.hhi,
+    maxSectorWeightPct: shape.maxSectorWeightPct,
+    maxSectorName: shape.maxSectorName,
+    equityPeak,
+    drawdownFromPeakPct,
+  };
+
   return {
     positions,
     watchlist,
-    account: buildAccountData(
-      raw.account,
-      held.length,
-      state.startOfDayEquity,
-    ),
+    account: accountData,
+    portfolio,
     tickAt: computedAt,
     session: marketSession(new Date(computedAt)),
     policyVersion: p.version,

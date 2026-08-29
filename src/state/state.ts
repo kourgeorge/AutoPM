@@ -96,6 +96,14 @@ export interface SystemState {
    * `resetDailyState` must never clear this. The watermark outlives the day it describes.
    */
   lastPortfolioReviewAt: string;
+
+  /**
+   * Highest equity ever observed, dollars. Monotonic — advanced only by `computeTick`
+   * (mirrors the `sessionHigh`/`sessionLow` pattern), never narrowed, and NOT touched by
+   * `resetDailyState`: a daily reset re-baselines `startOfDayEquity` only, and the peak
+   * that portfolio-level drawdown is measured against must survive it.
+   */
+  equityPeak: number;
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -111,6 +119,7 @@ const DEFAULT_STATE: SystemState = {
   armedTriggers: [],
   lastReviewedExitAt: '',
   lastPortfolioReviewAt: '',
+  equityPeak: 0,
 };
 
 /**

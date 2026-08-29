@@ -28,6 +28,15 @@ export interface RiskPolicy {
    * the two cannot drift.
    */
   earningsBlackoutDays: number;
+  /**
+   * Percentage points of equity in one name before `concentration_breach` warns. Percentage
+   * points, not a fraction — unlike this block's other *Pct fields (maxDailyLossPct,
+   * maxGrossExposurePct), which are historical and stayed fractions. New thresholds use
+   * percentage points per §5.1 of roadmap.md.
+   */
+  maxSingleWeightPct: number;
+  /** Same units and same caveat as maxSingleWeightPct, but for a whole GICS sector. */
+  maxSectorWeightPct: number;
 }
 
 export interface StrategyPolicy {
@@ -62,6 +71,8 @@ export interface TriggerPolicy {
   heartbeatWithPositionsMs: number;
   heartbeatFlatMs: number;
   maxQuoteAgeMs: number;
+  /** Percentage points of drawdown from the equity peak before the portfolio-level alarm fires. */
+  portfolioDrawdownPct: number;
 }
 
 /** Per-regime behavioural overrides. Applied deterministically by the guard layer. */
