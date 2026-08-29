@@ -244,7 +244,7 @@ Failure semantics differ by phase on purpose: the **first** load throws, because
 
 The `immutable` block is the part the Concierge and the Trader cannot argue with: `maxPositionsCeiling`, `maxDailyLossPctCeiling`, `positionSizePctCeiling`, `stopLossAtrMultCeiling`, `minTickIntervalMs`. A stop on every entry is enforced unconditionally in code (`missing_stop`), not by a policy flag.
 
-POLICY.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`, plus the four from the approval gate below.
+POLICY.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`, `position_too_large`, `daily_loss_unmeasurable`, `low_composite`, `signals_unavailable`, plus the four from the approval gate below.
 
 ### The operator approval gate
 
