@@ -19,6 +19,15 @@ export interface RiskPolicy {
    * `exposureVeto` in orderManager.ts.
    */
   maxGrossExposurePct: number;
+  /**
+   * Minimum days until the next earnings print required to open a new position.
+   *
+   * An earnings gap jumps past a resting stop, so this is the one entry risk `stopLossAtrMult`
+   * cannot bound. POLICY.md stated this as prose for as long as it existed; this is the number
+   * `earningsVeto` in orderManager.ts actually enforces, and the prompt is templated from it so
+   * the two cannot drift.
+   */
+  earningsBlackoutDays: number;
 }
 
 export interface StrategyPolicy {
