@@ -126,6 +126,15 @@ export class IBKRBroker implements IBroker {
     this.account = account;
     this.api = new IBApiNext({ host, port, reconnectInterval: 5_000 });
     this.api.connect(clientId);
+
+    // placeNewOrder/modifyOrder resolve once the request is SENT to TWS, not once TWS accepts
+    // it — a rejection (bad permissions, read-only API, a sanity check, ...) only ever surfaces
+    // here, on the global error stream, with no promise anywhere to catch it. Without this, an
+    // order that TWS silently rejects looks identical to one that quietly filled or expired.
+    this.api.error.subscribe(({ error, code, reqId }) => {
+      const target = reqId >= 0 ? ` (order/req ${reqId})` : '';
+      logger.warn(`[IBKR] TWS error${target}: ${error.message} [code ${code}]`);
+    });
   }
 
   async getAccountInfo(): Promise<AccountInfo> {
