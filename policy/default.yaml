@@ -13,6 +13,12 @@ risk:
   # `earningsVeto` in orderManager.ts — a gap at the open jumps past any resting stop, so this
   # is the one entry risk `stopLossAtrMult` cannot bound.
   earningsBlackoutDays: 5
+  # Percentage points of equity a single name can reach before concentration_breach warns.
+  # Percentage points like the new triggers.portfolioDrawdownPct, not a fraction like this
+  # block's older *Pct keys (see roadmap.md §5.1).
+  maxSingleWeightPct: 15
+  # Same units and same caveat, for a whole sector.
+  maxSectorWeightPct: 35
 strategy:
   watchlist:
     - AAPL
@@ -83,6 +89,9 @@ triggers:
   heartbeatWithPositionsMs: 900000
   heartbeatFlatMs: 3600000
   maxQuoteAgeMs: 180000
+  # Percentage points of drawdown from the equity peak before portfolio_drawdown fires —
+  # a slower, book-wide bleed the per-position detectors below can't see.
+  portfolioDrawdownPct: 6
 approval:
   # Operator approval gate — the trader asks before an order reaches the venue.
   #

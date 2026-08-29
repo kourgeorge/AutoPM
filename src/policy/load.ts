@@ -110,6 +110,17 @@ const DEFAULT_MAX_GROSS_EXPOSURE_PCT_CEILING = 1.5;
  */
 const DEFAULT_EARNINGS_BLACKOUT_DAYS = 5;
 
+/**
+ * Fallbacks for the three P3 (portfolio doctor) keys when absent — same reason as
+ * `compositeMin` above: every policy.yaml written before these guards existed is missing
+ * them, and the first load THROWS on a validation error. 6% / 15% / 35% are the values this
+ * plan ships as the live defaults, so an operator who has never heard of the fields inherits
+ * exactly what a fresh install would have set.
+ */
+const DEFAULT_PORTFOLIO_DRAWDOWN_PCT = 6;
+const DEFAULT_MAX_SINGLE_WEIGHT_PCT = 15;
+const DEFAULT_MAX_SECTOR_WEIGHT_PCT = 35;
+
 function num(
   src: Record<string, unknown>,
   where: string,
@@ -205,6 +216,12 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     earningsBlackoutDays: r.earningsBlackoutDays === undefined
       ? DEFAULT_EARNINGS_BLACKOUT_DAYS
       : num(r, 'risk', 'earningsBlackoutDays', errs, { int: true, min: 0, max: 30 }),
+    maxSingleWeightPct: r.maxSingleWeightPct === undefined
+      ? DEFAULT_MAX_SINGLE_WEIGHT_PCT
+      : num(r, 'risk', 'maxSingleWeightPct', errs, { min: 0, max: 100 }),
+    maxSectorWeightPct: r.maxSectorWeightPct === undefined
+      ? DEFAULT_MAX_SECTOR_WEIGHT_PCT
+      : num(r, 'risk', 'maxSectorWeightPct', errs, { min: 0, max: 100 }),
   };
 
   const s = block(root, 'strategy', errs);
@@ -280,6 +297,9 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     heartbeatWithPositionsMs: num(t, 'triggers', 'heartbeatWithPositionsMs', errs, { int: true, min: 0 }),
     heartbeatFlatMs: num(t, 'triggers', 'heartbeatFlatMs', errs, { int: true, min: 0 }),
     maxQuoteAgeMs: num(t, 'triggers', 'maxQuoteAgeMs', errs, { int: true, min: 0 }),
+    portfolioDrawdownPct: t.portfolioDrawdownPct === undefined
+      ? DEFAULT_PORTFOLIO_DRAWDOWN_PCT
+      : num(t, 'triggers', 'portfolioDrawdownPct', errs, { min: 0 }),
   };
 
 

@@ -51,7 +51,9 @@ export type EventKind =
   | 'review_ready'
   | 'portfolio_review'
   | 'policy_changed'
-  | 'policy_reverted';
+  | 'policy_reverted'
+  | 'portfolio_drawdown'
+  | 'concentration_breach';
 
 /**
  * Who is told, and how loudly. Never what to do.

@@ -15,12 +15,15 @@ import {
   trailingDrawdownDetector,
 } from './drawdown';
 import { heartbeatDetector } from './heartbeat';
+import { concentrationBreachDetector, portfolioDrawdownDetector } from './portfolio';
 import { stopBreachDetector, takeProfitDetector } from './stopBreach';
 import { emaCrossDownDetector, entrySignalDetector, rsiExitZoneDetector } from './technical';
 
 export const DETECTORS: Detector[] = [
   stopBreachDetector,
   dailyLossDetector,
+  portfolioDrawdownDetector,
+  concentrationBreachDetector,
   trailingDrawdownDetector,
   positionDropDetector,
   emaCrossDownDetector,
