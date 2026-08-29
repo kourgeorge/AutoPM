@@ -31,8 +31,6 @@ export interface PolicyMutation {
   positionSizePct?: number;
   /** risk.stopLossAtrMult */
   stopLossAtrMult?: number;
-  /** risk.takeProfitAtrMult */
-  takeProfitAtrMult?: number;
   /** risk.maxDailyLossPct — fraction, e.g. 0.03 for 3% */
   maxDailyLossPct?: number;
 }
@@ -102,7 +100,6 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
     ['maxPositions',      'risk.maxPositions'],
     ['positionSizePct',   'risk.positionSizePct'],
     ['stopLossAtrMult',   'risk.stopLossAtrMult'],
-    ['takeProfitAtrMult', 'risk.takeProfitAtrMult'],
     ['maxDailyLossPct',   'risk.maxDailyLossPct'],
   ];
   for (const [field, label] of riskFields) {

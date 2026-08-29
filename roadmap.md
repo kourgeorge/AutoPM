@@ -95,9 +95,9 @@ So this is not a rebuild. It is a list of specific missing **edges**.
 | P1 | Thesis + age + MFE/MAE in PORTFOLIO CONTEXT | 3 | XS | no | no | no | **shipped** |
 | P2 | `get_benchmark` — one number vs SPY | 4 | S | no | no | no | **shipped** |
 | P3 | Portfolio Doctor: `equityPeak` + 2 portfolio detectors | 1 | M | **2** | **3** | no | unbuilt |
-| P4 | `update_stop` (tighten-only) + partial `execute_exit` | 5 | M | no | no | **yes** | unbuilt |
+| P4 | `update_stop` (tighten-only) + partial `execute_exit` | 5 | M | no | no | **yes** | half-shipped — tighten-only stops (`canTighten`/`moveStopTo`) are live; partial `execute_exit` is unbuilt |
 | P5 | `get_calendar` + `get_fundamentals` — earnings dates, crowding, revisions | — | S | no | no | no | **shipped** |
-| P6 | Slow loop: scheduled close / weekly review wake | 6 | S | **1** | no | no | unbuilt |
+| P6 | Slow loop: scheduled close / weekly review wake | 6 | S | **1** | no | no | **shipped** |
 
 **Ordering rationale.** P0 and P1 *repair defects that already exist* — a prompt that names a
 vocabulary it cannot populate, and an instruction that cannot be followed from context. Nothing
@@ -550,7 +550,7 @@ Omitted `qty` keeps today's full-exit behaviour **verbatim**. Guards: `invalid_i
 non-integer, `<= 0`, or `> pos.qty`.
 
 **The landmine:** `toolExecuteExit` calls `removePositionSnapshot(symbol)` at
-`traderTools.ts:603`. A partial exit must **keep** the snapshot — same `entryPrice`, same
+`traderTools.ts:1099`. A partial exit must **keep** the snapshot — same `entryPrice`, same
 `sessionHigh` / `sessionLow`, same `openedAt`, same `entryDecisionId`. Only a sell that takes the
 position to zero clears it:
 
@@ -773,7 +773,7 @@ Every session close puts the book — not a symbol — in front of the model exa
 | `src/features/eventBus.ts` — `EventKind`; `publishDiscrete` | P3, P6 |
 | `src/policy/types.ts`, `src/policy/load.ts`, `policy/policy.yaml` | P3 |
 | `src/strategy/orderManager.ts` — `updateStop`, `exitPosition(qty?)` | P4 |
-| `src/tools/traderTools.ts:603` `removePositionSnapshot` — the partial-exit landmine | P4 |
+| `src/tools/traderTools.ts:1099` `removePositionSnapshot` — the partial-exit landmine | P4 |
 | `src/review/scheduledReview.ts` *(new)*, modelled on `src/review/reviewReady.ts` | P6 |
 | `src/features/scheduler.ts` — `maybeReconcile` | P6 |
 | `src/scripts/replay.ts` — `scenario`, `checkCount`, `slowBleed` | P3, P6 |

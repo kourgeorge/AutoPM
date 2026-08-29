@@ -10,7 +10,6 @@ export interface RiskPolicy {
   maxPositions: number;
   positionSizePct: number;
   stopLossAtrMult: number;
-  takeProfitAtrMult: number;
   maxDailyLossPct: number;
 }
 
@@ -77,7 +76,6 @@ export interface ImmutablePolicy {
   positionSizePctCeiling: number;
   stopLossAtrMultCeiling: number;
   minTickIntervalMs: number;
-  requireStopOnEntry: boolean;
 }
 
 /** Which trader actions the operator approval gate covers. One key per ENFORCED action. */

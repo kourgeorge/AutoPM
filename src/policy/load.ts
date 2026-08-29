@@ -169,7 +169,6 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     positionSizePctCeiling: num(imm, 'immutable', 'positionSizePctCeiling', errs, { min: 0 }),
     stopLossAtrMultCeiling: num(imm, 'immutable', 'stopLossAtrMultCeiling', errs, { min: 0 }),
     minTickIntervalMs: num(imm, 'immutable', 'minTickIntervalMs', errs, { int: true, min: 1 }),
-    requireStopOnEntry: bool(imm, 'immutable', 'requireStopOnEntry', errs),
   };
 
   const r = block(root, 'risk', errs);
@@ -177,7 +176,6 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     maxPositions: num(r, 'risk', 'maxPositions', errs, { int: true, min: 1, max: immutable.maxPositionsCeiling }),
     positionSizePct: num(r, 'risk', 'positionSizePct', errs, { min: 0, max: immutable.positionSizePctCeiling }),
     stopLossAtrMult: num(r, 'risk', 'stopLossAtrMult', errs, { min: 0, max: immutable.stopLossAtrMultCeiling }),
-    takeProfitAtrMult: num(r, 'risk', 'takeProfitAtrMult', errs, { min: 0 }),
     maxDailyLossPct: num(r, 'risk', 'maxDailyLossPct', errs, { min: 0, max: immutable.maxDailyLossPctCeiling }),
   };
 

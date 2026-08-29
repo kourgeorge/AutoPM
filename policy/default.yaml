@@ -1,9 +1,8 @@
-version: 6
+version: 7
 risk:
   maxPositions: 10
   positionSizePct: 0.1
   stopLossAtrMult: 2
-  takeProfitAtrMult: 6
   maxDailyLossPct: 0.03
 strategy:
   watchlist:
@@ -103,4 +102,3 @@ immutable:
   positionSizePctCeiling: 0.1
   stopLossAtrMultCeiling: 4
   minTickIntervalMs: 30000
-  requireStopOnEntry: true

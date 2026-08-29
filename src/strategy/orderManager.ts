@@ -221,9 +221,10 @@ export async function enterPosition(
     reject('invalid_intent', `takeProfit $${takeProfit} must be above entry $${price}`);
   }
 
-  // `policy.immutable.requireStopOnEntry` has been true since the policy file existed and
-  // was enforced nowhere: a `stopLoss: 0` opened a position with no exit level, and every
-  // stop detector measures against a level that was never recorded.
+  // A stop is mandatory on every entry — not a policy toggle, because there is no legitimate
+  // case where an unattended position should have no exit level. Before this guard existed,
+  // `stopLoss: 0` opened a position anyway, and every stop detector measured against a level
+  // that was never recorded.
   if (!(stopLoss > 0 && stopLoss < price)) {
     reject('missing_stop', `stopLoss $${stopLoss} must be above zero and below entry $${price}`);
   }
