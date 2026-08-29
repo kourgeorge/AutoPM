@@ -3,7 +3,7 @@ import { BrokerRejection } from '../broker/errors';
 import { GuardRejection, enterPosition, exitPosition } from '../strategy/orderManager';
 // Only the reporting predicate remains here. The rules that *refuse* an order moved below
 // the decision maker, into `enterPosition`, where a second caller cannot skip them.
-import { isDailyLossBreached } from '../strategy/riskManager';
+import { dailyLossStatus } from '../strategy/riskManager';
 import { etNow } from '../core/time';
 import { ackEvent, getPendingEvents, type AckDisposition } from '../features/eventBus';
 
@@ -594,20 +594,30 @@ async function toolGetAccount(): Promise<string> {
   // the baseline of the daily loss limit depend on whether the model chose to call a tool.
   // It is now `ensureDailyReset()` at the top of every scheduler tick — deterministic, and
   // keyed off the ET date rather than the UTC one.
-  const startEquity = getState().startOfDayEquity || account.equity;
-  const dailyPnL = account.equity - startEquity;
-  const dailyPnLPct = startEquity > 0 ? (dailyPnL / startEquity) * 100 : 0;
-  const lossLimitBreached = isDailyLossBreached(account, startEquity);
+  // The baseline is reported RAW, and so is the verdict. This used to read
+  // `getState().startOfDayEquity || account.equity`, which meant that with no baseline yet the
+  // model was handed `dailyPnLPct: 0, lossLimitBreached: false` — a manufactured flat day. Of
+  // the three sites that made that substitution this was the worst, because the other two only
+  // failed to stop a decision while this one fed a made-up number into it. `null` says "unknown",
+  // which is a thing the model can reason about; `0` is not.
+  const startEquity = getState().startOfDayEquity;
+  const daily = dailyLossStatus(account.equity, startEquity, risk.maxDailyLossPct);
+  const measurable = daily.state !== 'unmeasurable';
 
   return JSON.stringify({
     equity: account.equity,
     cash: account.cash,
     buyingPower: account.buyingPower,
-    startOfDayEquity: startEquity,
-    dailyPnL: parseFloat(dailyPnL.toFixed(2)),
-    dailyPnLPct: parseFloat(dailyPnLPct.toFixed(2)),
+    startOfDayEquity: measurable ? startEquity : null,
+    dailyPnL: measurable ? parseFloat((account.equity - startEquity).toFixed(2)) : null,
+    dailyPnLPct: daily.dayPnLPct === null ? null : parseFloat(daily.dayPnLPct.toFixed(2)),
     lossLimitPct: risk.maxDailyLossPct * 100,
-    lossLimitBreached,
+    lossLimitBreached: measurable ? daily.state === 'breached' : null,
+    // Present only when there is nothing to measure, and it says what is blocked as well as why:
+    // entries are refused while this is set, exits are not.
+    lossLimitUnmeasurable: measurable
+      ? undefined
+      : `${daily.reason}. Entries are blocked until the daily reset establishes a baseline; exits are unaffected.`,
     maxPositions: risk.maxPositions,
   });
 }
