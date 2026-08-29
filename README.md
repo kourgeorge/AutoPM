@@ -198,7 +198,6 @@ Measuring — the deterministic tools that exist so the model does not have to g
 | Tool | What it does |
 |---|---|
 | `get_signals(symbol)` | The five entry signals — EMA momentum, trend strength, volume, breakout, MACD — each scored −1…+1, plus ATR and last close. The *same* computation that fills an `entry_signal` event, run on demand |
-| `get_position_size(symbol, price, atr)` | Inverse-ATR volatility-scaled qty — equal risk per position |
 | `get_correlation(symbol)` | Max pairwise correlation of a **candidate** vs open positions, plus a sizing recommendation |
 | `get_exposure` | Shape of the book: per-position weight, sector, gross deployed, cash, largest single-name and sector weight, Herfindahl index, every held-vs-held correlation pair. The only source of a weight or a sector in this system |
 | `get_scorecard(symbol?, days?)` | Measured performance over **completed** round trips: win rate, expectancy in $/%/R, hold times split by winners and losers, drawdown, stop discipline, breakdowns by symbol and policy version |

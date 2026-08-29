@@ -1,13 +1,23 @@
 /**
- * Portfolio-level risk management: volatility-scaled sizing and correlation gating.
+ * Portfolio-level risk management: correlation between what the book already holds and what it is
+ * about to hold.
  *
  * Inspired by Ang, Azimbayev & Kim (2026) "The Self-Driving Portfolio" — adapted
  * from institutional SAA (20 PC agents, inverse-vol heuristics) to a concentrated
  * momentum book where the same principles apply at position level.
  *
- * Two functions are exported for use by the guard layer (orderManager.ts):
- *  - volatilityScaledQty: sizes positions inversely to ATR for equal risk contribution
- *  - correlationGate: checks correlation of candidate entry against existing holdings
+ * SIZING USED TO LIVE HERE and no longer does. `volatilityScaledQty` returned
+ * `min(equity x positionSizePct / (atr x stopLossAtrMult), equity x positionSizePct / price)`, and the
+ * risk leg only wins when `atr x stopLossAtrMult > price` — ATR above half the share price, which no
+ * real name has. So it returned the flat notional number in every case that ever reached it
+ * (measured across the watchlist's price/ATR range: identical every time), while its tool called that
+ * number "vol-scaled" and named a cause for it. One knob, one meaning: `positionSizePct` is a notional
+ * budget, POLICY.md gives the model the formula, and `enterPosition` enforces it as
+ * `position_too_large`. Equal-risk sizing needs its own smaller knob before it can mean anything.
+ *
+ * What is exported:
+ *  - correlationGate: checks correlation of a candidate entry against existing holdings
+ *  - returnsMatrix / correlate: the shared primitives exposure.ts builds the book view from
  */
 
 import { collectBars } from '../collect/barSource';
@@ -16,54 +26,6 @@ import { getPolicy } from '../policy/load';
 import { broker } from '../broker';
 import { logger } from '../core/logger';
 import { sameSymbol } from '../core/symbols';
-
-// ── Volatility-scaled position sizing ────────────────────────────────────────
-
-/**
- * Compute position size using inverse-volatility scaling.
- *
- * Instead of a flat positionSizePct, each position gets a dollar risk budget
- * proportional to 1/ATR. This equalizes the expected dollar risk per position:
- * a stock with 2x the ATR gets half the shares.
- *
- * Formula:
- *   dollarBudget = equity × positionSizePct
- *   riskPerShare = atr × stopLossAtrMult  (the distance to the stop)
- *   qty = dollarBudget / riskPerShare
- *
- * This is the standard "fixed fractional risk" sizing used by trend-followers
- * (cf. Van Tharp, Kirby & Ostdiek 2012 inverse-volatility from the paper's Exhibit 5).
- */
-export function volatilityScaledQty(
-  equity: number,
-  price: number,
-  atr: number,
-): number {
-  const policy = getPolicy();
-  const { positionSizePct, stopLossAtrMult } = policy.risk;
-
-  // Dollar risk budget for this position
-  const dollarBudget = equity * positionSizePct;
-
-  // Risk per share = distance from entry to stop (ATR × multiplier)
-  const riskPerShare = atr * stopLossAtrMult;
-
-  if (riskPerShare <= 0 || !Number.isFinite(riskPerShare)) {
-    // Fallback to simple dollar-based sizing
-    return Math.floor(dollarBudget / price);
-  }
-
-  // Qty = budget / risk per share, but also capped by dollar budget / price
-  // (we can't spend more than the budget in total notional)
-  const qtyByRisk = dollarBudget / riskPerShare;
-  const qtyByNotional = dollarBudget / price;
-
-  // Zero when one share does not fit the budget, and zero is the honest answer: a trailing
-  // `Math.max(qty, 1)` used to report 1 there, which on a high-priced asset recommended a
-  // position many times the equity (measured: $10k equity, $118k price -> qty 1 = 1180%).
-  // It also disagreed with the `riskPerShare <= 0` branch above, which floors to 0 already.
-  return Math.floor(Math.min(qtyByRisk, qtyByNotional));
-}
 
 // ── Shared correlation primitives ─────────────────────────────────────────────
 
