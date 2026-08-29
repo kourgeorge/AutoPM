@@ -4,6 +4,11 @@ risk:
   positionSizePct: 0.1
   stopLossAtrMult: 2
   maxDailyLossPct: 0.03
+  # Gross exposure ceiling across the whole book, as a fraction of equity. 1 = 100%, fully
+  # deployed on no margin — the level `maxPositions x positionSizePct` already implies at these
+  # defaults. Enforced by `exposureVeto` in orderManager.ts: ten correctly-sized positions can
+  # still add up past this with nothing else checking the book as a whole.
+  maxGrossExposurePct: 1
 strategy:
   watchlist:
     - AAPL
@@ -102,3 +107,4 @@ immutable:
   positionSizePctCeiling: 0.1
   stopLossAtrMultCeiling: 4
   minTickIntervalMs: 30000
+  maxGrossExposurePctCeiling: 1.5

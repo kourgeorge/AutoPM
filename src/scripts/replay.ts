@@ -55,7 +55,7 @@ import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { REVERSAL_LOOKBACK, reversalFilter } from '../strategy/reversal';
 import { computeSignals, signalTally } from '../strategy/signals';
 import { dailyLossStatus } from '../strategy/riskManager';
-import { GuardRejection, enterPosition, entrySignalVeto, positionSizeVeto, restingSells } from '../strategy/orderManager';
+import { GuardRejection, enterPosition, entrySignalVeto, exposureVeto, positionSizeVeto, restingSells } from '../strategy/orderManager';
 import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
 import {
@@ -1051,6 +1051,46 @@ async function guardRules(): Promise<void> {
   check('a fractional qty is measured by its notional like any other',
     positionSizeVeto(0.5, sizeBudget * 4, sizeEquity, sizePol) !== null,
     'half a unit at twice the budget was accepted');
+
+  // ── Gross exposure ────────────────────────────────────────────────────────────
+  //
+  // `positionSizeVeto` above bounds one position; nothing bounded the book. Ten
+  // correctly-sized positions could still walk the account past its exposure ceiling with
+  // no guard noticing. This is that guard's arithmetic, pinned the same way as the one above.
+  const expPol = getPolicy();
+  const expEquity = 100_000;
+  const expCeiling = expEquity * expPol.risk.maxGrossExposurePct;
+
+  const heldAtCeiling: Position[] = [
+    { symbol: 'AAPL', qty: 1, avgCost: 100, marketValue: expCeiling * 0.6 },
+    { symbol: 'MSFT', qty: 1, avgCost: 100, marketValue: expCeiling * 0.3 },
+  ];
+
+  check('an empty book accepts an entry that alone fits under the ceiling',
+    exposureVeto(expCeiling * 0.5, [], expEquity, expPol) === null,
+    'refused with no existing positions');
+  check('a book already at 90% of the ceiling accepts a slice that keeps it under',
+    exposureVeto(expCeiling * 0.05, heldAtCeiling, expEquity, expPol) === null,
+    'refused a fit that leaves headroom');
+
+  // The case with no guard before this fix: every existing position individually inside its
+  // own size budget, but the SUM plus one more correctly-sized entry clears the book ceiling.
+  const oneMore = exposureVeto(expCeiling * 0.2, heldAtCeiling, expEquity, expPol);
+  check('a correctly-sized entry is refused when the book is already near its ceiling',
+    oneMore !== null, 'not refused');
+  check('the exposure refusal names the projected total and the ceiling',
+    oneMore !== null
+      && oneMore.includes(expCeiling.toFixed(2))
+      && oneMore.includes((expCeiling * 0.9 + expCeiling * 0.2).toFixed(2)),
+    oneMore ?? 'none');
+
+  // A position missing `marketValue` (optional on IBroker's `Position`) is excluded from the
+  // sum, never guessed from entry price — so a gap in the data can only under-count the book,
+  // never fabricate a refusal.
+  const noValue: Position[] = [{ symbol: 'TSLA', qty: 1, avgCost: 100 }];
+  check('a position with no market value contributes nothing to the book sum',
+    exposureVeto(expCeiling * 0.5, noValue, expEquity, expPol) === null,
+    'a missing market value was not excluded from the sum');
 
   // ── The entry gate ────────────────────────────────────────────────────────────
   //

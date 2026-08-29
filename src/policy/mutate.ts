@@ -33,6 +33,8 @@ export interface PolicyMutation {
   stopLossAtrMult?: number;
   /** risk.maxDailyLossPct — fraction, e.g. 0.03 for 3% */
   maxDailyLossPct?: number;
+  /** risk.maxGrossExposurePct — fraction of equity, e.g. 0.8 for 80% */
+  maxGrossExposurePct?: number;
 }
 
 export type MutateResult =
@@ -101,6 +103,7 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
     ['positionSizePct',   'risk.positionSizePct'],
     ['stopLossAtrMult',   'risk.stopLossAtrMult'],
     ['maxDailyLossPct',   'risk.maxDailyLossPct'],
+    ['maxGrossExposurePct', 'risk.maxGrossExposurePct'],
   ];
   for (const [field, label] of riskFields) {
     const v = changes[field as keyof PolicyMutation];

@@ -98,6 +98,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
         positionSizePct:     { type: 'number',  minimum: 0,               description: 'Position size as a fraction of equity (e.g. 0.05 = 5%).' },
         stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'Stop distance = entry \u2212 stopLossAtrMult \u00d7 ATR.' },
         maxDailyLossPct:     { type: 'number',  minimum: 0,               description: 'Daily loss limit as a fraction of equity (e.g. 0.03 = 3%).' },
+        maxGrossExposurePct: { type: 'number',  minimum: 0,               description: 'Gross exposure ceiling across the whole book, as a fraction of equity (e.g. 1.0 = 100%, fully deployed).' },
       },
       required: [],
     },
