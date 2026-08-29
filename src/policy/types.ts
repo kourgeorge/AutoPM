@@ -11,6 +11,14 @@ export interface RiskPolicy {
   positionSizePct: number;
   stopLossAtrMult: number;
   maxDailyLossPct: number;
+  /**
+   * Gross exposure ceiling as a fraction of equity (1.0 = 100%, fully deployed on no margin).
+   *
+   * `maxPositions x positionSizePct` alone can add up past this — ten correctly-sized positions
+   * still leave no headroom check on the book as a whole. This is that check, enforced by
+   * `exposureVeto` in orderManager.ts.
+   */
+  maxGrossExposurePct: number;
 }
 
 export interface StrategyPolicy {
@@ -76,6 +84,7 @@ export interface ImmutablePolicy {
   positionSizePctCeiling: number;
   stopLossAtrMultCeiling: number;
   minTickIntervalMs: number;
+  maxGrossExposurePctCeiling: number;
 }
 
 /** Which trader actions the operator approval gate covers. One key per ENFORCED action. */

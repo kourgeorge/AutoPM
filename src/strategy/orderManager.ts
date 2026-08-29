@@ -8,7 +8,7 @@
  */
 
 import { broker } from '../broker';
-import type { OpenOrder } from '../broker/IBroker';
+import type { OpenOrder, Position } from '../broker/IBroker';
 import { collectBars, DEFAULT_COLLECT_REQUEST, isPresent, type Maybe } from '../collect';
 import { logger } from '../core/logger';
 import { sameSymbol } from '../core/symbols';
@@ -193,6 +193,42 @@ export function positionSizeVeto(
 }
 
 /**
+ * Why this entry would push the WHOLE BOOK over its gross exposure ceiling, or null when it fits.
+ *
+ * `positionSizeVeto` above checks one position in isolation; nothing checked the book as a
+ * whole. `maxPositions x positionSizePct` is 100% of equity by default, so a string of
+ * independently-reasonable entries could still walk the account to a fully (or, on margin,
+ * over-) deployed book with no guard noticing, because nothing summed them.
+ *
+ * Pure and exported for the same reason `positionSizeVeto` is: the judgement — sum the book,
+ * add the new notional, compare to the ceiling — needs no network call once positions and
+ * equity are in hand.
+ *
+ * `marketValue` is optional on `Position` (see IBroker); a position missing it is excluded from
+ * the sum rather than guessed from entry price, so this guard can only under-count the existing
+ * book, never over-refuse on a fabricated number.
+ */
+export function exposureVeto(
+  newNotional: number,
+  positions: Position[],
+  equity: number,
+  policy: Policy,
+): string | null {
+  const existingGross = positions.reduce(
+    (sum, p) => sum + (Number.isFinite(p.marketValue as number) ? Math.abs(p.marketValue as number) : 0),
+    0,
+  );
+  const projectedGross = existingGross + newNotional;
+  const ceiling = equity * policy.risk.maxGrossExposurePct;
+  if (projectedGross <= ceiling) return null;
+
+  return `Adding $${newNotional.toFixed(2)} would deploy $${projectedGross.toFixed(2)} of the book `
+    + `(existing $${existingGross.toFixed(2)} + this entry) against a $${ceiling.toFixed(2)} gross `
+    + `exposure ceiling (${(policy.risk.maxGrossExposurePct * 100).toFixed(1)}% of $${equity.toFixed(2)} `
+    + `equity). Reduce this entry's size or exit something first.`;
+}
+
+/**
  * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
  * that was asked for: `applyRegimeSizing` may cut it. The caller journals what it is
  * given, so returning the requested number here would record a position size that never
@@ -297,6 +333,11 @@ export async function enterPosition(
   // would journal "taking a 30% position because..." against a position that was never 30%.
   const oversized = positionSizeVeto(qty, price, account.equity, getPolicy());
   if (oversized) reject('position_too_large', oversized);
+
+  // The book-level version of the check above: one correctly-sized position can still be the
+  // straw that puts the whole account over its gross exposure ceiling.
+  const overExposed = exposureVeto(qty * price, positions, account.equity, getPolicy());
+  if (overExposed) reject('exposure_too_high', overExposed);
 
   // The entry gate, and the first check here that needs the network. Placed AFTER the broker
   // guards on purpose: `already_holding` and `max_positions` are structural refusals the model

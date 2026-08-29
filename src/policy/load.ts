@@ -91,6 +91,16 @@ const DEFAULT_CONFIRM_TICKS = 2;
  */
 const DEFAULT_COMPOSITE_MIN = 0.2;
 
+/**
+ * Fallback for `risk.maxGrossExposurePct` / `immutable.maxGrossExposurePctCeiling` when absent —
+ * same reason as `compositeMin` above: every policy.yaml written before the exposure guard
+ * existed is missing these keys, and the first load throws on a validation error. 1.0 (100% of
+ * equity) is the ceiling the default `maxPositions x positionSizePct` already implies, so an
+ * operator who has never heard of the field inherits the limit their book was already sized to.
+ */
+const DEFAULT_MAX_GROSS_EXPOSURE_PCT = 1.0;
+const DEFAULT_MAX_GROSS_EXPOSURE_PCT_CEILING = 1.5;
+
 function num(
   src: Record<string, unknown>,
   where: string,
@@ -169,6 +179,9 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     positionSizePctCeiling: num(imm, 'immutable', 'positionSizePctCeiling', errs, { min: 0 }),
     stopLossAtrMultCeiling: num(imm, 'immutable', 'stopLossAtrMultCeiling', errs, { min: 0 }),
     minTickIntervalMs: num(imm, 'immutable', 'minTickIntervalMs', errs, { int: true, min: 1 }),
+    maxGrossExposurePctCeiling: imm.maxGrossExposurePctCeiling === undefined
+      ? DEFAULT_MAX_GROSS_EXPOSURE_PCT_CEILING
+      : num(imm, 'immutable', 'maxGrossExposurePctCeiling', errs, { min: 0 }),
   };
 
   const r = block(root, 'risk', errs);
@@ -177,6 +190,9 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     positionSizePct: num(r, 'risk', 'positionSizePct', errs, { min: 0, max: immutable.positionSizePctCeiling }),
     stopLossAtrMult: num(r, 'risk', 'stopLossAtrMult', errs, { min: 0, max: immutable.stopLossAtrMultCeiling }),
     maxDailyLossPct: num(r, 'risk', 'maxDailyLossPct', errs, { min: 0, max: immutable.maxDailyLossPctCeiling }),
+    maxGrossExposurePct: r.maxGrossExposurePct === undefined
+      ? DEFAULT_MAX_GROSS_EXPOSURE_PCT
+      : num(r, 'risk', 'maxGrossExposurePct', errs, { min: 0, max: immutable.maxGrossExposurePctCeiling }),
   };
 
   const s = block(root, 'strategy', errs);
