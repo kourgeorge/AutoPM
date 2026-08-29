@@ -270,16 +270,29 @@ interface WatchEntry {
   bullish: number;
   bearish: number;
   total: number;
+  /** Mean of the scores, null when unscored. What the `sig` column renders. */
+  composite: number | null;
 }
 
-/** Watchlist ordered by bullish count, so a truncated list keeps the interesting end. */
+/**
+ * Watchlist ordered by composite, so a truncated list keeps the interesting end.
+ *
+ * By the mean rather than the bullish count: the five signals all measure trend and agree most
+ * of the time, so counting them put a symbol whose three positives were +0.15 level with one
+ * whose three were +0.9, and at a height that shows six of eighteen rows that is the wrong six.
+ * Unscored rows sort last rather than as zero — no reading is not a flat reading.
+ */
 function sortedWatchlist(tick: TickSnapshot): WatchEntry[] {
   return Object.values(tick.watchlist)
     .map((row) => {
       const t = signalTally(row.signals);
-      return { row, bullish: t.bullish, bearish: t.bearish, total: t.total };
+      return { row, bullish: t.bullish, bearish: t.bearish, total: t.total, composite: t.composite };
     })
-    .sort((a, b) => b.bullish - a.bullish || a.row.symbol.localeCompare(b.row.symbol));
+    .sort(
+      (a, b) =>
+        (b.composite ?? -Infinity) - (a.composite ?? -Infinity) ||
+        a.row.symbol.localeCompare(b.row.symbol),
+    );
 }
 
 // ── Rows ──────────────────────────────────────────────────────────────────────
@@ -386,17 +399,21 @@ function positionRow(m: DashboardModel, f: Fmt, p: PositionRow, width: number): 
 
 function watchRow(m: DashboardModel, f: Fmt, entry: WatchEntry, width: number): string {
   const g = m.glyphs;
-  const { row, bullish, bearish, total } = entry;
+  const { row, bullish, bearish, total, composite } = entry;
   const dim = row.stale || row.price === null;
 
-  // The arrow reads BOTH counts, never the absence of one. A set of five neutral signals has
-  // zero bullish, and rendering that as a down arrow would say "the signals lean bearish" about
-  // a symbol whose signals lean nowhere — the same conflation of "no evidence" with "negative
-  // evidence" that the dash-not-zero rule exists to prevent. A majority either way wins;
-  // anything else is flat.
+  // The composite itself, not a count and not an arrow. `+0.42` fits the same five columns
+  // `↑3/5` did and says something the count cannot: five signals barely above the dead band and
+  // five near +1 rendered identically before, and they are not the same setup. The sign is the
+  // arrow.
+  //
+  // The COLOUR still comes from the counts, because `signalTally` owns the dead band that
+  // decides a lean and a threshold on the composite here would be this file's second copy of
+  // that judgement — the thing the header forbids. The counts read BOTH sides, never the
+  // absence of one: five neutral signals have zero bullish, and painting that red would say
+  // "leans bearish" about a symbol that leans nowhere.
   const lean = total === 0 ? 0 : bullish * 2 > total ? 1 : bearish * 2 > total ? -1 : 0;
-  const arrow = lean > 0 ? g.up : lean < 0 ? g.down : g.flat;
-  const arrowColor = lean > 0 ? 'green-fg' : lean < 0 ? 'red-fg' : 'gray-fg';
+  const leanColor = lean > 0 ? 'green-fg' : lean < 0 ? 'red-fg' : 'gray-fg';
 
   const cols: Col[] = [
     { text: row.symbol, w: WATCH_GRID.sym, color: dim ? 'gray-fg' : undefined },
@@ -407,10 +424,12 @@ function watchRow(m: DashboardModel, f: Fmt, entry: WatchEntry, width: number): 
       color: dim ? 'gray-fg' : undefined,
     },
     {
-      text: total === 0 ? g.dash : `${arrow}${bullish}/${total}`,
+      text: composite === null
+        ? g.dash
+        : `${composite >= 0 ? '+' : ''}${composite.toFixed(2)}`,
       w: WATCH_GRID.sig,
       right: true,
-      color: arrowColor,
+      color: leanColor,
     },
     { text: f.fixed(row.rsi, 0), w: WATCH_GRID.rsi, right: true, color: 'gray-fg' },
   ];
@@ -690,7 +709,7 @@ function stripBook(m: DashboardModel, f: Fmt, width: number): string {
   return joinChunks(f, width, ' ', [
     { text: 'flat', color: 'gray-fg' },
     ...watch.map((e) => ({
-      text: `${e.row.symbol}${e.total > 0 ? ` ${e.bullish}/${e.total}` : ''}`,
+      text: `${e.row.symbol}${e.composite === null ? '' : ` ${e.composite >= 0 ? '+' : ''}${e.composite.toFixed(2)}`}`,
       color: e.total > 0 && e.bullish * 2 > e.total ? 'green-fg' : 'gray-fg',
     })),
   ]);

@@ -103,14 +103,23 @@ export const entrySignalDetector: Detector = {
 
       const armed = f.emaCrossedUp && f.rsi >= effectiveRsiMin;
 
-      // Multi-signal summary for the headline (paper: "LLM-as-judge" pattern)
+      // Multi-signal summary for the headline (paper: "LLM-as-judge" pattern). `signalSummary`
+      // leads with the composite, so the headline carries the magnitude of the five scores and
+      // not just how many cleared the dead band.
       const signalNote = f.signals.length > 0 ? ` (${f.signalSummary})` : '';
+
+      // The one part of the reversal filter that belongs in a headline: a cross into a name
+      // that has already run is the case where the five correlated trend signals are most
+      // likely to be agreeing about something that is nearly over.
+      const chaseNote = f.reversal.chasing
+        ? ` — already ${f.reversal.oneMonthReturnPct! >= 0 ? '+' : ''}${f.reversal.oneMonthReturnPct!.toFixed(1)}% in 21 bars, don't chase`
+        : '';
 
       hits.push({
         symbol: f.symbol,
         cooldownKey: `entry_signal:${f.symbol}`,
         severity: 'urgent',
-        headline: `${f.symbol} entry signal — EMA${policy.strategy.emaFast} crossed above EMA${policy.strategy.emaSlow}, RSI ${f.rsi.toFixed(1)} at ${f.price.toFixed(2)}${signalNote}`,
+        headline: `${f.symbol} entry signal — EMA${policy.strategy.emaFast} crossed above EMA${policy.strategy.emaSlow}, RSI ${f.rsi.toFixed(1)} at ${f.price.toFixed(2)}${signalNote}${chaseNote}`,
         evidence: {
           price: f.price,
           emaFast: f.emaFast ?? 'n/a',
@@ -122,6 +131,10 @@ export const entrySignalDetector: Detector = {
           // Multi-signal evidence for the trader LLM to judge (Ang et al. 2026 pattern)
           signals: f.signals as any,
           signalSummary: f.signalSummary,
+          // Carried whole, and deliberately not folded into `signalSummary`: it is the one
+          // reading here that can contradict the five, and a filter averaged into what it is
+          // meant to filter stops being a filter.
+          reversal: f.reversal as any,
         },
         // Research, not entry: position limits and daily-loss halts are L4's to enforce,
         // and this detector deliberately knows nothing about them.

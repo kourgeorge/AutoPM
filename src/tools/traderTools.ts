@@ -20,7 +20,8 @@ import { getFundamentals } from '../collect/fundamentals';
 import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
 import { isPresent } from '../collect/types';
 import { atr } from '../strategy/indicators';
-import { computeSignals, signalSummary } from '../strategy/signals';
+import { computeSignals, signalSummary, signalTally } from '../strategy/signals';
+import { reversalFilter } from '../strategy/reversal';
 import { getLastTick } from '../features/lastTick';
 import { watchlistScan } from '../features/watchlistScan';
 import {
@@ -190,7 +191,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_signals',
-    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 (strongly bearish) to +1 (strongly bullish), plus ATR and the last close. This is the SAME deterministic computation that fills the signal evidence on an entry_signal event, run on demand: use it for a candidate that has not fired an event, so a signal breakdown you report is one you actually measured. Never state which signals are bullish or bearish without this tool or get_pending_events.',
+    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 (strongly bearish) to +1 (strongly bullish), plus tally.composite (their mean, the number to threshold on), the reversal filter, ATR and the last close. All five measure trend and are highly correlated, so their COUNTS inflate: 5/5 bullish is closer to one confirmation counted five times, which is why the composite keeps the magnitude the vote throws away. reversal is separate and NOT in the composite — it is contrarian and monthly, its score is negative when the name has already run, and chasing: true means the move has cleared the chase threshold for its market-cap bucket. This is the SAME deterministic computation that fills the signal evidence on an entry_signal event, run on demand: use it for a candidate that has not fired an event, so a signal breakdown you report is one you actually measured. Never state which signals are bullish or bearish, or quote a composite or a reversal reading, without this tool or get_pending_events.',
     input_schema: {
       type: 'object',
       properties: {
@@ -201,7 +202,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_watchlist_scan',
-    description: 'Read the WHOLE watchlist as one table: every non-held watchlist symbol with its five signal scores, tally, ATR, RSI, both EMAs, price and price staleness. Use this INSTEAD of calling get_signals once per symbol when you are scanning for a candidate — it is one call rather than eighteen, and the numbers are identical because both come from the same deterministic computation. These are the exact figures the machine judged on its last 60-second pass, not a fresh fetch: tickAt and ageMs say when, and a caveat appears if the table is older than a few tick intervals. Held names are NOT rows — they are listed in heldExcluded, so their absence means held, not off the watchlist. A symbol the machine declined to score (too little bar history) is still a row, with notScored naming why, so silence never stands in for missing data. priceStale is about the PRICE only; signals come from bars, so a row can have no price and full scores. Rows are SORTED by bullish count, which is an ordering and not a judgement of quality. Before the first tick of a process there is no table at all and this returns an error rather than an empty list. For a symbol that is not on the watchlist, or for a fresh reading right now, use get_signals(symbol).',
+    description: 'Read the WHOLE watchlist as one table: every non-held watchlist symbol with its five signal scores, tally (including composite, their mean), the reversal filter, ATR, RSI, both EMAs, price and price staleness. Use this INSTEAD of calling get_signals once per symbol when you are scanning for a candidate — it is one call rather than eighteen, and the numbers are identical because both come from the same deterministic computation. These are the exact figures the machine judged on its last 60-second pass, not a fresh fetch: tickAt and ageMs say when, and a caveat appears if the table is older than a few tick intervals. Held names are NOT rows — they are listed in heldExcluded, so their absence means held, not off the watchlist. A symbol the machine declined to score (too little bar history) is still a row, with notScored naming why, so silence never stands in for missing data. priceStale is about the PRICE only; signals come from bars, so a row can have no price and full scores. Rows are SORTED by composite descending, which is an ordering and not a judgement of quality; unscored rows sort last. The five signals are one trend family and correlated, so read composite rather than counting votes, and read reversal separately — it is the only reading here that can disagree with them. Before the first tick of a process there is no table at all and this returns an error rather than an empty list. For a symbol that is not on the watchlist, or for a fresh reading right now, use get_signals(symbol).',
     input_schema: {
       type: 'object',
       properties: {},
@@ -391,7 +392,8 @@ async function toolGetPositionSize(input: Record<string, unknown>): Promise<stri
 }
 
 /**
- * The five signal scores for one symbol, on demand.
+ * The five signal scores for one symbol, plus their composite and the reversal filter.
+ *
  *
  * Until this existed, signals could ONLY reach the trader as `evidence.signals` on an
  * `entry_signal` event — which fires on an EMA cross, not on being asked about. A
@@ -443,6 +445,18 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
   const atrSeries = atr(bars.value, policy.strategy.atrPeriod);
   const lastBar = bars.value[bars.value.length - 1];
 
+  // Fetched rather than read from the cache, unlike the tick's cache-only path: this is the
+  // "read it fresh, and for a symbol the watchlist may not cover" tool, so the one symbol it
+  // was asked about is worth a round trip. A failure costs the size adjustment and nothing
+  // else — the filter says `sizeBucket: 'unknown'` for itself — so it must not take the tool
+  // down, and an unreachable Yahoo is not evidence about the trade.
+  let marketCap: number | null = null;
+  try {
+    marketCap = (await getFundamentals(symbol)).liquidity.marketCap;
+  } catch {
+    marketCap = null;
+  }
+
   return JSON.stringify({
     symbol,
     asOf: bars.asOf,
@@ -451,7 +465,13 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
     lastClose: lastBar.c,
     atr: atrSeries.length > 0 ? parseFloat(atrSeries[atrSeries.length - 1].toFixed(2)) : null,
     signals,
+    tally: signalTally(signals),
+    reversal: reversalFilter(bars.value, marketCap),
     summary: signalSummary(signals),
+    caveats: [
+      'The five signals all measure trend and are highly correlated, so their counts inflate: a 5/5 tally is closer to one confirmation counted five times. tally.composite is their mean and is the number to threshold on.',
+      'reversal is NOT in the composite. Its score reads the opposite way to a signal score — negative means the name has already run — and it answers "is this too late to chase" over about a month, not "is this a good entry today".',
+    ],
   });
 }
 
