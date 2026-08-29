@@ -6,14 +6,21 @@
  * detector would mean two mechanisms disagreeing about what a crossing is. A spread has no
  * magnitude of its own at the threshold (zero), so its band is scaled off the slow EMA.
  *
- * `entry_signal` is a composite (`crossed up AND rsi >= min`) with no single scalar to
- * compare, so it uses `boolCrossing`. It must not be a bare one-shot: `crossedAbove` stays
- * true for the whole life of the latest bar, so a cooldown-only version would re-fire all
- * day on daily bars.
+ * `entry_signal` arms on three conditions at once (`crossed up AND rsi >= min AND composite >=
+ * min`) with no single scalar to compare, so it uses `boolCrossing`. It must not be a bare
+ * one-shot: `crossedAbove` stays true for the whole life of the latest bar, so a cooldown-only
+ * version would re-fire all day on daily bars.
+ *
+ * The composite belongs in that condition and not merely in the headline. It is the threshold
+ * `enterPosition` refuses on (`low_composite`) and the one POLICY.md renders into the prompt, and
+ * while it was carried as text only, this detector woke the trader for crosses the next layer was
+ * going to decline. Waking a cycle costs a model call and a cooldown slot; spending both to be
+ * told no is the one outcome worth designing out.
  */
 
 import { boolCrossing, type Detector, type DetectorHit } from '../eventBus';
 import { getCachedRegime } from '../../macro/regime';
+import { signalTally } from '../../strategy/signals';
 import { bandOf, pctText } from './util';
 
 export const emaCrossDownDetector: Detector = {
@@ -89,19 +96,34 @@ export const entrySignalDetector: Detector = {
   evaluate(data, policy) {
     const hits: DetectorHit[] = [];
 
-    // Regime-conditioned RSI minimum (Ang et al. 2026: regime as first-class pipeline stage).
-    // Falls back to policy.strategy.rsiEntryMin if regime not yet fetched.
+    // Regime-conditioned thresholds (Ang et al. 2026: regime as first-class pipeline stage).
+    // Falls back to the strategy block if the regime has not been fetched yet.
+    //
+    // Resolved from the CACHE, exactly as `enterPosition`'s gate resolves it, and that agreement
+    // is the point: if attention read a live regime and permission read a cached one, the two
+    // could hold different thresholds for the same instant and be back to disagreeing.
     const regime = getCachedRegime();
     const effectiveRsiMin = regime
       ? policy.regime[regime.regime].rsiEntryMin
       : policy.strategy.rsiEntryMin;
+    const effectiveCompositeMin = regime
+      ? policy.regime[regime.regime].compositeMin
+      : policy.strategy.compositeMin;
 
     for (const f of Object.values(data.watchlist)) {
       // No entry off a stale price, and none at all until the series is long enough to say
       // whether a cross happened.
       if (f.price === null || f.stale || f.emaCrossedUp === null || f.rsi === null) continue;
 
-      const armed = f.emaCrossedUp && f.rsi >= effectiveRsiMin;
+      // Null when nothing was scored, and null does NOT arm. Same reading as the guard's
+      // `signals_unavailable`: an unscoreable name is not a weak setup, but it is not a wake
+      // either — there is nothing for the model to judge and nothing that would pass at L4.
+      const composite = signalTally(f.signals).composite;
+
+      const armed = f.emaCrossedUp
+        && f.rsi >= effectiveRsiMin
+        && composite !== null
+        && composite >= effectiveCompositeMin;
 
       // Multi-signal summary for the headline (paper: "LLM-as-judge" pattern). `signalSummary`
       // leads with the composite, so the headline carries the magnitude of the five scores and
@@ -126,6 +148,10 @@ export const entrySignalDetector: Detector = {
           emaSlow: f.emaSlow ?? 'n/a',
           rsi: f.rsi,
           rsiEntryMin: effectiveRsiMin,
+          // Both sides of the gate that fired, so a reader of the journal can see what the
+          // threshold was at the time without having to reconstruct the policy version.
+          composite: composite ?? 'n/a',
+          compositeMin: effectiveCompositeMin,
           regime: regime?.regime ?? 'unknown',
           atr: f.atr ?? 'n/a',
           // Multi-signal evidence for the trader LLM to judge (Ang et al. 2026 pattern)

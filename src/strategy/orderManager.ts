@@ -9,12 +9,15 @@
 
 import { broker } from '../broker';
 import type { OpenOrder } from '../broker/IBroker';
+import { collectBars, DEFAULT_COLLECT_REQUEST, isPresent, type Maybe } from '../collect';
 import { logger } from '../core/logger';
 import { sameSymbol } from '../core/symbols';
 import { getPositionSnapshot, getState, patchPositionSnapshot } from '../state/state';
 import { armStop, withStopLock, type ArmResult } from './stopOrders';
-import { SignalResult } from '../core/types';
+import { computeSignals, signalTally } from './signals';
+import { Bar, SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
+import type { Policy } from '../policy/types';
 import { getRegime, getCachedRegime } from '../macro/regime';
 import type { Regime } from '../macro/regime';
 import {
@@ -41,6 +44,115 @@ export class GuardRejection extends Error {
 function reject(rule: string, message: string): never {
   throw new GuardRejection(rule, message);
 }
+
+/**
+ * Why an entry was refused on its signals, or null when the setup clears the gate.
+ *
+ * Two rules, not one, and the split is the point. `low_composite` answers "was the setup strong
+ * enough" and `signals_unavailable` answers "could we tell". Filed under one name, the journal
+ * could no longer distinguish a season of weak setups from a fortnight of bar-feed trouble, and
+ * `grep '"vetoRule":"low_composite"'` is the only way that question gets answered months later.
+ */
+export type SignalVeto = {
+  rule: 'low_composite' | 'signals_unavailable';
+  message: string;
+};
+
+/**
+ * The entry gate: does this symbol's composite clear the threshold?
+ *
+ * Pure and exported so the replay harness can assert the decision without a venue and without a
+ * bar feed — same division as `restingSells` below. The judgement is the part worth pinning; the
+ * fetching is the part that needs a network.
+ *
+ * REFUSES ON MISSING DATA. Unscoreable bars are not a caveat to note and carry on from:
+ * `get_signals` already declines to score a stale series rather than scoring it with a warning,
+ * and a guard that entered anyway would be the second, laxer opinion on what "scoreable" means.
+ * The cost is that a bar outage blocks new entries, which is the correct trade for an unattended
+ * agent — no evidence, no position — and it leaves open positions entirely untouched.
+ *
+ * Reads the composite, never the vote count, and never `reversal`. The composite because a tally
+ * cannot tell three signals barely past the dead band from three screaming ones. Not `reversal`
+ * because POLICY.md's chasing rule ends with "or say in the rationale what makes this the
+ * exception" — a rule with an escape hatch is a judgement, and moving it here would delete the
+ * hatch while the prose still promised it.
+ */
+export function entrySignalVeto(
+  symbol: string,
+  bars: Maybe<Bar[]>,
+  policy: Policy,
+  compositeMin: number,
+): SignalVeto | null {
+  const unavailable = (why: string): SignalVeto => ({
+    rule: 'signals_unavailable',
+    message: `Cannot score ${symbol}, so the entry gate cannot be applied: ${why}. `
+      + `No entry is opened on unmeasured signals — retry when bars are available.`,
+  });
+
+  if (!isPresent(bars)) return unavailable(`no bars from ${bars.source}: ${bars.error}`);
+  if (bars.stale) return unavailable(`bars are stale as of ${bars.asOf}`);
+  if (bars.value.length < policy.strategy.minBars) {
+    return unavailable(`insufficient history: ${bars.value.length} bars, need ${policy.strategy.minBars}`);
+  }
+
+  const { composite } = signalTally(computeSignals(bars.value, policy));
+
+  // Null and "below the threshold" are different claims, so they get different rules. Reaching
+  // here needs `minBars` bars, which `computeSignals` always scores, so this is a guard against a
+  // future signal set that can decline rather than a case seen today.
+  if (composite === null) return unavailable('the signals produced no composite');
+
+  if (composite < compositeMin) {
+    return {
+      rule: 'low_composite',
+      message: `${symbol} composite ${composite >= 0 ? '+' : ''}${composite.toFixed(2)} is below the `
+        + `entry minimum of +${compositeMin.toFixed(2)} — the setup is not strong enough to open. `
+        + `Read the five scores with get_signals(${symbol}) before trying again.`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * `entrySignalVeto` against the live feed.
+ *
+ * The threshold is resolved from the CACHED regime only, exactly as `entrySignalDetector` resolves
+ * its RSI floor. Two reasons, and both matter: the detector and the guard must agree about which
+ * regime it is, or attention and permission drift apart again; and the order path never waits on
+ * the network for a regime (see `applyRegimeSizing` — a cold `getRegime()` has been measured at
+ * 15s, which is pure drift on a market order that has already cleared every other guard).
+ */
+async function refuseUnlessSignalsSupport(symbol: string): Promise<void> {
+  const policy = getPolicy();
+  const regime = getCachedRegime();
+  const compositeMin = regime
+    ? policy.regime[regime.regime].compositeMin
+    : policy.strategy.compositeMin;
+
+  // Same request shape as `get_signals` and as the tick, so a guard, a tool and an event can
+  // never report different scores for one symbol at one moment.
+  const bars = await collectBars(
+    symbol,
+    DEFAULT_COLLECT_REQUEST.barLimit,
+    DEFAULT_COLLECT_REQUEST.timeframe,
+  );
+
+  const veto = entrySignalVeto(symbol, bars, policy, compositeMin);
+  if (veto) reject(veto.rule, veto.message);
+}
+
+/**
+ * How far over the position-size budget a request may land before it is refused.
+ *
+ * This covers EQUITY drift, not price drift. `price` in an entry is the number the model passed, so
+ * its own arithmetic divided by the same one; `equity` is read fresh from the venue inside the guard,
+ * minutes after the `get_account` the model sized against, and a deployed book moves in between.
+ * Without the allowance a correctly-sized entry gets refused for a rounding artefact.
+ *
+ * Small on purpose: a genuine sizing error is an order of magnitude out, not 2%.
+ */
+const POSITION_SIZE_TOLERANCE = 0.02;
 
 /**
  * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
@@ -104,6 +216,38 @@ export async function enterPosition(
   if (!hasEnoughBuyingPower(account, signal, qty)) {
     reject('insufficient_buying_power', `Insufficient buying power for ${qty} × $${price} (have $${account.buyingPower.toFixed(2)})`);
   }
+
+  // The one risk number that never made it below the decision maker. POLICY.md told the model to
+  // compute `floor(equity x positionSizePct / price)` itself and `positionSizePctCeiling` sat in the
+  // immutable block, but nothing on the order path read either — so an arbitrarily large single
+  // position was a valid intent, and the ceiling was guarding a number in a YAML file rather than an
+  // order at the venue. With `maxPositions x positionSizePct` = 100% of equity by default, one
+  // decimal slip is the whole book in one name.
+  //
+  // Against the REQUESTED qty, for the same reason as the buying-power check above: regime sizing
+  // can only reduce, so a request inside the budget is still inside it after the cut.
+  //
+  // REFUSES, never trims. `applyRegimeSizing` clamps silently because that is the system's own
+  // decision to size down; an oversized request is a wrong intent, and quietly filling it at 10%
+  // would journal "taking a 30% position because..." against a position that was never 30%.
+  const sizeBudget = account.equity * getPolicy().risk.positionSizePct;
+  if (qty * price > sizeBudget * (1 + POSITION_SIZE_TOLERANCE)) {
+    reject('position_too_large',
+      `${qty} x $${price} = $${(qty * price).toFixed(2)} exceeds the $${sizeBudget.toFixed(2)} budget for `
+      + `one position (${(getPolicy().risk.positionSizePct * 100).toFixed(1)}% of $${account.equity.toFixed(2)} `
+      + `equity). Size it at ${Math.floor(sizeBudget / price)} or fewer.`);
+  }
+
+  // The entry gate, and the first check here that needs the network. Placed AFTER the broker
+  // guards on purpose: `already_holding` and `max_positions` are structural refusals the model
+  // can act on ("exit something first"), so when both apply, reporting the structural one is more
+  // useful than reporting a weak composite — and a refusal that was going to happen anyway does
+  // not deserve a bar fetch.
+  //
+  // POLICY.md stated this threshold as prose for as long as it existed and nothing enforced it,
+  // while the entry_signal detector armed on an EMA cross that made no reference to it. The two
+  // layers genuinely disagreed about what "entry-worthy" meant; this is the side that refuses.
+  await refuseUnlessSignalsSupport(symbol);
 
   // Regime enforcement: cap qty by regime sizeMult (Ang et al. 2026 pattern).
   // The trader LLM calculates qty at full size; the guard applies the regime multiplier
