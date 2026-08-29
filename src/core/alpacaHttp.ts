@@ -68,3 +68,17 @@ export const alpacaData = makeClient(config.alpaca.dataUrl);
 export function alpacaTimeToMs(ts: string): number {
   return Date.parse(ts.replace(/(\.\d{3})\d+/, '$1'));
 }
+
+/**
+ * How far back a SIP request's `end` must be held.
+ *
+ * This subscription may query the consolidated tape historically but not recently, and the
+ * venue refuses the WHOLE request rather than trimming it: `end` at now returns
+ * `403 subscription does not permit querying recent SIP data` (measured 2026-08-29). So a
+ * caller asking for "up to now" gets nothing at all, not a slightly short series, and
+ * trimming `end` is mandatory rather than defensive.
+ *
+ * Fifteen minutes plus a minute of slack. A wire-format fact about Alpaca that is true of
+ * every caller, which is why it lives here rather than in the two collectors that need it.
+ */
+export const SIP_EMBARGO_MS = 16 * 60_000;

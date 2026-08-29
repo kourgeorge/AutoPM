@@ -9,7 +9,7 @@
  * which feed each price came from.
  */
 
-import { alpacaData, alpacaTimeToMs } from '../core/alpacaHttp';
+import { alpacaData, alpacaTimeToMs, SIP_EMBARGO_MS } from '../core/alpacaHttp';
 import { marketSession } from '../core/time';
 import { getQuoteRaw } from './yahoo';
 import {
@@ -253,8 +253,10 @@ export interface TradedRange {
  * back months, and because DAY bars cannot answer this at all — Alpaca's day bar covers the
  * regular session only, so CRM's post-earnings print at 236.00 on 2026-08-26, 14,047 trades in
  * five minutes, is absent from a day bar that stops at 206.44.
+ *
+ * The embargo length itself is `SIP_EMBARGO_MS`, shared from `core/alpacaHttp.ts` — the bar
+ * collector hit the same 403 for the same reason, and one vendor limit must not be two numbers.
  */
-const SIP_EMBARGO_MS = 16 * 60_000;
 
 export async function fetchTradedRange(
   symbol: string,

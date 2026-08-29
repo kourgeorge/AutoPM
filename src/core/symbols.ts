@@ -43,3 +43,26 @@ const CRYPTO_PAIR = /(^|[/-])(BTC|ETH|LTC|BCH|SOL|DOGE|AVAX|LINK|UNI|AAVE|DOT|MA
 export function isCryptoSymbol(s: string): boolean {
   return s.includes('/') || CRYPTO_PAIR.test(s.toUpperCase());
 }
+
+/**
+ * A crypto symbol in the spelling Alpaca's crypto market-data endpoints demand: `BTC/USD`.
+ *
+ * The inverse of what `canonicalSymbol` does, and needed for the same reason it exists. A
+ * pair is written three ways in this system — `BTC/USD` as an order is placed, `BTCUSD` as
+ * the venue reports the resulting position, `BTC-USD` as Yahoo wants it — and
+ * `/v1beta3/crypto/us/bars` accepts only the first. It does not fall back or guess: asking
+ * it for `BTCUSD` returns `400 invalid symbol: BTCUSD does not match ^[A-Z]+x?/[A-Z]+$`
+ * (measured 2026-08-29). So a holding read straight from `getPositions()` cannot be used to
+ * fetch its own bars without passing through here.
+ *
+ * Canonicalizes first and re-splits, rather than inserting a slash where one is missing, so
+ * that all three spellings converge on one answer. The quote currencies are ordered
+ * longest-first because `USDT` and `USDC` both end in a string that is itself a quote
+ * currency. A symbol this cannot parse is returned uppercased and unchanged — the venue
+ * rejecting it by name is a better failure than a slash guessed into the wrong place.
+ */
+export function cryptoPair(s: string): string {
+  const flat = canonicalSymbol(s);
+  const parts = flat.match(/^([A-Z0-9]+?)(USDT|USDC|USD)$/);
+  return parts ? `${parts[1]}/${parts[2]}` : flat;
+}

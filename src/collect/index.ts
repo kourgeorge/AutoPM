@@ -9,7 +9,7 @@
 import type { AccountInfo, OpenOrder, Position } from '../broker/IBroker';
 import type { Bar } from '../core/types';
 import type { Timeframe } from './yahoo';
-import { collectBars, DEFAULT_MAX_BAR_AGE_MS } from './barSource';
+import { collectBars } from './barSource';
 import { collectAccount, collectOpenOrders, collectPositions } from './brokerSource';
 import { collectPrices } from './priceSource';
 import { DEFAULT_MAX_AGE_MS, isPresent, Maybe } from './types';
@@ -60,14 +60,17 @@ export async function collectAll(req: CollectRequest): Promise<RawBundle> {
 
   const held = isPresent(positions) ? positions.value.map((p) => p.symbol) : [];
   const symbols = [...new Set([...held, ...req.watchlist])];
-  const maxBarAgeMs = req.maxBarAgeMs ?? DEFAULT_MAX_BAR_AGE_MS[req.timeframe];
 
   const [prices, barPairs] = await Promise.all([
     collectPrices(symbols, req.maxQuoteAgeMs),
     Promise.all(
       symbols.map(
         async (s) =>
-          [s, await collectBars(s, req.barLimit, req.timeframe, maxBarAgeMs)] as const,
+          // `maxBarAgeMs` is passed through UNRESOLVED, undefined included. Defaulting it here
+          // used to hand `collectBars` a fixed number every tick, which meant the daily
+          // threshold could never be the calendar-derived one — and no caller in the system
+          // sets the field, so the constant always won. Undefined is the request to work it out.
+          [s, await collectBars(s, req.barLimit, req.timeframe, req.maxBarAgeMs)] as const,
       ),
     ),
   ]);
