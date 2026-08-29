@@ -21,9 +21,9 @@ import type { Policy } from '../policy/types';
 import { getRegime, getCachedRegime } from '../macro/regime';
 import type { Regime } from '../macro/regime';
 import {
+  dailyLossStatus,
   hasEnoughBuyingPower,
   isAtMaxPositions,
-  isDailyLossBreached,
 } from './riskManager';
 import { requestApproval } from '../core/approvals';
 
@@ -195,8 +195,34 @@ export async function enterPosition(
     broker.getPositions(),
   ]);
 
-  if (isDailyLossBreached(account, getState().startOfDayEquity || account.equity)) {
-    reject('daily_loss_breached', 'Daily loss limit breached — entry blocked for the rest of the day');
+  // The baseline is passed RAW. It used to read `getState().startOfDayEquity || account.equity`,
+  // which measured today's loss against today's equity whenever the daily reset had not run —
+  // exactly 0.00%, so the one guard that halts a losing day could not trip on the day it was
+  // most needed. `dailyLossStatus` owns that case now and names it.
+  const daily = dailyLossStatus(
+    account.equity,
+    getState().startOfDayEquity,
+    getPolicy().risk.maxDailyLossPct,
+  );
+  if (daily.state === 'breached') {
+    reject(
+      'daily_loss_breached',
+      `Daily loss ${daily.dayPnLPct!.toFixed(2)}% is past the ${daily.thresholdPct.toFixed(2)}% limit `
+        + '— entry blocked for the rest of the day',
+    );
+  }
+  // Fail CLOSED. Nothing here can show this entry is inside the daily limit, and a guard that
+  // cannot show it must refuse rather than wave the order through. Filed under its own rule name
+  // so the journal can tell a halted day from a blown one: `grep '"vetoRule":"daily_loss_
+  // unmeasurable"'` is the only way that question gets answered months later.
+  //
+  // Entries only — this guard never runs on the exit path, so a position can always be closed.
+  if (daily.state === 'unmeasurable') {
+    reject(
+      'daily_loss_unmeasurable',
+      `Cannot measure today's loss — ${daily.reason}. Entries are blocked until the daily reset `
+        + 'establishes a baseline; exits are unaffected.',
+    );
   }
   if (isAtMaxPositions(positions)) {
     reject('max_positions', 'At max positions — exit something before entering');

@@ -91,7 +91,7 @@ export async function ensureDailyReset(now: Date = new Date()): Promise<boolean>
   //
   // Before the open, current equity IS the start of the day. After it, current equity is
   // mid-day equity, and using it read every late start as a flat day: start at 14:00 after a
-  // 3% drawdown and `isDailyLossBreached` compared today's loss against today's loss, i.e.
+  // 3% drawdown and the daily-loss guard compared today's loss against today's loss, i.e.
   // zero, switching the limit off for the rest of the session. The previous close is the
   // honest baseline, so prefer it whenever the venue reports one.
   //
@@ -101,6 +101,20 @@ export async function ensureDailyReset(now: Date = new Date()): Promise<boolean>
   const afterOpen = et.hours * 60 + et.minutes >= 570; // 09:30 ET
   const prevClose = account.value.previousCloseEquity;
   const baseline = afterOpen && prevClose != null ? prevClose : account.value.equity;
+
+  // A baseline has to be a positive number, and `lastResetDate` must not advance until one
+  // exists — same discipline as the unusable-account path above, for the same reason. Persisting
+  // a zero here would be worse than deferring: the `lastResetDate === today` early return at the
+  // top means nothing retries, so the daily limit would be unmeasurable for the WHOLE day rather
+  // than for one tick. `previousCloseEquity` is already guarded at the Alpaca adapter, so what
+  // this catches is a venue reporting no equity at all.
+  if (!(baseline > 0)) {
+    logger.warn(
+      `[Scheduler] Daily reset for ${today} deferred — the venue reports equity ${baseline}, `
+        + 'which is not a baseline the daily loss limit can be measured against. Retrying next tick.',
+    );
+    return false;
+  }
 
   resetDailyState(baseline, today);
   const provenance = !afterOpen

@@ -54,6 +54,7 @@ import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { REVERSAL_LOOKBACK, reversalFilter } from '../strategy/reversal';
 import { computeSignals, signalTally } from '../strategy/signals';
+import { dailyLossStatus } from '../strategy/riskManager';
 import { GuardRejection, enterPosition, entrySignalVeto, restingSells } from '../strategy/orderManager';
 import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
@@ -830,6 +831,100 @@ function journalSeam(): void {
     'no REPLAY symbol in the real journal',
     readDecisions({ symbol: 'REPLAY' }).length === 0,
   );
+}
+
+/**
+ * 24. The daily loss halt with no baseline — the alarm and the brake at zero.
+ *
+ *     Two things watch this limit: the detector (the alarm, on the tick loop) and
+ *     `enterPosition` (the brake, on the order path). Both used to go blind at exactly the
+ *     same moment, in opposite ways, and nothing here noticed because every other scenario
+ *     seeds a positive baseline.
+ *
+ *       - `buildAccountData` yielded `dayPnLPct: null` when the baseline was <= 0, and the
+ *         detector answered null with `return []`. Silence, indistinguishable from a flat day.
+ *       - `enterPosition` substituted `getState().startOfDayEquity || account.equity`, so the
+ *         change was measured against today's own equity: exactly 0.00%, and the one guard
+ *         that halts a losing day could not trip.
+ *
+ *     So on a cold start — `DEFAULT_STATE.startOfDayEquity` is 0 and the daemon starts the
+ *     scheduler and the trader un-awaited — the alarm was off and the brake was off together.
+ *
+ *     The brake is asserted through `dailyLossStatus` rather than `enterPosition`, for the
+ *     same reason `entrySignalVeto` is: the daily-loss guard sits
+ *     AFTER `broker.getAccountInfo()`, and this harness has no venue (see scenario 17). The
+ *     guard is now nothing but `state === 'unmeasurable' -> reject`, so the judgement is the
+ *     whole of it. `ensureDailyReset`'s refusal to persist a non-positive baseline is the one
+ *     part of the fix no tier here can reach — it needs a broker to return the bad number.
+ */
+function dailyLossWithoutBaseline(): void {
+  const limit = getPolicy().risk.maxDailyLossPct;   // fraction, e.g. 0.03
+
+  // ── The predicate both sides now share ────────────────────────────────────────
+  const flat = dailyLossStatus(100_000, 100_000, limit);
+  check('a flat day is measurable and not breached',
+    flat.state === 'ok' && near(flat.dayPnLPct, 0), JSON.stringify(flat));
+
+  // Percentage points on both sides of the comparison. Getting this wrong by a factor of 100
+  // is the failure mode that reads as "the limit is 0.03% and every day breaches it".
+  check('the threshold is percentage points, not a fraction',
+    near(flat.thresholdPct, -limit * 100), JSON.stringify(flat));
+
+  const past = dailyLossStatus(100_000 * (1 - limit) - 1, 100_000, limit);
+  check('a loss past the limit is breached',
+    past.state === 'breached', JSON.stringify(past));
+  const shy = dailyLossStatus(100_000 * (1 - limit / 2), 100_000, limit);
+  check('a loss short of the limit is not breached',
+    shy.state === 'ok', JSON.stringify(shy));
+
+  // ── No baseline is not a flat day ─────────────────────────────────────────────
+  const zero = dailyLossStatus(100_000, 0, limit);
+  check('a zero baseline is unmeasurable, not 0.00%',
+    zero.state === 'unmeasurable' && zero.dayPnLPct === null, JSON.stringify(zero));
+  check('and it says which number is missing',
+    zero.reason !== null && zero.reason.includes('start-of-day equity'), zero.reason ?? 'none');
+
+  // The sharp one. `0` is falsy so the old `|| account.equity` caught it, but a NEGATIVE
+  // baseline passed through, and dividing by a negative flips the sign: a 20% loss read as a
+  // +20% gain, so the brake saw a winning day on the worst day an account can have.
+  const negative = dailyLossStatus(80_000, -100_000, limit);
+  check('a negative baseline is unmeasurable rather than sign-flipped',
+    negative.state === 'unmeasurable', JSON.stringify(negative));
+  check('and it is certainly not reported as a gain',
+    negative.dayPnLPct === null || negative.dayPnLPct < 0, JSON.stringify(negative));
+
+  const noEquity = dailyLossStatus(null, 100_000, limit);
+  check('an unreadable account is unmeasurable too',
+    noEquity.state === 'unmeasurable' && noEquity.reason === 'no usable equity reading',
+    JSON.stringify(noEquity));
+
+  // ── The alarm ─────────────────────────────────────────────────────────────────
+  //
+  // Seeded with the cold-start baseline of 0 (see the registry entry). A live account, a live
+  // price: nothing here is stale, so the only reason the detector cannot answer is the baseline.
+  const world = { positions: [position('AAPL', 10, 100)], prices: { AAPL: 100 } };
+  const fired = tick(world, at(1));
+
+  const spoke = fired.filter((e) => e.kind === 'daily_loss_breach');
+  check('the detector reports that it cannot measure instead of falling silent',
+    spoke.length === 1, `got ${spoke.length} daily_loss_breach event(s)`);
+  check('the headline says so in words the operator can act on',
+    spoke.length === 1 && spoke[0].headline.includes('cannot be measured'),
+    spoke[0]?.headline ?? 'none');
+
+  // `warn` reaches the operator without waking a cycle: the brake has already refused every
+  // entry, so there is nothing for the trader to decide. A `critical` here would wake the LLM
+  // to be told the brake is on, and an `info` would be filtered out of the rendered list and
+  // reach nobody at all.
+  check('it alerts the operator without waking the trader',
+    spoke.length === 1 && spoke[0].severity === 'warn', spoke[0]?.severity ?? 'none');
+
+  // Crossing-less, so `processHits` treats it as a cooldown-gated one-shot. It must not
+  // re-announce on the very next tick, and — the reason the old heartbeat bug mattered — it
+  // must not be latched into silence forever either.
+  const again = tick(world, at(2));
+  check('it does not repeat on the next tick',
+    countOf(again, 'daily_loss_breach') === 0, `got ${countOf(again, 'daily_loss_breach')}`);
 }
 
 /**
@@ -1736,6 +1831,11 @@ async function main(): Promise<void> {
   await scenario('21. Blocking orders — a resting sell reserves the shares an exit needs', plain, blockingOrders);
   await scenario('22. Venue stops — which positions are naked, and which stop may replace which', plain, venueStops);
   await scenario('23. Reversal — the reading that disagrees, and the cap that changes it', plain, reversalEntryFilter);
+  // The zero baseline IS the fixture here, not an interlock: it is the cold-start state
+  // (`DEFAULT_STATE.startOfDayEquity`) in which the alarm and the brake both used to go quiet.
+  await scenario('24. Daily loss with no baseline — silence is not a flat day', {
+    startOfDayEquity: 0,
+  }, dailyLossWithoutBaseline);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

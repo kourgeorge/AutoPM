@@ -35,6 +35,7 @@ import {
   patchPositionSnapshot,
   type PositionSnapshot,
 } from '../state/state';
+import { dayPnLPercent } from '../strategy/riskManager';
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
@@ -339,10 +340,10 @@ function buildAccountData(
     stale: false,
     staleReason: null,
     startOfDayEquity,
-    dayPnLPct:
-      startOfDayEquity > 0
-        ? pct(account.value.equity - startOfDayEquity, startOfDayEquity)
-        : null,
+    // `dayPnLPercent`, not `pct`: this number and the halt that reads it must never be
+    // computed two ways, and `pct` divides happily by a NEGATIVE baseline, which flips the
+    // sign and shows a loss as a gain.
+    dayPnLPct: dayPnLPercent(account.value.equity, startOfDayEquity),
     positionCount,
   };
 }
