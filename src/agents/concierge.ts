@@ -97,7 +97,6 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
         maxPositions:        { type: 'integer', minimum: 1,               description: 'Maximum number of open positions.' },
         positionSizePct:     { type: 'number',  minimum: 0,               description: 'Position size as a fraction of equity (e.g. 0.05 = 5%).' },
         stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'Stop distance = entry \u2212 stopLossAtrMult \u00d7 ATR.' },
-        takeProfitAtrMult:   { type: 'number',  minimum: 0,               description: 'Target = entry + takeProfitAtrMult \u00d7 ATR.' },
         maxDailyLossPct:     { type: 'number',  minimum: 0,               description: 'Daily loss limit as a fraction of equity (e.g. 0.03 = 3%).' },
       },
       required: [],

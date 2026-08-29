@@ -26,9 +26,9 @@ const ACTORS = ['trader', 'guard', 'broker'];
 /**
  * Fields that must carry a value for a given kind, beyond the ones every record needs.
  *
- * `entry` requires `intendedStop` because `policy.immutable.requireStopOnEntry` is the
- * one rule the system claims is inviolable, and a journal that cannot show the stop
- * cannot prove it was honoured.
+ * `entry` requires `intendedStop` because a mandatory stop is the one rule the system
+ * claims is inviolable (`orderManager.ts`'s `missing_stop` guard), and a journal that
+ * cannot show the stop cannot prove it was honoured.
  */
 const REQUIRED_BY_KIND: Record<string, (keyof DecisionRecord)[]> = {
   entry:    ['symbol', 'qty', 'price', 'intendedStop', 'intendedTarget'],

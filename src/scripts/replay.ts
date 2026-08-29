@@ -974,8 +974,8 @@ async function guardRules(): Promise<void> {
     check(`invalid_intent — ${label}`, rule === 'invalid_intent', `got ${rule}`);
   }
 
-  // `policy.immutable.requireStopOnEntry` has been true since the policy file existed and
-  // was enforced nowhere; each of these opened a position with no exit level.
+  // A stop is mandatory on every entry, unconditionally — before this guard existed, each
+  // of these opened a position with no exit level.
   const unstopped: Array<[string, number]> = [
     ['a stop of zero',        0],
     ['a negative stop',      -1],

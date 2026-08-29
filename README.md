@@ -242,7 +242,7 @@ The system prompt for the Trader is `policy/POLICY.md` — a template with `{{pl
 
 Failure semantics differ by phase on purpose: the **first** load throws, because trading on defaults nobody declared is worse than not trading. A **reload** never throws — it reports the errors and leaves the last good policy active, so a typo cannot take a running daemon down. The same applies to `POLICY.md` rendering, which falls back to the last successfully rendered prompt.
 
-The `immutable` block is the part the Concierge and the Trader cannot argue with: `maxPositionsCeiling`, `maxDailyLossPctCeiling`, `positionSizePctCeiling`, `stopLossAtrMultCeiling`, `minTickIntervalMs`, `requireStopOnEntry`.
+The `immutable` block is the part the Concierge and the Trader cannot argue with: `maxPositionsCeiling`, `maxDailyLossPctCeiling`, `positionSizePctCeiling`, `stopLossAtrMultCeiling`, `minTickIntervalMs`. A stop on every entry is enforced unconditionally in code (`missing_stop`), not by a policy flag.
 
 POLICY.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`, plus the four from the approval gate below.
 
@@ -505,8 +505,7 @@ Key parameters, with the shipped defaults:
 | `minBars` | 50 | Bars required before a symbol is evaluated |
 | `maxPositions` | 10 | Max simultaneous positions |
 | `positionSizePct` | 0.1 | Fraction of equity per trade |
-| `stopLossAtrMult` | 2.0 | Stop = entry − N × ATR |
-| `takeProfitAtrMult` | 6.0 | Target = entry + N × ATR |
+| `stopLossAtrMult` | 2.0 | ATR multiplier used in risk-based position sizing |
 | `maxDailyLossPct` | 0.03 | Daily loss halt threshold |
 
 Trigger and wake cadences (`triggers:`):
@@ -543,6 +542,5 @@ Safety ceilings (`immutable:`) — no runtime change, from the Concierge or the 
 | `positionSizePctCeiling` | 0.1 |
 | `stopLossAtrMultCeiling` | 4 |
 | `minTickIntervalMs` | 30000 |
-| `requireStopOnEntry` | true |
 
 The `regime:` block scales entry aggressiveness by macro regime (`sizeMult` and `rsiEntryMin` per regime: expansion and recovery at full size, `late_cycle` 0.75× with RSI ≥ 55, `recession` 0.5× with RSI ≥ 60).
