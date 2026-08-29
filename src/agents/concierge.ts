@@ -40,7 +40,6 @@ const SHARED_WITH_TRADER = [
   'get_scorecard',
   'get_benchmark',
   'get_macro_regime',
-  'get_position_size',
   'get_signals',
   'get_watchlist_scan',
   'get_correlation',

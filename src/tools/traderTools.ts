@@ -14,7 +14,7 @@ import {
   executeAlpacaDataTool,
 } from './alpacaDataTools';
 import { getRegime } from '../macro/regime';
-import { volatilityScaledQty, correlationGate } from '../strategy/portfolioRisk';
+import { correlationGate } from '../strategy/portfolioRisk';
 import { exposure } from '../strategy/exposure';
 import { getFundamentals } from '../collect/fundamentals';
 import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
@@ -68,7 +68,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_entry',
-    description: 'Buy at market. The stop is recorded as YOUR baseline AND placed at the venue as a real resting GTC sell stop, so the position stays protected while this process is not running — which means the stop can fill on its own, without an execute_exit call. The target is recorded only and is not sent anywhere. The result reports under venueStop whether the stop actually rests at the venue, and why not when it does not (crypto cannot have one; a fill that did not confirm in time is retried by the stop sweep). Risk rules (max positions, buying power, daily loss limit) are enforced and return an error if violated. The filled qty may be smaller than requested if the macro regime caps it; the result reports what was actually bought.',
+    description: 'Buy at market. The stop is recorded as YOUR baseline AND placed at the venue as a real resting GTC sell stop, so the position stays protected while this process is not running — which means the stop can fill on its own, without an execute_exit call. The target is recorded only and is not sent anywhere. The result reports under venueStop whether the stop actually rests at the venue, and why not when it does not (crypto cannot have one; a fill that did not confirm in time is retried by the stop sweep). Risk rules (position size, max positions, buying power, daily loss limit) are enforced and return an error if violated. The filled qty may be smaller than requested if the macro regime caps it; the result reports what was actually bought.',
     input_schema: {
       type: 'object',
       properties: {
@@ -189,19 +189,6 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
-    name: 'get_position_size',
-    description: 'Compute a volatility-scaled position size for a symbol. Uses inverse-ATR sizing so high-volatility names get fewer shares (equal risk per position). Call this BEFORE execute_entry to determine qty.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbol: { type: 'string', description: 'Ticker symbol.' },
-        price: { type: 'number', description: 'Current/expected entry price.' },
-        atr: { type: 'number', description: 'Current ATR for the symbol.' },
-      },
-      required: ['symbol', 'price', 'atr'],
-    },
-  },
-  {
     name: 'get_signals',
     description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 (strongly bearish) to +1 (strongly bullish), plus tally.composite (their mean, the number to threshold on), the reversal filter, ATR and the last close. All five measure trend and are highly correlated, so their COUNTS inflate: 5/5 bullish is closer to one confirmation counted five times, which is why the composite keeps the magnitude the vote throws away. reversal is separate and NOT in the composite — it is contrarian and monthly, its score is negative when the name has already run, and chasing: true means the move has cleared the chase threshold for its market-cap bucket. This is the SAME deterministic computation that fills the signal evidence on an entry_signal event, run on demand: use it for a candidate that has not fired an event, so a signal breakdown you report is one you actually measured. Never state which signals are bullish or bearish, or quote a composite or a reversal reading, without this tool or get_pending_events.',
     input_schema: {
@@ -294,7 +281,6 @@ export async function executeTraderTool(
       case 'get_positions':       return await toolGetPositions();
       case 'get_open_orders':     return await toolGetOpenOrders();
       case 'get_macro_regime':    return await toolGetMacroRegime();
-      case 'get_position_size':   return await toolGetPositionSize(input);
       case 'get_signals':         return await toolGetSignals(input);
       case 'get_watchlist_scan':  return toolGetWatchlistScan();
       case 'get_correlation':     return await toolGetCorrelation(input);
@@ -373,35 +359,6 @@ async function toolGetMarketStatus(): Promise<string> {
 async function toolGetMacroRegime(): Promise<string> {
   const regime = await getRegime();
   return JSON.stringify(regime);
-}
-
-async function toolGetPositionSize(input: Record<string, unknown>): Promise<string> {
-  const { symbol, price, atr } = input as { symbol: string; price: number; atr: number };
-  const account = await broker.getAccountInfo();
-  const policy = getPolicy();
-
-  const recommendedQty = volatilityScaledQty(account.equity, price, atr);
-  const flatQty = Math.floor(account.equity * policy.risk.positionSizePct / price);
-  const riskPerShare = atr * policy.risk.stopLossAtrMult;
-  const dollarRisk = recommendedQty * riskPerShare;
-
-  return JSON.stringify({
-    symbol,
-    recommendedQty,
-    flatQty,
-    // Three outcomes, not two. `recommendedQty === 0` means one share does not fit the
-    // risk budget at all, and the old two-branch string reported that as "ATR is low ->
-    // more shares within budget" — the exact opposite, handed to the model as a premise.
-    reason: recommendedQty === 0
-      ? `Does not fit: one share risks $${riskPerShare.toFixed(2)}, above the whole $${(account.equity * policy.risk.positionSizePct).toFixed(2)} budget for this position`
-      : recommendedQty < flatQty
-        ? `Vol-scaled: ATR $${atr.toFixed(2)} is high → fewer shares for equal risk`
-        : `Vol-scaled: ATR $${atr.toFixed(2)} is low → more shares within budget`,
-    riskPerShare: parseFloat(riskPerShare.toFixed(2)),
-    totalDollarRisk: parseFloat(dollarRisk.toFixed(2)),
-    notional: parseFloat((recommendedQty * price).toFixed(2)),
-    equity: account.equity,
-  });
 }
 
 /**

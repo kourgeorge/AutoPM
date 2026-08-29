@@ -55,7 +55,7 @@ import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { REVERSAL_LOOKBACK, reversalFilter } from '../strategy/reversal';
 import { computeSignals, signalTally } from '../strategy/signals';
 import { dailyLossStatus } from '../strategy/riskManager';
-import { GuardRejection, enterPosition, entrySignalVeto, restingSells } from '../strategy/orderManager';
+import { GuardRejection, enterPosition, entrySignalVeto, positionSizeVeto, restingSells } from '../strategy/orderManager';
 import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
 import {
@@ -1007,6 +1007,50 @@ async function guardRules(): Promise<void> {
       && veto.vetoRule === 'missing_stop'
       && veto.executed === false,
     JSON.stringify(veto));
+
+  // ── Position size ─────────────────────────────────────────────────────────────
+  //
+  // Asserted on `positionSizeVeto` for the same reason as the entry gate below: the scenario's
+  // absurd equity baseline refuses every intent as `daily_loss_breached` two guards earlier, and
+  // the judgement is pure anyway.
+  //
+  // This is the number POLICY.md asked the model to apply to itself while nothing checked, and the
+  // one that had no guard at all — `maxPositions x positionSizePct` is 100% of equity by default, so
+  // the untested case was the whole book in one name.
+  const sizePol = getPolicy();
+  const sizeEquity = 100_000;
+  const sizeBudget = sizeEquity * sizePol.risk.positionSizePct;
+  const fits = Math.floor(sizeBudget / 100);
+
+  check('the qty the formula produces is not refused',
+    positionSizeVeto(fits, 100, sizeEquity, sizePol) === null,
+    JSON.stringify({ fits, budget: sizeBudget }));
+  check('one share more than the budget, inside the drift allowance, is still not refused',
+    positionSizeVeto(fits + 1, 100, sizeEquity, sizePol) === null,
+    `budget $${sizeBudget}, asked $${(fits + 1) * 100}`);
+
+  // The case with no guard before this: a request that clears buying power on margin and is still
+  // many times the position budget.
+  const tenX = positionSizeVeto(fits * 10, 100, sizeEquity, sizePol);
+  check('ten times the budget is refused', tenX !== null, 'not refused');
+  // The message has to carry the qty that WOULD fit. A refusal that says only "too big" leaves the
+  // model guessing, and a guess it retries is another refused cycle.
+  check('the message names the budget and the qty that fits',
+    tenX !== null && tenX.includes(sizeBudget.toFixed(2)) && tenX.includes(`${fits} or fewer`),
+    tenX ?? 'none');
+  // Named clean, never inflated: the allowance is slack for equity drift, not a size the model may
+  // ask for on purpose.
+  check('the qty it names is the policy number, not the tolerance-inflated one',
+    tenX !== null && !tenX.includes(`${Math.floor(sizeBudget * 1.02 / 100)} or fewer`),
+    tenX ?? 'none');
+
+  // Scales with the account rather than with a constant, and a fractional unit is not exempt.
+  check('a smaller account gets a smaller budget for the same price',
+    positionSizeVeto(fits, 100, sizeEquity / 10, sizePol) !== null,
+    'a tenth of the equity accepted the full-size qty');
+  check('a fractional qty is measured by its notional like any other',
+    positionSizeVeto(0.5, sizeBudget * 4, sizeEquity, sizePol) !== null,
+    'half a unit at twice the budget was accepted');
 
   // ── The entry gate ────────────────────────────────────────────────────────────
   //

@@ -150,9 +150,47 @@ async function refuseUnlessSignalsSupport(symbol: string): Promise<void> {
  * minutes after the `get_account` the model sized against, and a deployed book moves in between.
  * Without the allowance a correctly-sized entry gets refused for a rounding artefact.
  *
- * Small on purpose: a genuine sizing error is an order of magnitude out, not 2%.
+ * Small on purpose: a genuine sizing error is an order of magnitude out, not 2%. And it is slack for
+ * drift, never a licence — which is why the refusal message below names the clean qty and not this
+ * one. A model told it may size 2% over policy would.
  */
 const POSITION_SIZE_TOLERANCE = 0.02;
+
+/**
+ * Why this entry is too big for one position, or null when it fits.
+ *
+ * `positionSizePct` is the one risk number that never made it below the decision maker. POLICY.md
+ * told the model to compute `floor(equity x positionSizePct / price)` itself and
+ * `positionSizePctCeiling` sat in the `immutable` block, but nothing on the order path read either —
+ * so an arbitrarily large single position was a valid intent, and the ceiling was guarding a number
+ * in a YAML file rather than an order at the venue. With `maxPositions x positionSizePct` = 100% of
+ * equity by default, one decimal slip is the whole book in one name.
+ *
+ * ONE MEANING FOR THE KNOB: a notional cap, and nothing else. `volatilityScaledQty` used to read it
+ * as a risk-at-stop budget as well and hand the model a second answer; it returned the flat notional
+ * number in every case that could reach it, so the second answer was the first one wearing a label.
+ *
+ * Pure and exported for the same reason `entrySignalVeto` is: the live path has already fetched an
+ * account by the time this runs, and the scenario's absurd equity baseline would refuse every intent
+ * as `daily_loss_breached` two guards earlier. The judgement is the part worth pinning.
+ *
+ * Returns the message rather than a `{rule, message}` pair — there is only one rule here, and the
+ * call site already names it.
+ */
+export function positionSizeVeto(
+  qty: number,
+  price: number,
+  equity: number,
+  policy: Policy,
+): string | null {
+  const budget = equity * policy.risk.positionSizePct;
+  const notional = qty * price;
+  if (notional <= budget * (1 + POSITION_SIZE_TOLERANCE)) return null;
+
+  return `${qty} x $${price} = $${notional.toFixed(2)} exceeds the $${budget.toFixed(2)} budget for one `
+    + `position (${(policy.risk.positionSizePct * 100).toFixed(1)}% of $${equity.toFixed(2)} equity). `
+    + `Size it at ${Math.floor(budget / price)} or fewer.`;
+}
 
 /**
  * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
@@ -243,26 +281,21 @@ export async function enterPosition(
     reject('insufficient_buying_power', `Insufficient buying power for ${qty} × $${price} (have $${account.buyingPower.toFixed(2)})`);
   }
 
-  // The one risk number that never made it below the decision maker. POLICY.md told the model to
-  // compute `floor(equity x positionSizePct / price)` itself and `positionSizePctCeiling` sat in the
-  // immutable block, but nothing on the order path read either — so an arbitrarily large single
-  // position was a valid intent, and the ceiling was guarding a number in a YAML file rather than an
-  // order at the venue. With `maxPositions x positionSizePct` = 100% of equity by default, one
-  // decimal slip is the whole book in one name.
-  //
   // Against the REQUESTED qty, for the same reason as the buying-power check above: regime sizing
   // can only reduce, so a request inside the budget is still inside it after the cut.
+  //
+  // AFTER buying power, not before, and the order is load-bearing. Buying power is at least equity
+  // on any margin account and equity is ten times this budget by default, so anything that fails
+  // buying power fails this too — checking size first would make `insufficient_buying_power`
+  // unreachable on the entry path and quietly retire a rule POLICY.md still documents. In this order
+  // each keeps the cases it describes best: the venue's arithmetic for what cannot be afforded, and
+  // this for what can be afforded and still should not be bought.
   //
   // REFUSES, never trims. `applyRegimeSizing` clamps silently because that is the system's own
   // decision to size down; an oversized request is a wrong intent, and quietly filling it at 10%
   // would journal "taking a 30% position because..." against a position that was never 30%.
-  const sizeBudget = account.equity * getPolicy().risk.positionSizePct;
-  if (qty * price > sizeBudget * (1 + POSITION_SIZE_TOLERANCE)) {
-    reject('position_too_large',
-      `${qty} x $${price} = $${(qty * price).toFixed(2)} exceeds the $${sizeBudget.toFixed(2)} budget for `
-      + `one position (${(getPolicy().risk.positionSizePct * 100).toFixed(1)}% of $${account.equity.toFixed(2)} `
-      + `equity). Size it at ${Math.floor(sizeBudget / price)} or fewer.`);
-  }
+  const oversized = positionSizeVeto(qty, price, account.equity, getPolicy());
+  if (oversized) reject('position_too_large', oversized);
 
   // The entry gate, and the first check here that needs the network. Placed AFTER the broker
   // guards on purpose: `already_holding` and `max_positions` are structural refusals the model
