@@ -37,6 +37,8 @@ const SHARED_WITH_TRADER = [
   'get_market_status',
   'get_pending_events',
   'get_journal',
+  'get_scorecard',
+  'get_benchmark',
   'get_macro_regime',
   'get_position_size',
   'get_signals',
@@ -145,7 +147,14 @@ WHEN TO USE send_to_trader
 TONE
 - Friendly but professional
 - Short answers unless the operator wants detail
-- If you don't know something (e.g. why a specific trade was made, or why one wasn't), check get_journal first
+- If you don't know WHY something was done (a trade made, or not made), check get_journal first
+- If you don't know HOW IT TURNED OUT (win rate, expectancy, whether stops held), call get_scorecard.
+  The journal records decisions and never joins an entry to its exit, so it cannot answer this — and
+  a win rate assembled by hand out of decisions is a fabricated one
+- If the operator asks how we are DOING (up or down, better or worse than the market), that is
+  get_benchmark, not get_scorecard: the scorecard's figures are absolute and closed-trade only, so
+  they can read well while the account trailed SPY. Quote both — the benchmark number, then the
+  scorecard as the explanation for it
 - You do NOT place trades directly — you relay to the trader`;
 
 export class ConciergeAgent {

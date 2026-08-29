@@ -19,6 +19,15 @@
 import { getPolicy } from '../policy/load';
 import { computeOutcomes, type TradeOutcome } from './ledger';
 
+/**
+ * Where a mean-over-sigma stops being a measurement.
+ *
+ * Same threshold as the win-rate caveat further down, and for the same reason — but stated
+ * separately because a ratio degrades faster than a mean does: the sample estimates both the
+ * numerator and the denominator, so its error compounds.
+ */
+const perTradeSharpeIsThin = (trades: number) => trades < 20;
+
 /** Round for transport. A win rate is not more true at fifteen decimal places. */
 function r(n: number | null, dp = 2): number | null {
   if (n == null || !Number.isFinite(n)) return null;
@@ -35,6 +44,26 @@ function median(xs: number[]): number | null {
   const s = [...xs].sort((a, b) => a - b);
   const mid = s.length >> 1;
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+/**
+ * Sample standard deviation, n−1. Null below two points, where dispersion is not defined.
+ *
+ * n−1 rather than n because these trades are a SAMPLE of how the strategy behaves and not
+ * the population of every trade it will ever take. The difference is invisible at a hundred
+ * trades and is a tenth of the answer at ten, which is the range this file actually runs in.
+ */
+function stdev(xs: number[]): number | null {
+  if (xs.length < 2) return null;
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
+}
+
+/** Mean over sigma, guarding the flat-line case where sigma is zero and the ratio is not. */
+function meanOverSigma(xs: number[]): number | null {
+  const sd = stdev(xs);
+  if (sd == null || sd === 0) return null;
+  return (xs.reduce((a, b) => a + b, 0) / xs.length) / sd;
 }
 
 export interface GroupStats {
@@ -88,6 +117,38 @@ export interface Scorecard {
    */
   expectancyR: number | null;
   expectancyRSample: number;
+
+  // ── Dispersion: the half an expectancy on its own leaves out ────────────────
+  //
+  // Every figure above is a mean, and a mean is half of an outcome. +0.4R average over
+  // trades that ranged −3R to +5R is a different strategy from +0.4R over trades that all
+  // landed between 0 and +1R, and position sizing that cannot tell them apart is sizing on
+  // one number where two are needed.
+
+  /** Standard deviation of the per-trade return, in percent. */
+  returnPctStdev: number | null;
+  /**
+   * Mean per-trade return over its standard deviation.
+   *
+   * NOT the Sharpe ratio, and must not be quoted as one or compared to the thresholds people
+   * carry for it: there is no time in this figure. It is dispersion per trade, so a strategy
+   * that takes this trade weekly and one that takes it hourly score identically, and no
+   * amount of it says anything about what the capital did while it was idle. `get_benchmark`
+   * holds the time-weighted, benchmark-relative version, computed off the equity curve.
+   */
+  perTradeSharpe: number | null;
+  /** The same ratio in units of declared risk: mean R over the standard deviation of R. */
+  perTradeSharpeR: number | null;
+  /**
+   * How many standard errors the mean return sits above ZERO — `mean / (sd / √n)`.
+   *
+   * Zero is the benchmark on purpose, rather than the sample's own historical mean: a noisy
+   * mean is an artificially low bar, and "did better than its own average" is a statement
+   * about the sample rather than about the strategy. So this answers one question only — is
+   * the edge distinguishable from no edge at all, at this sample size. Roughly ±2 is the
+   * conventional line, and it is a property of the DATA, not a verdict on the trading.
+   */
+  expectancyTStat: number | null;
 
   best: TradeSummary | null;
   worst: TradeSummary | null;
@@ -198,6 +259,7 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
     grossPnL: 0, feesComplete: false, fees: null, netPnL: null,
     avgWin: null, avgLoss: null, profitFactor: null,
     expectancy: null, expectancyPct: null, expectancyR: null, expectancyRSample: 0,
+    returnPctStdev: null, perTradeSharpe: null, perTradeSharpeR: null, expectancyTStat: null,
     best: null, worst: null,
     avgHoldHours: null, medianHoldHours: null,
     avgHoldWinnersHours: null, avgHoldLosersHours: null,
@@ -207,7 +269,10 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
       avgStopDistancePct: null, avgStopAtrMultiple: null, policyStopAtrMult,
     },
     bySymbol: {}, byPolicyVersion: {},
-    caveats: ['No completed round trips in this window — nothing here is measurable yet.'],
+    caveats: [
+      'No completed round trips in this window — nothing here is measurable yet.',
+      'get_benchmark still works with an empty ledger: it reads the equity curve, so it can say what the account did even when no round trip has closed.',
+    ],
   };
   if (outcomes.length === 0) return empty;
 
@@ -262,6 +327,9 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
     }
   }
 
+  const returnPcts = outcomes.map(o => o.returnPct);
+  const returnPctStdev = stdev(returnPcts);
+
   const withoutRationale = outcomes.filter(o => o.entryRationale == null).length;
   const unexplained = outcomes.filter(o => o.unexplained).length;
 
@@ -280,6 +348,18 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
   }
   if (unexplained > 0) {
     caveats.push(`${unexplained} round trip(s) had fills that do not add up (a sell larger than the recorded position) — their numbers are a best reading, not a reconciliation.`);
+  }
+
+  // Stated on EVERY call, because the absence of a benchmark is a permanent property of this
+  // file rather than a shortfall of a particular window. Nothing above answers "was this
+  // better than sitting in SPY", and a page of win rates reads as though something did.
+  caveats.push('Nothing here is vol-adjusted over time and nothing here is compared to a benchmark: these are trade-shape statistics, so a good page of them is still compatible with having lost to holding SPY. get_benchmark has the equity curve against SPY, with Sharpe for both.');
+
+  if (returnPctStdev != null && perTradeSharpeIsThin(outcomes.length)) {
+    caveats.push(`perTradeSharpe and expectancyTStat are computed over ${outcomes.length} round trip(s) — at this sample size the standard deviation is itself an estimate, so treat both as an order of magnitude and not as a measurement.`);
+  }
+  if (returnPctStdev === 0) {
+    caveats.push('every round trip returned exactly the same percentage, so the dispersion figures are null rather than infinite — check the fills before reading anything into that.');
   }
 
   // The extremes of the DATA, taken as extremes rather than as the ends of the array:
@@ -314,6 +394,18 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
     expectancyPct: r(mean(outcomes.map(o => o.returnPct))),
     expectancyR: r(mean(rMultiples)),
     expectancyRSample: rMultiples.length,
+
+    returnPctStdev: r(returnPctStdev),
+    // Three decimals: these are ratios near 1, where two decimals throws away a tenth of
+    // the resolution, unlike a win rate where it throws away nothing anybody can act on.
+    perTradeSharpe: r(meanOverSigma(returnPcts), 3),
+    perTradeSharpeR: r(meanOverSigma(rMultiples), 3),
+    expectancyTStat: r(
+      returnPctStdev != null && returnPctStdev > 0
+        ? mean(returnPcts)! / (returnPctStdev / Math.sqrt(returnPcts.length))
+        : null,
+      2,
+    ),
 
     best: summarise(outcomes.reduce((a, b) => (b.returnPct > a.returnPct ? b : a))),
     worst: summarise(outcomes.reduce((a, b) => (b.returnPct < a.returnPct ? b : a))),

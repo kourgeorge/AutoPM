@@ -36,6 +36,7 @@ import { canTighten, moveStopTo, type ArmResult } from '../strategy/stopOrders';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
+import { benchmark } from '../review/benchmark';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
 import { logger } from '../core/logger';
@@ -153,6 +154,17 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         symbol: { type: 'string', description: 'Optional — one symbol only.' },
         days: { type: 'integer', description: 'Optional lookback on EXIT date. Omit for all history.', minimum: 1, maximum: 3650 },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_benchmark',
+    description: 'The scoreboard: what the ACCOUNT returned over a window against what SPY returned over the same sessions, plus the Sharpe ratio and max drawdown of each. This is the only tool that answers "was trading this worth doing instead of holding the index" — get_scorecard measures the SHAPE of the trades (win rate, expectancy, stop discipline) and can look excellent while this shows the index beat you, so a claim about performance needs both. Reads the equity curve, so it covers open positions too, and it works before any round trip has closed. Read `caveats` first: a short window, or a deposit sitting inside it, makes the excess figure unattributable. Never state a return, an excess or a Sharpe you did not read from here.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days: { type: 'integer', description: 'Calendar lookback (default 30). `window.sessions` reports how many sessions the two series actually shared.', minimum: 2, maximum: 3650 },
       },
       required: [],
     },
@@ -296,6 +308,7 @@ export async function executeTraderTool(
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
       case 'get_scorecard':       return toolGetScorecard(input);
+      case 'get_benchmark':       return await toolGetBenchmark(input);
       case 'write_lesson':        return toolWriteLesson(input);
       // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
       // delay, which only the agent loop can do), and it is not a concierge tool.
@@ -1204,6 +1217,17 @@ function toolGetScorecard(input: Record<string, unknown>): string {
     symbol: input.symbol as string | undefined,
     days: input.days as number | undefined,
   }));
+}
+
+/**
+ * The other half of `get_scorecard`, and the reason that one now carries a caveat pointing
+ * here: absolute trade statistics cannot say whether the trading beat sitting in the index.
+ *
+ * Unlike its neighbour this DOES hit the network — the broker's portfolio history and a SPY
+ * daily series — so it is a market-data call and not a free local read.
+ */
+async function toolGetBenchmark(input: Record<string, unknown>): Promise<string> {
+  return JSON.stringify(await benchmark({ days: input.days as number | undefined }));
 }
 
 /**

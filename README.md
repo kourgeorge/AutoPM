@@ -202,6 +202,7 @@ Measuring — the deterministic tools that exist so the model does not have to g
 | `get_correlation(symbol)` | Max pairwise correlation of a **candidate** vs open positions, plus a sizing recommendation |
 | `get_exposure` | Shape of the book: per-position weight, sector, gross deployed, cash, largest single-name and sector weight, Herfindahl index, every held-vs-held correlation pair. The only source of a weight or a sector in this system |
 | `get_scorecard(symbol?, days?)` | Measured performance over **completed** round trips: win rate, expectancy in $/%/R, hold times split by winners and losers, drawdown, stop discipline, breakdowns by symbol and policy version |
+| `get_benchmark(days?)` | The scoreboard: account return vs SPY return over the same aligned sessions, plus Sharpe, annualised vol and max drawdown for each leg. Reads the **equity curve**, so it covers open positions and works before any round trip has closed |
 | `get_macro_regime` | FRED-based regime (expansion / late_cycle / recession / recovery), cached 6h |
 
 Acting and recording:
@@ -217,7 +218,7 @@ Acting and recording:
 | `write_lesson(lesson)` | Append one changed rule of thumb to `data/LESSONS.md` — the only thing a cycle can say that outlives it |
 | `sleep(minutes, reason)` | End the cycle and set the maximum silence before the next one |
 
-**Why the measuring tools exist at all.** POLICY.md names the five signal vocabulary, which was enough for the model to report "4/5 bullish, EMA momentum + trend + volume + breakout green" for a symbol whose EMA9 sat 3.4% *below* its EMA21 — measured, it was 1/5. Naming a vocabulary in a prompt without a tool to populate it invites confabulation, so each of `get_signals`, `get_exposure` and `get_scorecard` is declared in its own description as the *only* admissible source for its numbers.
+**Why the measuring tools exist at all.** POLICY.md names the five signal vocabulary, which was enough for the model to report "4/5 bullish, EMA momentum + trend + volume + breakout green" for a symbol whose EMA9 sat 3.4% *below* its EMA21 — measured, it was 1/5. Naming a vocabulary in a prompt without a tool to populate it invites confabulation, so each of `get_signals`, `get_exposure`, `get_scorecard` and `get_benchmark` is declared in its own description as the *only* admissible source for its numbers.
 
 ### The Concierge
 
@@ -277,6 +278,7 @@ Three files, one division of trust: **fills are truth for numbers, the journal i
 - `review/fillsLedger.ts` → `data/fills.jsonl`, append-only, synchronous writes. Dedup happens on **read**, not write, so a correction is a new line and the superseded one stays visible. IBKR revises an `execId` by incrementing the digits after the final period (`.01` → `.02`); keyed naively, that doubles a position.
 - `review/ledger.ts` matches round trips **flat-to-flat**, not lot-FIFO. Identical under the `already_holding` guard, and better on a scale-out: 434 shares bought in one order and sold in two is one round trip with a weighted exit price.
 - `review/metrics.ts` → `scorecard()`. **Code measures, the LLM interprets** — no verdicts or grades in there. `caveats[]` are facts about the *data* (n<20, fees unknown, missing rationales), never advice. `fee: null` means unknown, never 0: Alpaca bills SEC/TAF as separate activities, so `feesComplete` is false there and `grossPnL` is the comparable number.
+- `review/benchmark.ts` → `benchmark()`. The **scoreboard**, kept deliberately out of `Scorecard`: the scorecard sums realised round trips in dollars and has no capital base, so setting that sum beside SPY's percentage compares closed trades to continuous exposure. The honest pairing is equity curve against index over the same sessions, which needs a different source (the broker's portfolio history) and a different unit. Legs are aligned **by date, never by index** — around a holiday the two series differ in length and an index join then compares a Tuesday to a Wednesday for the rest of the window. The equity curve is *not* adjusted for deposits: a cash movement inside the window is detected from account activities and stated as a caveat, because a flow-weighted return is not derivable from a daily series and inventing one is the failure this codebase is organised against.
 
 The ledger is persisted rather than re-queried because **TWS serves executions for the current trading day only** — the broker is a tap on a window that closes, not a history endpoint. Alpaca serves months. `getFills(since?)` treats `since` as a *hint* and over-fetches on purpose — 7 days on the periodic run, 30 at startup, because the daemon may have been down for days. Both brokers' time filters are untrustworthy (Alpaca's `after` is documented against activity creation, not execution; IBKR's needs a timezone this process cannot know), so the boundary is pushed far enough away that no fill can fall behind it. The cost of overlap is a dedup; the cost of a gap is permanent.
 
@@ -364,6 +366,7 @@ src/
 │   ├── fillsLedger.ts    # data/fills.jsonl — append-only, dedup on read
 │   ├── ledger.ts         # Flat-to-flat round trips, joined to the journal
 │   ├── metrics.ts        # scorecard() — measures, never grades
+│   ├── benchmark.ts      # Equity curve vs SPY — the only benchmark-relative numbers
 │   ├── reconcile.ts      # Pull venue fills; startup + periodic
 │   └── reviewReady.ts    # Publishes review_ready off the exit watermark
 ├── journal/
