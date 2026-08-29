@@ -101,12 +101,13 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_exit',
-    description: 'Close an open position at market price.',
+    description: 'Close a position at market price. Omit qty to close it entirely. Give qty to sell only part of it (a whole number of shares, no more than the position holds) — the stop and thesis on the remainder are kept as they were.',
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string' },
         reason: { type: 'string', description: 'Reason for exiting the position.' },
+        qty: { type: 'number', description: 'Optional — shares to sell. Must be a whole number no greater than the position held. Omit to close the whole position.' },
         eventId: { type: 'string', description: 'Optional — the MACHINE EVENTS id this exit answers, verbatim. Links the decision to what prompted it.' },
       },
       required: ['symbol', 'reason'],
@@ -1038,8 +1039,8 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
  * `{ ok: true }`.
  */
 async function toolExecuteExit(input: Record<string, unknown>): Promise<string> {
-  const { symbol, reason, eventId } = input as {
-    symbol: string; reason: string; eventId?: string;
+  const { symbol, reason, eventId, qty: requestedQty } = input as {
+    symbol: string; reason: string; eventId?: string; qty?: number;
   };
 
   const triggerEventId = resolveEventId(eventId, symbol);
@@ -1053,6 +1054,7 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
 
   let orderId: string;
+  let soldQty: number;
   // Resting sell orders this exit had to cancel to free the shares — which now includes THIS
   // SYSTEM'S OWN stop, since the position was protected at the venue. Reported back because the
   // model is the only thing that can act on it: if the sell somehow leaves a remainder held,
@@ -1060,13 +1062,13 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   // ours is not put back by anything (only ours is, and only if the sell itself fails).
   let cancelled: string[] = [];
   try {
-    ({ orderId, cancelled } = await exitPosition(symbol, reason));
+    ({ orderId, cancelled, qty: soldQty } = await exitPosition(symbol, reason, requestedQty));
   } catch (err) {
     const refusal = journalRefusal(err, {
       symbol,
       rationale: reason,
       triggerEventId,
-      qty: held?.qty ?? null,
+      qty: requestedQty ?? held?.qty ?? null,
       pnl: held?.unrealizedPnL ?? null,
     });
     if (refusal) return refusal;
@@ -1076,14 +1078,16 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   // `exitPosition` throws `no_position` when there is nothing to sell, so reaching here
   // means the position existed and the order was accepted.
   //
-  // `held` was read before the sell and is the best source for qty, P&L and exit price.
-  // In the rare race where a fill beat the pre-read (position already gone from the
-  // broker's book), fall back to the snapshot for qty and mark price/pnl as unknown —
-  // the record still lands and the snapshot is still removed.
-  const qty       = held?.qty ?? null;
-  const pnl       = held?.unrealizedPnL ?? null;
+  // `held` was read before the sell and is the best source for price and P&L. In the rare
+  // race where a fill beat the pre-read (position already gone from the broker's book),
+  // mark them unknown — the record still lands and the snapshot lifecycle below still runs.
+  // P&L is scaled to the fraction actually sold: `held.unrealizedPnL` is for the WHOLE
+  // position, and reporting it in full against a partial sale would overstate the result.
   const exitPrice = held
     ? (held.marketValue ?? held.avgCost * held.qty) / held.qty
+    : null;
+  const pnl = held && held.qty !== 0 && held.unrealizedPnL != null
+    ? held.unrealizedPnL * (soldQty / held.qty)
     : null;
 
   const record = recordDecision(decision('exit', 'trader', {
@@ -1091,16 +1095,22 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
     rationale: reason,
     triggerEventId,
     executed: true,
-    qty,
+    qty: soldQty,
     price: exitPrice,
     pnl,
     orderId,
   }));
-  removePositionSnapshot(symbol);
+
+  // A partial exit keeps the snapshot — same entryPrice, sessionHigh/sessionLow, openedAt,
+  // entryDecisionId — since the position is still open and every stop detector measures
+  // against it. Only a sell that takes the position to zero clears it.
+  const remaining = (held?.qty ?? soldQty) - soldQty;
+  if (remaining <= 0) removePositionSnapshot(symbol);
 
   return JSON.stringify({
-    ok: true, symbol, qty, price: exitPrice,
+    ok: true, symbol, qty: soldQty, price: exitPrice,
     pnl, reason, decisionId: record.id,
+    ...(remaining > 0 ? { remaining } : {}),
     ...(cancelled.length > 0 ? { cancelledOrders: cancelled } : {}),
   });
 }
