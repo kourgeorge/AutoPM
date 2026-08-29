@@ -86,6 +86,12 @@ triggers:
 approval:
   # Operator approval gate — the trader asks before an order reaches the venue.
   #
+  # Scope: covers order ENTRY and EXIT only (see require: below). Stop-arming
+  # (sweepStops/armStop, every tick) and stop-tightening (moveStopTo, via
+  # annotate_position) are NOT gated and never ask — by design, since both are
+  # strictly protective (moveStopTo can only tighten, never loosen a stop) and
+  # gating them would delay protection while a request waits on you.
+  #
   # mode:  off       never ask
   #        live_only ask only on a live account (paper stays fully autonomous)
   #        always    ask on both, useful while building trust in the agent
