@@ -679,12 +679,15 @@ class TerminalUI {
 
     let sidebarCols = 0;
     if (mode === 'sidebar') {
-      // 0.40, not the 0.34 this started at: at 0.34 a 100-column terminal — the exact width that
-      // qualifies for sidebar mode at all — got 34 columns, which is one column short of a
-      // position row's `stop`. The list is SORTED by distance to stop, so that was the one column
-      // whose absence made the row order look arbitrary. The `SIDEBAR_MAX_COLS` cap and the
-      // `MIN_LOG_COLS` floor below both still apply, so a wide window cannot run away with this.
-      sidebarCols = Math.min(SIDEBAR_MAX_COLS, Math.max(SIDEBAR_MIN_COLS, Math.floor(w * 0.4)));
+      // 0.45, up from 0.40, up from the 0.34 this started at. Each bump has been bought by a
+      // column the panel could otherwise never show: at 0.34 a 100-column terminal — the exact
+      // width that qualifies for sidebar mode at all — got 34 columns, one short of a position
+      // row's `stop`, and the list is SORTED by distance to stop, so that was the one column
+      // whose absence made the row order look arbitrary. 0.45 is what puts a position's market
+      // value on screen at 116 columns instead of at 130. The `SIDEBAR_MAX_COLS` cap and the
+      // `MIN_LOG_COLS` floor below both still apply, so a wide window cannot run away with this,
+      // and the log keeps the majority of every window narrower than 155.
+      sidebarCols = Math.min(SIDEBAR_MAX_COLS, Math.max(SIDEBAR_MIN_COLS, Math.floor(w * 0.45)));
       sidebarCols = Math.min(sidebarCols, w - MIN_LOG_COLS);
       // Demote rather than shrink: a panel too narrow for a position row is worse than the
       // strip, which says less but says it legibly.
