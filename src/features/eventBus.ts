@@ -218,6 +218,16 @@ const MAX_PENDING = 100;
  */
 const breachStreak = new Map<string, number>();
 
+/**
+ * Events evicted from `pending` by the `MAX_PENDING` overflow, since the last time this
+ * was drained into a visible event (see the overflow report in `publishTick`).
+ *
+ * Without this, an overflow eviction is indistinguishable from an ack: both remove the
+ * entry from `pending`. The difference matters — an ack means "answered", an eviction
+ * means "nobody saw it" — so the drop gets its own visible report instead of vanishing.
+ */
+let droppedCount = 0;
+
 export function getPendingEvents(): TriggerEvent[] {
   return [...pending.values()];
 }
@@ -246,6 +256,7 @@ export function resetEventRegistry(): void {
   pending.clear();
   live.clear();
   breachStreak.clear();
+  droppedCount = 0;
 }
 
 // ── The gates ─────────────────────────────────────────────────────────────────
@@ -380,7 +391,13 @@ function resolveEvent(
   );
 }
 
-function enqueue(event: TriggerEvent): void {
+/**
+ * `tick`, when given, is the caller's persisted-latch view — only `processHits` has one,
+ * because only a crossing-based hit has a latch to break. `publishDiscrete` and the
+ * detector-failure report are one-shots with no `armed`/`cooldowns` entry to free, so
+ * there is nothing for an eviction to undo beyond the visible-queue drop counted below.
+ */
+function enqueue(event: TriggerEvent, tick?: TickState): void {
   // `info` is a level, not an incident: the newest reading of a key says everything the
   // older ones did. Left to accumulate, an hourly overnight heartbeat puts 16 near-identical
   // lines in front of the LLM by morning. The pile-up is an artefact of `pending` being
@@ -398,9 +415,25 @@ function enqueue(event: TriggerEvent): void {
   // Bound the queue. Oldest first, so a neglected backlog cannot crowd out the event
   // that just fired.
   while (pending.size > MAX_PENDING) {
-    const oldest = pending.keys().next();
+    const oldest = pending.entries().next();
     if (oldest.done) break;
-    pending.delete(oldest.value);
+    const [id, evicted] = oldest.value;
+    pending.delete(id);
+    droppedCount += 1;
+
+    // The evicted entry was never acked — `ackEvent` already removes an event from
+    // `pending` the moment it's answered, so anything still here is, by construction,
+    // unanswered. For a crossing-based key that is latched (still in `armed`/`cooldowns`)
+    // and below `critical`, the ONLY other way back to visibility is a recross past the
+    // band (see `processHits`'s `severity !== 'critical'` gate) — so if the condition
+    // never recrosses, the event would otherwise be gone forever while the latch still
+    // insists it's being watched. Un-latch it here so the next confirmed breach fires a
+    // fresh event instead of being silently lost.
+    if (tick && live.get(evicted.cooldownKey)?.id === id) {
+      live.delete(evicted.cooldownKey);
+      tick.armed.add(evicted.cooldownKey);
+      tick.dirty = true;
+    }
   }
 }
 
@@ -453,7 +486,7 @@ export function processHits(
 
       const event = makeEvent(kind, hit, firedAt, policy.version, 1);
       disarm(key, firedAt, tick);
-      enqueue(event);
+      enqueue(event, tick);
       fired.push(event);
       continue;
     }
@@ -476,7 +509,7 @@ export function processHits(
         live.delete(key);
         if (cleared) {
           const event = resolveEvent(cleared, hit, firedAt, policy.version);
-          enqueue(event);
+          enqueue(event, tick);
           fired.push(event);
         }
       }
@@ -504,7 +537,7 @@ export function processHits(
 
       const event = makeEvent(kind, hit, firedAt, policy.version, 1);
       disarm(key, firedAt, tick);
-      enqueue(event);
+      enqueue(event, tick);
       fired.push(event);
       continue;
     }
@@ -519,7 +552,7 @@ export function processHits(
 
     const event = makeEvent(kind, hit, firedAt, policy.version, (previous?.wakeCount ?? 0) + 1);
     disarm(key, firedAt, tick);
-    enqueue(event);
+    enqueue(event, tick);
     fired.push(event);
   }
 
@@ -576,6 +609,31 @@ export function publishTick(
         severity: 'warn',
         headline: `${failures.length} detector(s) threw — ${detail}`,
         evidence: { failed: failures.length },
+      },
+      firedAt,
+      policy.version,
+      1,
+    );
+    enqueue(event);
+    fired.push(event);
+  }
+
+  if (droppedCount > 0) {
+    // Same channel as a detector failure, for the same reason: an overflow eviction is a
+    // silent loss unless something says so. Snapshot-then-reset before enqueuing, because
+    // enqueuing this very event can itself evict another and re-increment the counter —
+    // that increment correctly belongs to the NEXT report, not this one.
+    const reportedDropped = droppedCount;
+    droppedCount = 0;
+    const firedAt = new Date(now).toISOString();
+    const event = makeEvent(
+      'data_stale',
+      {
+        symbol: null,
+        cooldownKey: 'pending_queue_overflow',
+        severity: 'warn',
+        headline: `${reportedDropped} event(s) dropped from the pending queue by overflow (cap ${MAX_PENDING})`,
+        evidence: { dropped: reportedDropped },
       },
       firedAt,
       policy.version,
