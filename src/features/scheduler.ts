@@ -254,7 +254,12 @@ export class FeatureScheduler {
    * that closed today land before the summary of the book that held them.
    */
   private async maybeReconcile(data: TickData): Promise<void> {
-    const closing = this.lastSession === 'open' && data.session !== 'open';
+    // A transition witnessed live, OR the very first tick this process makes while the market
+    // is already not open — the latter is what makes a restart after the close (or a same-day
+    // crash mid-transition) reviewable at all. Without it, `lastSession` starts `null`, a daemon
+    // that starts post-close never observes 'open' → non-open, and that session's review is
+    // lost outright with no catch-up.
+    const closing = (this.lastSession === 'open' || this.lastSession === null) && data.session !== 'open';
     this.lastSession = data.session;
 
     if (!closing && Date.now() - this.lastReconcileAt < RECONCILE_INTERVAL_MS) return;
