@@ -79,6 +79,18 @@ function block(root: Record<string, unknown>, name: string, errs: Errors): Recor
  */
 const DEFAULT_CONFIRM_TICKS = 2;
 
+/**
+ * Fallback for `strategy.compositeMin` when the key is absent, and the value POLICY.md stated as
+ * prose for the whole time nothing enforced it.
+ *
+ * Optional for the same reason as `confirmTicks` above: every policy.yaml written before the
+ * entry gate existed is missing this key, the first load THROWS on a validation error, and
+ * requiring it would take down every daemon that upgraded. The fallback is the threshold the
+ * prompt already asked the model to apply to itself, so an operator who has never heard of the
+ * field inherits the rule they were already meant to be following.
+ */
+const DEFAULT_COMPOSITE_MIN = 0.2;
+
 function num(
   src: Record<string, unknown>,
   where: string,
@@ -179,17 +191,29 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     rsiExitMax: num(s, 'strategy', 'rsiExitMax', errs, { min: 0, max: 100 }),
     atrPeriod: num(s, 'strategy', 'atrPeriod', errs, { int: true, min: 1 }),
     minBars: num(s, 'strategy', 'minBars', errs, { int: true, min: 1 }),
+    // Bounded by the composite's own range rather than by taste: it is a mean of five scores each
+    // in -1..+1, so a threshold outside that is unsatisfiable (above +1) or vacuous (below -1),
+    // and both are configuration errors worth naming at load rather than at the first entry.
+    compositeMin: s.compositeMin === undefined
+      ? DEFAULT_COMPOSITE_MIN
+      : num(s, 'strategy', 'compositeMin', errs, { min: -1, max: 1 }),
   };
   if (strategy.emaFast >= strategy.emaSlow) {
     errs.push(`strategy: emaFast (${strategy.emaFast}) must be < emaSlow (${strategy.emaSlow})`);
   }
 
-  // Regime overrides — optional with sensible defaults
+  // Regime overrides — optional with sensible defaults.
+  //
+  // `round2` is not cosmetic: the derived thresholds are sums of decimals, so 0.2 + 0.10 is
+  // 0.30000000000000004 in binary floating point, and that number would be carried verbatim into
+  // `entry_signal` evidence and into the journal. A threshold is a policy statement, and one
+  // written with seventeen digits reads as a computed artefact rather than as somebody's decision.
+  const round2 = (n: number) => parseFloat(n.toFixed(2));
   const DEFAULT_REGIME: RegimePolicy = {
-    expansion:  { sizeMult: 1.0, rsiEntryMin: strategy.rsiEntryMin },
-    recovery:   { sizeMult: 1.0, rsiEntryMin: strategy.rsiEntryMin },
-    late_cycle: { sizeMult: 0.75, rsiEntryMin: Math.min(strategy.rsiEntryMin + 5, 100) },
-    recession:  { sizeMult: 0.5, rsiEntryMin: Math.min(strategy.rsiEntryMin + 10, 100) },
+    expansion:  { sizeMult: 1.0, rsiEntryMin: strategy.rsiEntryMin, compositeMin: strategy.compositeMin },
+    recovery:   { sizeMult: 1.0, rsiEntryMin: strategy.rsiEntryMin, compositeMin: strategy.compositeMin },
+    late_cycle: { sizeMult: 0.75, rsiEntryMin: Math.min(strategy.rsiEntryMin + 5, 100), compositeMin: round2(Math.min(strategy.compositeMin + 0.05, 1)) },
+    recession:  { sizeMult: 0.5, rsiEntryMin: Math.min(strategy.rsiEntryMin + 10, 100), compositeMin: round2(Math.min(strategy.compositeMin + 0.10, 1)) },
   };
 
   const regimeRaw = isRecord(root.regime) ? root.regime : {};
@@ -198,6 +222,7 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     return {
       sizeMult: typeof raw.sizeMult === 'number' ? raw.sizeMult : (DEFAULT_REGIME as any)[key].sizeMult,
       rsiEntryMin: typeof raw.rsiEntryMin === 'number' ? raw.rsiEntryMin : (DEFAULT_REGIME as any)[key].rsiEntryMin,
+      compositeMin: typeof raw.compositeMin === 'number' ? raw.compositeMin : (DEFAULT_REGIME as any)[key].compositeMin,
     };
   };
 

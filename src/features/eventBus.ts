@@ -94,9 +94,15 @@ export interface Crossing {
  * A boolean condition expressed as a crossing: fires on `false -> true`, re-arms on
  * `true -> false`.
  *
- * For composite conditions (`emaFast > emaSlow AND rsi >= min`) there is no single scalar
- * to compare, so the condition itself is the level. The band is the full unit step, which
- * is exactly right: a discrete level cannot flutter within a band.
+ * For conditions made of several parts (`emaFast > emaSlow AND rsi >= min AND composite >= min`)
+ * there is no single scalar to compare, so the condition itself is the level. The band is the full
+ * unit step, and the boolean cannot flutter *within* that band — it is 0 or 1 and nothing between.
+ *
+ * What the band cannot do is smooth the INPUTS. A continuous term sitting a hair from its own
+ * threshold flips this boolean cleanly on every crossing, and each flip is a real edge as far as
+ * the bus is concerned. Hysteresis on the parts, where it is wanted, has to be applied by the
+ * detector before it gets here — `confirmTicks` still applies, and is the protection that survives
+ * the conversion to a boolean.
  */
 export function boolCrossing(condition: boolean): Crossing {
   return { level: condition ? 1 : 0, threshold: 1, direction: 'above', band: 1 };

@@ -53,8 +53,8 @@ import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
 import { REVERSAL_LOOKBACK, reversalFilter } from '../strategy/reversal';
-import { signalTally } from '../strategy/signals';
-import { GuardRejection, enterPosition, restingSells } from '../strategy/orderManager';
+import { computeSignals, signalTally } from '../strategy/signals';
+import { GuardRejection, enterPosition, entrySignalVeto, restingSells } from '../strategy/orderManager';
 import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
 import {
@@ -557,7 +557,17 @@ function findEntrySeries(p: Policy): number[] | null {
       const slow = ema(closes, p.strategy.emaSlow);
       const r = rsi(closes, p.strategy.rsiPeriod);
       const lastRsi = r.length > 0 ? r[r.length - 1] : null;
-      if (crossedAbove(fast, slow) && lastRsi !== null && lastRsi >= p.strategy.rsiEntryMin) {
+      // All three arming conditions, because the detector now arms on all three. Searching on
+      // only the cross and the RSI would find a series that fires nothing, and scenario 10 would
+      // report a missing `entry_signal` as a bus fault rather than as a calibration miss.
+      const composite = signalTally(computeSignals(series(closes, at(0)), p)).composite;
+      if (
+        crossedAbove(fast, slow)
+        && lastRsi !== null
+        && lastRsi >= p.strategy.rsiEntryMin
+        && composite !== null
+        && composite >= p.strategy.compositeMin
+      ) {
         return closes;
       }
     }
@@ -902,6 +912,81 @@ async function guardRules(): Promise<void> {
       && veto.vetoRule === 'missing_stop'
       && veto.executed === false,
     JSON.stringify(veto));
+
+  // ── The entry gate ────────────────────────────────────────────────────────────
+  //
+  // Asserted on `entrySignalVeto` rather than through `enterPosition`, and that is the
+  // reason the function is exported at all: the live path fetches bars from a feed this
+  // harness does not have, and the scenario's absurd equity baseline would refuse every
+  // intent as `daily_loss_breached` two guards earlier. What matters is the decision, and
+  // the decision is pure.
+  //
+  // POLICY.md asked the model to apply this threshold to itself for as long as it existed
+  // and nothing checked. These are the checks.
+  const pol = getPolicy();
+  const gateMin = pol.strategy.compositeMin;
+
+  const asBars = (closes: number[], opts: { stale?: boolean } = {}): Maybe<Bar[]> => ({
+    value: series(closes, at(0)),
+    source: 'alpaca',
+    asOf: at(0).toISOString(),
+    fetchedAt: at(0).toISOString(),
+    stale: opts.stale ?? false,
+  });
+
+  // A run of 60 rising closes: every trend signal reads the same tape and agrees.
+  const strong = Array.from({ length: 60 }, (_, i) => 100 + 0.4 * i);
+  const strongComposite = signalTally(computeSignals(series(strong, at(0)), pol)).composite;
+  check('the fixtures bracket the gate — a clean uptrend clears it',
+    strongComposite !== null && strongComposite >= gateMin,
+    JSON.stringify({ composite: strongComposite, gateMin }));
+  check('a setup above the threshold is not refused',
+    entrySignalVeto('MSFT', asBars(strong), pol, gateMin) === null,
+    JSON.stringify(entrySignalVeto('MSFT', asBars(strong), pol, gateMin)));
+
+  // The same tape falling. This is the case that used to reach the venue: nothing between
+  // the prompt's sentence and `broker.placeOrder` looked at the composite at all.
+  const weak = Array.from({ length: 60 }, (_, i) => 124 - 0.4 * i);
+  const weakComposite = signalTally(computeSignals(series(weak, at(0)), pol)).composite;
+  check('the fixtures bracket the gate — a downtrend fails it',
+    weakComposite !== null && weakComposite < gateMin,
+    JSON.stringify({ composite: weakComposite, gateMin }));
+  const weakVeto = entrySignalVeto('MSFT', asBars(weak), pol, gateMin);
+  check('low_composite — a downtrend is refused before the venue',
+    weakVeto?.rule === 'low_composite', JSON.stringify(weakVeto));
+  // The refusal has to carry both numbers. A guard that says only "too weak" leaves the
+  // model with no way to tell a near miss from a rejection it should stop retrying.
+  check('the low_composite message quotes the score and the threshold it missed',
+    weakVeto !== null
+      && weakVeto.message.includes(weakComposite!.toFixed(2))
+      && weakVeto.message.includes(gateMin.toFixed(2)),
+    weakVeto?.message ?? 'none');
+
+  // The threshold is an ARGUMENT, which is what lets a regime raise it. Same tape, same
+  // moment, stricter gate — the detector resolves this number the same way, so the two
+  // layers cannot hold different thresholds for one instant.
+  check('a regime that raises the gate refuses what the base gate allowed',
+    entrySignalVeto('MSFT', asBars(strong), pol, 1.0)?.rule === 'low_composite',
+    JSON.stringify(entrySignalVeto('MSFT', asBars(strong), pol, 1.0)));
+
+  // Fail closed, under a SEPARATE rule name. Weak setups and a broken bar feed are both
+  // refusals, but only one of them is about the market, and a journal that files them
+  // together can no longer answer which it was.
+  const unscoreable: Array<[string, Maybe<Bar[]>]> = [
+    ['no bars at all', missing('alpaca', 'feed down')],
+    ['bars present but stale', asBars(strong, { stale: true })],
+    ['fewer bars than minBars', asBars(strong.slice(0, pol.strategy.minBars - 1))],
+  ];
+  for (const [label, bars] of unscoreable) {
+    const v = entrySignalVeto('MSFT', bars, pol, gateMin);
+    check(`signals_unavailable — ${label}`, v?.rule === 'signals_unavailable', JSON.stringify(v));
+  }
+
+  // The point of the split, stated as an assertion: a stale copy of a tape that would
+  // otherwise PASS is refused, and not under the name that means "too weak".
+  const staleStrong = entrySignalVeto('MSFT', asBars(strong, { stale: true }), pol, gateMin);
+  check('stale bars that would have passed are refused as unavailable, never as low_composite',
+    staleStrong !== null && staleStrong.rule !== 'low_composite', JSON.stringify(staleStrong));
 }
 
 /**

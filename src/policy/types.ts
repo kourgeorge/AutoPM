@@ -23,6 +23,14 @@ export interface StrategyPolicy {
   rsiExitMax: number;
   atrPeriod: number;
   minBars: number;
+  /**
+   * Minimum `SignalTally.composite` required to open a position, -1..+1.
+   *
+   * The single definition of the entry gate. It is enforced by `enterPosition` (`low_composite`),
+   * arms the `entry_signal` detector, and is rendered into POLICY.md by the template — so the
+   * prompt cannot state a threshold the machine does not hold.
+   */
+  compositeMin: number;
 }
 
 export interface TriggerPolicy {
@@ -46,6 +54,13 @@ export interface RegimeOverride {
   sizeMult: number;
   /** Minimum RSI required for entry signal to arm. Overrides strategy.rsiEntryMin per regime. */
   rsiEntryMin: number;
+  /**
+   * Minimum composite required to enter. Overrides strategy.compositeMin per regime.
+   *
+   * This is where "tighten entry criteria in a late cycle" stops being advice: the guard reads
+   * it, so a weak setup is refused rather than argued with.
+   */
+  compositeMin: number;
 }
 
 export interface RegimePolicy {
