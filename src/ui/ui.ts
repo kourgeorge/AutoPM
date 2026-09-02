@@ -381,13 +381,28 @@ class TerminalUI {
     this.onSubmit = handler;
   }
 
+  /**
+   * Wrapped and hanging-indented exactly like `chatBlock`: blessed's own wrap always resumes
+   * at column 0 (see `wrapPlain`'s doc comment), which is what let a long TOOL line's overflow
+   * fall back to the left edge instead of lining up under the text it continues.
+   */
   log(level: 'INFO' | 'WARN' | 'ERROR' | 'TRADE' | 'TOOL', msg: string): void {
     const ts    = stamp();
     const label = LEVEL_LABEL[level] ?? level;
-    const line  = level === 'TRADE'
-      ? `{gray-fg}${ts}{/}  ${label}  {bold}{green-fg}${this.escape(msg)}{/}`
-      : `{gray-fg}${ts}{/}  ${label}  ${this.escape(msg)}`;
-    this.emit(line);
+    // `ts` is always `HH:MM:SS.mmm` and every entry in LEVEL_LABEL is 5 visible columns, so this
+    // is the exact width of `${ts}  ${label}  ` below.
+    const gutter = ts.length + 2 + 5 + 2;
+    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const textCols = room - gutter;
+    const indent = ' '.repeat(gutter);
+    const [open, close] = level === 'TRADE' ? ['{bold}{green-fg}', '{/}'] : ['', ''];
+
+    let first = true;
+    for (const row of wrapPlain(msg, textCols)) {
+      const prefix = first ? `{gray-fg}${ts}{/}  ${label}  ` : indent;
+      first = false;
+      this.emit(`${prefix}${open}${this.escape(row)}${close}`);
+    }
     this.screen.render();
   }
 
@@ -738,6 +753,15 @@ class TerminalUI {
     // characters in the screen buffer, and a stale border column is exactly the "garbled on
     // resize" symptom this layout exists to avoid.
     this.screen.realloc();
+
+    // Blessed only re-clamps a scrollable box's `childBase` against its CURRENT height on the
+    // next explicit scroll (scrollablebox.js `scroll()` bails out early via `childBase === base`
+    // unless childOffset moves it away from `base` first) — it does nothing on resize. Toggling
+    // the F2 panel or resizing the window changes logBox's height every time, so a childBase left
+    // over from the old geometry can point past what the new height can show: the box renders
+    // blank until the operator's next PgUp/PgDn happens to trigger that recalculation. Force it
+    // here instead of waiting for one.
+    (this.logBox as any)._recalculateIndex();
   }
 
   /**

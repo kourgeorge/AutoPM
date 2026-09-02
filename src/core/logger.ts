@@ -25,38 +25,46 @@ function write(level: LogLevel, msg: string, data?: unknown): void {
 /**
  * Log a tool call result. agent = e.g. 'Orchestrator', 'Monitor:AAPL', 'Research:TSLA'
  *
- * `input` is rendered ONLY when the call failed. On the happy path the arguments are noise —
- * the result already says what happened, and a snapshot's worth of them would crowd the log
- * box. On a failure they are the whole diagnosis: `ack_event → ERROR: unknown or
- * already-acked event id` cannot distinguish an id the model invented from one the registry
- * evicted between context-build and the ack, and the id is the entire difference.
+ * Rendered as a call signature — `toolName(args) → result` — so both sides of the call are
+ * always visible, not just on failure: on the happy path the args are what makes it possible
+ * to tell two calls to the same tool apart at a glance.
  */
 function logTool(agent: string, toolName: string, result: string, input?: unknown): void {
   const summary = summarizeResult(toolName, result);
-  // `undefined` means the caller did not offer the arguments, which is not the same as a
-  // call that took none — say nothing rather than claim it had none.
-  const args = input !== undefined && failed(result) ? ` ← ${compactInput(input)}` : '';
-  write('TOOL', `[${agent}] ${toolName} → ${summary}${args}`);
+  const args = input !== undefined ? formatArgs(input) : '';
+  write('TOOL', `[${agent}] ${toolName}(${args}) → ${summary}`);
 }
 
-/** A tool reports failure in its body, not by throwing: either shape counts. */
-function failed(raw: string): boolean {
-  try {
-    const r = JSON.parse(raw);
-    return r != null && typeof r === 'object' && (r.error != null || r.ok === false);
-  } catch {
-    return false;
-  }
+// Generous now that the UI wraps long TOOL lines with a hanging indent instead of clipping at
+// the box edge — there's room to actually show the payload instead of a stub of it.
+const MAX_LEN = 400;
+
+function truncate(s: string, max: number = MAX_LEN): string {
+  return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
-function compactInput(input: unknown): string {
-  try {
-    const s = JSON.stringify(input);
-    if (s === undefined) return String(input);
-    return s.length > 200 ? s.slice(0, 200) + '…' : s;
-  } catch {
-    return String(input);
+function formatArgs(input: unknown): string {
+  if (input == null || typeof input !== 'object') return input === undefined ? '' : String(input);
+  const parts = Object.entries(input as Record<string, unknown>).map(([k, v]) => `${k}=${formatValue(v)}`);
+  return truncate(parts.join(', '));
+}
+
+/** Top-level entry point for a whole JSON payload — unlike the recursive `formatValue` this
+ *  caps the result, since a bars array or fundamentals blob has no inherent size limit. */
+function formatResult(v: unknown): string {
+  return truncate(formatValue(v));
+}
+
+/** `key=value` pairs read closer to a function signature than a JSON blob's quotes and braces. */
+function formatValue(v: unknown): string {
+  if (v === null || v === undefined) return 'null';
+  if (typeof v === 'string') return `"${v}"`;
+  if (Array.isArray(v)) return `[${v.map(formatValue).join(', ')}]`;
+  if (typeof v === 'object') {
+    const parts = Object.entries(v as Record<string, unknown>).map(([k, val]) => `${k}=${formatValue(val)}`);
+    return `{${parts.join(', ')}}`;
   }
+  return String(v);
 }
 
 function summarizeResult(tool: string, raw: string): string {
@@ -74,7 +82,7 @@ function summarizeResult(tool: string, raw: string): string {
           ? 'no open positions'
           : r.positions.map((p: any) => `${p.symbol} ${p.qty}sh $${p.marketValue?.toFixed(0)} P&L ${p.unrealizedPnL >= 0 ? '+' : ''}$${p.unrealizedPnL?.toFixed(0)}`).join(' | ');
       case 'get_bars':
-        return Array.isArray(r) ? `${r.length} bars, last close $${r.at(-1)?.c?.toFixed(2)}` : raw.slice(0, 80);
+        return Array.isArray(r) ? `${r.length} bars, last close $${r.at(-1)?.c?.toFixed(2)}` : formatResult(r);
       case 'get_indicators':
         return `RSI ${r.rsi?.toFixed(1)}, EMA9 $${r.ema9?.toFixed(2)}, EMA21 $${r.ema21?.toFixed(2)}, ATR ${r.atr?.toFixed(2)}`;
       case 'get_calendar':
@@ -98,20 +106,20 @@ function summarizeResult(tool: string, raw: string): string {
       case 'run_idea_agent':
         return Array.isArray(r.ideas) ? `${r.ideas.length} idea(s): ${r.ideas.map((i: any) => i.symbol).join(', ')}` : 'no ideas';
       case 'web_search':
-        return Array.isArray(r) ? `${r.length} results` : raw.slice(0, 80);
+        return Array.isArray(r) ? `${r.length} results` : formatResult(r);
       case 'search_news':
-        return Array.isArray(r) ? `${r.length} articles` : raw.slice(0, 80);
+        return Array.isArray(r) ? `${r.length} articles` : formatResult(r);
       case 'get_sec_filing_summary':
-        return typeof r.summary === 'string' ? r.summary.slice(0, 100) : raw.slice(0, 80);
+        return typeof r.summary === 'string' ? truncate(r.summary) : formatResult(r);
       case 'reply':
         return 'sent';
       case 'sleep':
         return `next cycle in ${r.nextCycleIn}`;
       default:
-        return raw.length > 120 ? raw.slice(0, 120) + '…' : raw;
+        return formatResult(r);
     }
   } catch {
-    return raw.length > 120 ? raw.slice(0, 120) + '…' : raw;
+    return truncate(raw);
   }
 }
 
