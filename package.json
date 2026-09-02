@@ -9,7 +9,10 @@
     "dev": "ts-node src/daemon.ts",
     "replay": "ts-node src/scripts/replay.ts",
     "journal": "ts-node src/scripts/journal.ts",
-    "verify:policy": "ts-node src/scripts/verifyPolicyPrompt.ts"
+    "verify:policy": "ts-node src/scripts/verifyPolicyPrompt.ts",
+    "backtest": "ts-node src/scripts/backtest.ts",
+    "backtest:sweep": "ts-node src/scripts/backtestSweep.ts",
+    "backtest:ai": "ts-node src/scripts/backtestAi.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

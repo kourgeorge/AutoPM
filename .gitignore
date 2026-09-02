@@ -19,6 +19,13 @@ tmp/
 data/policy/
 policy/history/
 
+# Cached historical bars (regenerable from Alpaca), the AI decision cache (keyed by input
+# hash, regenerable by re-running the backtest), and generated backtest reports — none of
+# these is source, all are large and worthless to diff.
+data/historicalBars/
+data/aiDecisionCache.json
+backtest-results/
+
 # The IBKR-mode data directory — the same runtime files as data/ (journal, fills,
 # LESSONS, state, sectors, policy) from a run against TWS. Live trading records, so
 # ignored for the same reason its data/ counterparts above are. The files stay on disk;
