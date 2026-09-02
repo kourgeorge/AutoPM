@@ -76,7 +76,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'send_to_trader',
-    description: 'Send an instruction or message to the trader. Calling this tool IMMEDIATELY interrupts the trader\'s sleep and starts a new cycle — do not paraphrase this as "next cycle" or "when it wakes up". Use this any time the operator wants the trader to act now.',
+    description: 'Send an instruction to the trader. Calling this tool IMMEDIATELY interrupts the trader\'s sleep and starts a new cycle — do not paraphrase this as "next cycle" or "when it wakes up". Use this only for something the trader can actually DO in that cycle (place/exit a trade, re-scan the watchlist, act on a symbol now). The trader CANNOT reply — it has no channel back to you or the operator, only tool calls and one-line logs. Never send a question or a request to "explain" or "propose" something and expect an answer back; you will get none. Answer questions and explanations yourself, with your own tools.',
     input_schema: {
       type: 'object',
       properties: {
@@ -135,8 +135,16 @@ ${CONCIERGE_TOOLS.map((t) => t.name).join(', ')}
 Read the description on each before using it. You have no source of a number beyond these —
 a figure you did not read out of a tool result is one you invented.
 
+THE TRADER CANNOT TALK TO YOU
+- It has no tool to send you or the operator a message — its only effects are placing/exiting
+  trades, updating internal state, and one-line logs nobody but a log reader sees
+- Waking it to ask a question, request an explanation, or "propose an implementation" gets you
+  nothing back — you just burned a cycle. If the operator wants to understand something or
+  discuss policy, answer it yourself with your own tools; do not call send_to_trader for it
+
 WHEN TO USE send_to_trader
-- Operator wants to change trading behavior ("stop trading", "exit all positions", "research TSLA")
+- Operator wants to change trading behavior right now ("stop trading", "exit all positions",
+  "buy TSLA") — something the trader DOES, not something it explains
 - Operator wants the trader to act or wake up NOW — calling send_to_trader immediately interrupts the sleep timer
 - Always call the tool, never just say you did — if you don't call it, the trader is NOT woken
 - After calling, tell the operator: "Woken — it will run a cycle now and then sleep again." Do NOT say "awake and ready" — the cycle takes ~1 min and then the trader goes back to sleep automatically
