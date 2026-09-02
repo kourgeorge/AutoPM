@@ -9,6 +9,8 @@ export interface ModelProvider {
     messages: ChatMessage[];
     tools: ToolDefinition[];
     maxTokens: number;
+    /** Forces the model to answer via this exact tool instead of free-form text. Optional — omit for today's behavior. */
+    toolChoice?: { type: 'tool'; name: string };
   }): Promise<ModelResponse>;
 }
 
@@ -31,8 +33,9 @@ export class AnthropicProvider implements ModelProvider {
     messages: ChatMessage[];
     tools: ToolDefinition[];
     maxTokens: number;
+    toolChoice?: { type: 'tool'; name: string };
   }): Promise<ModelResponse> {
-    const { systemPrompt, messages, tools, maxTokens } = params;
+    const { systemPrompt, messages, tools, maxTokens, toolChoice } = params;
 
     // Translate internal ChatMessage[] to Anthropic message format
     const anthropicMessages: Anthropic.MessageParam[] = messages.map((m) => ({
@@ -64,6 +67,7 @@ export class AnthropicProvider implements ModelProvider {
       messages: anthropicMessages,
       tools: tools as Anthropic.Tool[],
       max_tokens: maxTokens,
+      ...(toolChoice ? { tool_choice: { type: 'tool' as const, name: toolChoice.name } } : {}),
     });
 
     // Translate response back to internal format (skip thinking/redacted blocks)
@@ -133,8 +137,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     messages: ChatMessage[];
     tools: ToolDefinition[];
     maxTokens: number;
+    toolChoice?: { type: 'tool'; name: string };
   }): Promise<ModelResponse> {
-    const { systemPrompt, messages, tools, maxTokens } = params;
+    const { systemPrompt, messages, tools, maxTokens, toolChoice } = params;
 
     // Translate internal ChatMessage[] (Anthropic-shaped) to OpenAI chat messages.
     //
@@ -243,7 +248,14 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // optional there, and o-series + tools on chat/completions is already accepted as-is.
     // Scoped to a non-empty tool list because a tool-free call (the concierge's plain answers)
     // is not in conflict, and should keep whatever thinking the model would do unbidden.
-    const isGptReasoningModel = isOpenAIEndpoint && /^gpt-[5-9]/.test(this.model);
+    // Matched against the model name with any LiteLLM routing prefix ("azure/", "openai/", …)
+    // stripped, and independent of which host serves it — a proxy forwards this model-level
+    // constraint through rather than normalizing it away. Confirmed: "azure/gpt-5.6-luna" via a
+    // LiteLLM proxy (not api.openai.com) 400'd on a plain `temperature: 0` override too — see
+    // the temperature line below.
+    const bareModel = this.model.replace(/^[^/]+\//, '');
+    const isGptReasoningModel = /^gpt-[5-9]/.test(bareModel);
+    const isReasoningModel = isGptReasoningModel || /^o\d/.test(bareModel);
     const reasoningParam = isGptReasoningModel && openaiTools.length > 0
       ? { reasoning_effort: 'none' }
       : {};
@@ -259,6 +271,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         model: this.model,
         messages: openaiMessages,
         tools: openaiTools,
+        ...(toolChoice ? { tool_choice: { type: 'function', function: { name: toolChoice.name } } } : {}),
         ...tokenParam,
         ...reasoningParam,
         // o-series and gpt-5+ models don't accept a temperature override — omit it
