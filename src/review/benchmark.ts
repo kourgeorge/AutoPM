@@ -27,6 +27,7 @@ import { alpacaTrading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
+import { etDate } from '../collect/etDate';
 
 /** Sessions per year, for annualising a daily Sharpe. The market's own constant. */
 const TRADING_DAYS_PER_YEAR = 252;
@@ -85,30 +86,6 @@ export interface Benchmark {
 }
 
 // ── Series plumbing ─────────────────────────────────────────────────────────────
-
-/**
- * A date in exchange time.
- *
- * Both series are aligned on this string and the timezone is the whole point: portfolio
- * equity is stamped at the session's ET close and a daily bar at its ET open, so reading
- * either in UTC rolls some of them onto the neighbouring date and the two series then join
- * one day out of step. Built from `formatToParts` rather than a locale string so the format
- * is ours and not the runtime's.
- */
-const ET_PARTS = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
-function etDate(ms: number): string | null {
-  if (!Number.isFinite(ms)) return null;
-  const parts = ET_PARTS.formatToParts(new Date(ms));
-  const get = (type: string) => parts.find(p => p.type === type)?.value;
-  const [y, m, d] = [get('year'), get('month'), get('day')];
-  return y && m && d ? `${y}-${m}-${d}` : null;
-}
 
 /**
  * Simple (not log) daily returns, as fractions.

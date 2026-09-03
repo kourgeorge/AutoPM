@@ -24,7 +24,7 @@ import {
   type Lane,
   type TickSnapshot,
 } from './dashboard';
-import { escapeTags, wrapPlain } from './format';
+import { escapeTags, plainWidth, wrapPlain } from './format';
 import { makeGlyphs, type Glyphs } from './glyphs';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
@@ -138,6 +138,25 @@ const STRIP_ROWS = 5;
 function stamp(d: Date = new Date()): string {
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+/**
+ * Truncate rather than wrap. A chart row's columns are aligned by the renderer that built it —
+ * `wrapPlain` reflows each row independently and would break that alignment the moment one row
+ * is wider than the box, so a row too wide to fit loses its overflow instead of moving it to a
+ * second, unaligned row.
+ */
+function clipPlain(s: string, width: number): string {
+  if (width <= 0) return '';
+  let out = '';
+  let w = 0;
+  for (const ch of s) {
+    const cw = plainWidth(ch);
+    if (w + cw > width) break;
+    out += ch;
+    w += cw;
+  }
+  return out;
 }
 
 // ── UI singleton ─────────────────────────────────────────────────────────────
@@ -408,6 +427,41 @@ class TerminalUI {
 
   reply(msg: string): void {
     this.chatBlock(CHAT_LABELS.orchestrator, COLORS.reply, msg);
+  }
+
+  /**
+   * Same framing as `reply()` — blank row, `[ORCHESTRATOR]` gutter — but each line is CLIPPED
+   * to the box width instead of wrapped. `chatBlock`'s `wrapPlain` reflows a long row onto a
+   * new one at column 0, which is correct for prose and wrong for a chart: it would break the
+   * aligned columns a renderer already built. Callers should size their chart to `chartWidth()`
+   * first: clipping here is the fallback for a resize between that call and this one, not the
+   * primary fit.
+   */
+  replyChart(lines: string[]): void {
+    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const narrow = room - CHAT_GUTTER < CHAT_MIN_TEXT_COLS;
+    const indent = narrow ? 2 : CHAT_GUTTER;
+    const textCols = Math.max(1, room - indent);
+
+    this.emit('');
+    if (narrow) this.emit(`${COLORS.reply}[${CHAT_LABELS.orchestrator}]{/}`);
+
+    let first = true;
+    for (const line of lines) {
+      const prefix = !narrow && first ? `[${CHAT_LABELS.orchestrator}]`.padEnd(CHAT_GUTTER) : ' '.repeat(indent);
+      first = false;
+      const clipped = clipPlain(line, textCols);
+      this.emit(clipped === '' ? '' : `${COLORS.reply}${prefix}${this.escape(clipped)}{/}`);
+    }
+    this.emit('');
+    this.screen.render();
+  }
+
+  /** Text columns `replyChart` will actually draw into, for sizing a chart before rendering it. */
+  chartWidth(): number {
+    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const narrow = room - CHAT_GUTTER < CHAT_MIN_TEXT_COLS;
+    return Math.max(1, room - (narrow ? 2 : CHAT_GUTTER));
   }
 
   /**
