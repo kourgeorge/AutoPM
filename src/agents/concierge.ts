@@ -18,6 +18,7 @@ import { getState } from '../state/state';
 import { TRADER_TOOL_DEFINITIONS, executeTraderTool } from '../tools/traderTools';
 import { ALPACA_DATA_TOOL_DEFINITIONS } from '../tools/alpacaDataTools';
 import { RESEARCH_TOOL_DEFINITIONS } from '../tools/researchTools';
+import { CHART_TOOL_DEFINITIONS, executeChartTool } from '../tools/chartTools';
 import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
 
 /**
@@ -110,7 +111,10 @@ const CONCIERGE_TOOLS: ToolDefinition[] = [
   ...CONCIERGE_OWN_TOOLS,
   ...ALPACA_DATA_TOOL_DEFINITIONS,
   ...RESEARCH_TOOL_DEFINITIONS,
+  ...CHART_TOOL_DEFINITIONS,
 ];
+
+const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
 
 /**
  * The prompt lists tool NAMES ONLY, generated from the array above.
@@ -162,7 +166,9 @@ TONE
   get_benchmark, not get_scorecard: the scorecard's figures are absolute and closed-trade only, so
   they can read well while the account trailed SPY. Quote both — the benchmark number, then the
   scorecard as the explanation for it
-- You do NOT place trades directly — you relay to the trader`;
+- You do NOT place trades directly — you relay to the trader
+- If the operator asks to SEE price history or a comparison rather than hear the numbers, use
+  show_price_history or show_performance_comparison — they draw the chart themselves, you don't`;
 
 export class ConciergeAgent {
   private readonly provider = createModelProvider(config.ai);
@@ -268,6 +274,10 @@ export class ConciergeAgent {
 
     if (name === 'update_policy') {
       return JSON.stringify(mutatePolicy(input as any));
+    }
+
+    if (CHART_TOOL_NAMES.has(name)) {
+      return executeChartTool(name, input);
     }
 
     return executeTraderTool(name, input);
