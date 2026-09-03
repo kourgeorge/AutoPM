@@ -16,6 +16,8 @@ import {
   TRADER_TOOL_DEFINITIONS,
   brokerOrderView,
   executeTraderTool,
+  getMarketStatusSnapshot,
+  getAccountSnapshot,
 } from '../tools/traderTools';
 import type { ChatMessage, ContentBlock } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
@@ -25,9 +27,9 @@ const DEFAULT_SLEEP_MS = 10 * 60_000;
 const ERROR_RECOVERY_SLEEP_MS = 60_000;
 
 /**
- * The L3 system prompt: policy/POLICY.md rendered against the active policy.
+ * The L3 system prompt: policy/PLAYBOOK.md rendered against the active policy.
  *
- * `renderPolicy` throws on an unknown placeholder or a bad filter, and POLICY.md is
+ * `renderPolicy` throws on an unknown placeholder or a bad filter, and PLAYBOOK.md is
  * NOT covered by the guarded reload path that protects policy.yaml — so a prose typo
  * would otherwise brick the trading loop. The last good prompt is kept and reused;
  * the FIRST render still throws, because trading on a prompt nobody could produce is
@@ -39,7 +41,7 @@ function systemPrompt(): string {
   try {
     return (_lastGoodPrompt = renderPolicy());
   } catch (err: any) {
-    logger.error('[Trader] POLICY.md render failed — using last good prompt', err.message);
+    logger.error('[Trader] PLAYBOOK.md render failed — using last good prompt', err.message);
     if (!_lastGoodPrompt) throw err;
     return _lastGoodPrompt;
   }
@@ -175,7 +177,7 @@ export class Trader {
     // Providers that report no usage report 0 (see `modelProvider.ts`), which is honest here.
     let inTokens = 0;
     let outTokens = 0;
-    // Rendered per cycle, so a hot POLICY.md edit takes effect on the next one.
+    // Rendered per cycle, so a hot PLAYBOOK.md edit takes effect on the next one.
     const prompt = systemPrompt();
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -380,6 +382,12 @@ async function buildPortfolioContext(
     const stop = snap?.stopLevel != null ? ` SL $${snap.stopLevel.toFixed(2)}` : '';
     const tp = snap?.takeProfitLevel != null ? ` TP $${snap.takeProfitLevel.toFixed(2)}` : '';
 
+    const qty = e ? `  qty ${e.qty}` : '';
+    // Live P&L, not MFE/MAE — the venue's own number, straight through from `Position`. Absent
+    // rather than 0 when the venue didn't report one, same as sector.
+    const livePnl = e?.unrealizedPnL != null
+      ? `  ${e.unrealizedPnL >= 0 ? '+$' : '-$'}${Math.abs(e.unrealizedPnL).toFixed(2)}`
+      : '';
     const weight = e ? `  ${e.weightPct.toFixed(1)}%` : '';
     const sector = e ? `  ${e.sector ?? '(sector unknown)'}` : '';
     const age = snap?.openedAt ? ageOf(snap.openedAt) : null;
@@ -405,7 +413,7 @@ async function buildPortfolioContext(
     const earningsFlag = dUntil != null && dUntil <= EARNINGS_HORIZON_DAYS
       ? `  ${dUntil <= 0 ? 'EARNINGS TODAY' : `EARNINGS IN ${dUntil}D`}${cal!.isEstimate === true ? ' (est)' : ''}`
       : '';
-    lines.push(`  ${label.padEnd(8)}${entry}${stop}${tp}${weight}${sector}${age ? `  age ${age}` : ''}${flag}${earningsFlag}`);
+    lines.push(`  ${label.padEnd(8)}${entry}${stop}${tp}${qty}${livePnl}${weight}${sector}${age ? `  age ${age}` : ''}${flag}${earningsFlag}`);
 
     // MFE/MAE from the same three fields `compute.ts` uses, so the numbers agree. A missing
     // baseline omits the clause rather than printing NaN.
@@ -432,7 +440,7 @@ async function buildPortfolioContext(
   // `enterPosition` counts broker positions, so this is also the number that will be enforced.
   const count = exp ? exp.positions.length : rows.length;
   const slotsLeft = Math.max(0, getPolicy().risk.maxPositions - count);
-  lines.push(`${count} open position${count !== 1 ? 's' : ''}${exp ? ' at the venue' : ''} — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining. Call get_positions for live qty and P&L.`);
+  lines.push(`${count} open position${count !== 1 ? 's' : ''}${exp ? ' at the venue' : ''} — ${slotsLeft} slot${slotsLeft !== 1 ? 's' : ''} remaining.${exp ? '' : ' Call get_positions for live qty and P&L.'}`);
 
   // Restated as a list, because a per-row flag is easy to read past and this is the one
   // condition where a stop detector has no level to compare against — it measures nothing
@@ -461,6 +469,56 @@ async function buildPortfolioContext(
   }
 
   lines.push('=== END PORTFOLIO CONTEXT ===');
+  return lines.join('\n');
+}
+
+/**
+ * Market clock + account state, fetched once per cycle so `get_market_status` / `get_account`
+ * are an on-demand refresh rather than a mandatory first step. Same fail-soft shape as
+ * `buildBrokerOrders`: a broker hiccup here must not cost the cycle the rest of its context.
+ * Absorbs the old standalone "Start-of-day equity" line — `getAccountSnapshot()` already
+ * carries it, computed the same way `dailyLossStatus` does for the real guard.
+ */
+async function buildAccountStatus(): Promise<string> {
+  const lines = ['=== MARKET & ACCOUNT ==='];
+
+  try {
+    const market = await getMarketStatusSnapshot();
+    const untilClause = market.minutesUntilChange != null
+      ? ` ${market.minutesUntilChange}m to ${market.changeLabel}.`
+      : ` Next change: ${market.changeLabel}.`;
+    lines.push(`Market ${market.isOpen ? 'OPEN' : 'CLOSED'} — ${market.etTime} ET.${untilClause}`);
+  } catch (err: any) {
+    lines.push(`Market clock unavailable this cycle (${err.message}). Retry with get_market_status.`);
+  }
+
+  try {
+    const account = await getAccountSnapshot();
+    lines.push(
+      `Equity $${account.equity.toFixed(2)}  Cash $${account.cash.toFixed(2)}  Buying power $${account.buyingPower.toFixed(2)}.`,
+    );
+    const startEquityStr = account.startOfDayEquity != null
+      ? `$${account.startOfDayEquity.toFixed(2)}`
+      : 'unknown — call get_account to initialize';
+    const dayPnlStr = account.dailyPnL != null
+      ? ` Day P&L ${account.dailyPnL >= 0 ? '+' : ''}$${account.dailyPnL.toFixed(2)}` +
+        (account.dailyPnLPct != null ? ` (${signed(account.dailyPnLPct)}).` : '.')
+      : '';
+    lines.push(`Start-of-day equity: ${startEquityStr}.${dayPnlStr}`);
+
+    // Loud on purpose, matching the `NO STOP RECORDED HERE` treatment — this is the one state
+    // where entries are blocked and a model skimming past a plain sentence would miss why.
+    if (account.lossLimitBreached === true) {
+      lines.push(`*** DAILY LOSS LIMIT BREACHED (limit ${account.lossLimitPct.toFixed(1)}%) — entries are blocked, exits are not. ***`);
+    } else if (account.lossLimitUnmeasurable) {
+      lines.push(account.lossLimitUnmeasurable);
+    }
+    lines.push(`Max positions: ${account.maxPositions}.`);
+  } catch (err: any) {
+    lines.push(`Account unavailable this cycle (${err.message}) — equity, cash and daily loss status are unknown. Retry with get_account.`);
+  }
+
+  lines.push('=== END MARKET & ACCOUNT ===');
   return lines.join('\n');
 }
 
@@ -674,13 +732,7 @@ export async function buildCycleContext(
   const eventCtx = buildMachineEvents();
   if (eventCtx) { lines.push(eventCtx); lines.push(''); }
 
-  lines.push(
-    `Start-of-day equity: ${
-      state.startOfDayEquity > 0
-        ? '$' + state.startOfDayEquity.toFixed(2)
-        : 'unknown — call get_account to initialize'
-    }`,
-  );
+  lines.push(await buildAccountStatus());
 
   const portfolioCtx = await buildPortfolioContext(state.positionSnapshots);
   if (portfolioCtx) { lines.push(''); lines.push(portfolioCtx); }
@@ -706,7 +758,7 @@ export async function buildCycleContext(
   }
 
   lines.push('');
-  lines.push('If MACHINE EVENTS are present, deal with the critical and urgent ones before anything else. Otherwise start with get_market_status + get_account + get_positions. End with sleep().');
+  lines.push('If MACHINE EVENTS are present, deal with the critical and urgent ones before anything else. Otherwise start from MARKET & ACCOUNT and PORTFOLIO CONTEXT above — get_market_status / get_account / get_positions are for a fresher read on demand, not a mandatory first step. End with sleep().');
 
   return lines.join('\n');
 }

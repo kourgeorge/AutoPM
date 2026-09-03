@@ -23,7 +23,7 @@ export interface RiskPolicy {
    * Minimum days until the next earnings print required to open a new position.
    *
    * An earnings gap jumps past a resting stop, so this is the one entry risk `stopLossAtrMult`
-   * cannot bound. POLICY.md stated this as prose for as long as it existed; this is the number
+   * cannot bound. PLAYBOOK.md stated this as prose for as long as it existed; this is the number
    * `earningsVeto` in orderManager.ts actually enforces, and the prompt is templated from it so
    * the two cannot drift.
    */
@@ -52,7 +52,7 @@ export interface StrategyPolicy {
    * Minimum `SignalTally.composite` required to open a position, -1..+1.
    *
    * The single definition of the entry gate. It is enforced by `enterPosition` (`low_composite`),
-   * arms the `entry_signal` detector, and is rendered into POLICY.md by the template — so the
+   * arms the `entry_signal` detector, and is rendered into PLAYBOOK.md by the template — so the
    * prompt cannot state a threshold the machine does not hold.
    */
   compositeMin: number;
@@ -125,9 +125,9 @@ export type ApprovalTimeout = 'deny' | 'allow';
  * The operator approval gate.
  *
  * Behaviour, so it lives here rather than in `core/config.ts`: an operator tunes it to
- * change how the system trades. It is deliberately absent from `PolicyMutation` in
- * `policy/mutate.ts` — the concierge's `update_policy` must not be able to disarm the gate
- * on the operator's behalf. Only a human editing policy.yaml can.
+ * change how the system trades. It is deliberately absent from `TradingSettingsUpdate` in
+ * `policy/mutate.ts` — the concierge's `update_trading_settings` must not be able to disarm
+ * the gate on the operator's behalf. Only a human editing policy.yaml can.
  */
 export interface ApprovalPolicy {
   mode: ApprovalMode;

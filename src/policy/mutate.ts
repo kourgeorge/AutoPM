@@ -8,8 +8,8 @@
  * Deliberately narrow: only the fields a user would express as a preference
  * ("add TSLA", "reduce position size to 3%") are exposed. Immutable ceilings
  * are enforced by the existing parsePolicy validator, which runs on the RESULT
- * (see the end of `mutatePolicy`) — so the only shape check here is the one that
- * has to precede the mutation: that the sections it writes into exist at all.
+ * (see the end of `updateTradingSettings`) — so the only shape check here is the
+ * one that has to precede the mutation: that the sections it writes into exist at all.
  */
 
 import fs from 'fs';
@@ -18,7 +18,7 @@ import { dump as dumpYaml, load as parseYamlDoc } from 'js-yaml';
 import { writeFileAtomic } from '../core/fsAtomic';
 import { HISTORY_DIR, POLICY_FILE, parsePolicy, readPolicyText, reloadPolicy } from './load';
 
-export interface PolicyMutation {
+export interface TradingSettingsUpdate {
   /** Add these symbols to the watchlist (idempotent). */
   addToWatchlist?: string[];
   /** Remove these symbols from the watchlist. */
@@ -37,11 +37,11 @@ export interface PolicyMutation {
   maxGrossExposurePct?: number;
 }
 
-export type MutateResult =
+export type UpdateTradingSettingsResult =
   | { ok: true;  applied: string[]; version: number }
   | { ok: false; errors: string[] };
 
-export function mutatePolicy(changes: PolicyMutation): MutateResult {
+export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTradingSettingsResult {
   let text: string;
   try {
     text = readPolicyText();
@@ -98,7 +98,7 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
   doc.strategy.watchlist = watchlist;
 
   // ── Risk ───────────────────────────────────────────────────────────────────
-  const riskFields: Array<[keyof PolicyMutation & keyof typeof doc.risk, string]> = [
+  const riskFields: Array<[keyof TradingSettingsUpdate & keyof typeof doc.risk, string]> = [
     ['maxPositions',      'risk.maxPositions'],
     ['positionSizePct',   'risk.positionSizePct'],
     ['stopLossAtrMult',   'risk.stopLossAtrMult'],
@@ -106,7 +106,7 @@ export function mutatePolicy(changes: PolicyMutation): MutateResult {
     ['maxGrossExposurePct', 'risk.maxGrossExposurePct'],
   ];
   for (const [field, label] of riskFields) {
-    const v = changes[field as keyof PolicyMutation];
+    const v = changes[field as keyof TradingSettingsUpdate];
     if (v !== undefined) {
       const prev = doc.risk[field];
       doc.risk[field] = v;

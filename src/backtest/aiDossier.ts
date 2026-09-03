@@ -10,7 +10,7 @@
  * so the AI never sees or controls share quantity, only timing and its own stop/take-profit.
  *
  * `signals` carries the same five named, individually-scored `SignalScore[]` the live bot's
- * `get_signals`/`get_watchlist_scan` tools expose (per POLICY.md's SIGNAL EVIDENCE rules) — this
+ * `get_signals`/`get_watchlist_scan` tools expose (per PLAYBOOK.md's SIGNAL EVIDENCE rules) — this
  * used to be reduced away to just `composite`/`signalSummary` before reaching the AI, which gave
  * the backtest AI strictly less resolution than the live bot actually has. Kept alongside the
  * reduced fields rather than replacing them, since the composite/tally line is still a useful

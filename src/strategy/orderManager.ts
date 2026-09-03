@@ -74,7 +74,7 @@ export type SignalVeto = {
  *
  * Reads the composite, never the vote count, and never `reversal`. The composite because a tally
  * cannot tell three signals barely past the dead band from three screaming ones. Not `reversal`
- * because POLICY.md's chasing rule ends with "or say in the rationale what makes this the
+ * because PLAYBOOK.md's chasing rule ends with "or say in the rationale what makes this the
  * exception" — a rule with an escape hatch is a judgement, and moving it here would delete the
  * hatch while the prose still promised it.
  */
@@ -160,7 +160,7 @@ const POSITION_SIZE_TOLERANCE = 0.02;
 /**
  * Why this entry is too big for one position, or null when it fits.
  *
- * `positionSizePct` is the one risk number that never made it below the decision maker. POLICY.md
+ * `positionSizePct` is the one risk number that never made it below the decision maker. PLAYBOOK.md
  * told the model to compute `floor(equity x positionSizePct / price)` itself and
  * `positionSizePctCeiling` sat in the `immutable` block, but nothing on the order path read either —
  * so an arbitrarily large single position was a valid intent, and the ceiling was guarding a number
@@ -241,7 +241,7 @@ export function exposureVeto(
  * an earnings gap jumps straight past a resting stop, so "cannot tell" is not a case this
  * guard can wave through — no evidence, no position.
  *
- * Confirmed and estimated dates are treated identically. POLICY.md already says why: "the
+ * Confirmed and estimated dates are treated identically. PLAYBOOK.md already says why: "the
  * uncertainty is about the day, not about the risk" — an estimate sliding a few days either
  * side is still the same print, and a guard that only blocked confirmed dates would flap open
  * the moment Yahoo's estimate firmed up.
@@ -406,7 +406,7 @@ export async function enterPosition(
   // AFTER buying power, not before, and the order is load-bearing. Buying power is at least equity
   // on any margin account and equity is ten times this budget by default, so anything that fails
   // buying power fails this too — checking size first would make `insufficient_buying_power`
-  // unreachable on the entry path and quietly retire a rule POLICY.md still documents. In this order
+  // unreachable on the entry path and quietly retire a rule PLAYBOOK.md still documents. In this order
   // each keeps the cases it describes best: the venue's arithmetic for what cannot be afforded, and
   // this for what can be afforded and still should not be bought.
   //
@@ -422,7 +422,7 @@ export async function enterPosition(
   if (overExposed) reject('exposure_too_high', overExposed);
 
   // BEFORE the signal gate: a refusal that was going to happen anyway does not deserve a bar
-  // fetch, and an imminent print refuses regardless of how strong the setup looks. POLICY.md
+  // fetch, and an imminent print refuses regardless of how strong the setup looks. PLAYBOOK.md
   // stated this window as prose for as long as it existed and nothing enforced it — the same
   // gap this repo's other unenforced-rule fixes have closed, except here the risk a stop-loss
   // cannot bound is the one a gap jumps straight past.
@@ -434,7 +434,7 @@ export async function enterPosition(
   // useful than reporting a weak composite — and a refusal that was going to happen anyway does
   // not deserve a bar fetch.
   //
-  // POLICY.md stated this threshold as prose for as long as it existed and nothing enforced it,
+  // PLAYBOOK.md stated this threshold as prose for as long as it existed and nothing enforced it,
   // while the entry_signal detector armed on an EMA cross that made no reference to it. The two
   // layers genuinely disagreed about what "entry-worthy" meant; this is the side that refuses.
   await refuseUnlessSignalsSupport(symbol);
