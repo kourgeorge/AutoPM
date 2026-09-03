@@ -12,7 +12,7 @@
  * version would re-fire all day on daily bars.
  *
  * The composite belongs in that condition and not merely in the headline. It is the threshold
- * `enterPosition` refuses on (`low_composite`) and the one POLICY.md renders into the prompt, and
+ * `enterPosition` refuses on (`low_composite`) and the one PLAYBOOK.md renders into the prompt, and
  * while it was carried as text only, this detector woke the trader for crosses the next layer was
  * going to decline. Waking a cycle costs a model call and a cooldown slot; spending both to be
  * told no is the one outcome worth designing out.

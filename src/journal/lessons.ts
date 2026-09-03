@@ -28,7 +28,7 @@ export const LESSONS_FILE = path.join(DATA_DIR, 'LESSONS.md');
 
 /**
  * Written once, when the file is created. The operator opens this file more often than any
- * source file, and the standard it is held to belongs in it rather than only in POLICY.md.
+ * source file, and the standard it is held to belongs in it rather than only in PLAYBOOK.md.
  */
 const FILE_HEADER = `# LESSONS
 

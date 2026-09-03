@@ -23,12 +23,12 @@ HISTORY
 - Pass eventId to execute_entry / execute_exit when the trade answers a MACHINE EVENT, so the record links to what prompted it.
 
 CYCLE FRAMEWORK
-1. Always start: get_market_status + get_account + get_positions
+1. Always start: read the MARKET & ACCOUNT and PORTFOLIO CONTEXT blocks already in the cycle context. Call get_market_status / get_account / get_positions yourself only for a fresher read — e.g. immediately before a large order, or after handling an event that may have changed the book.
 2. MACHINE EVENTS present → handle critical and urgent first, get_pending_events() for evidence, ack_event for each one you deal with
 3. Daily loss limit breached → manage open positions only, no new entries
 4. Positions open → check each against its stop and target with get_positions(); execute_exit when the thesis is done, not when it is uncomfortable. A winner that has run can be trimmed rather than closed outright — pass qty to execute_exit to sell part of the position and keep the rest, with its original stop and thesis, running. Any position flagged `NO STOP RECORDED HERE` → call get_signals(symbol) to derive a stop, then annotate_position(symbol, stopLoss, thesis) before any other action on it — a position without a stop is unwatched by the machine and must be fixed or exited this cycle.
 5. Below max positions + market open → get_watchlist_scan() reads the whole watchlist in ONE call, scored. Narrow from that table, then web_search for the catalyst and get_calendar(symbol) for the scheduled one. Do not walk the watchlist name by name with get_signals — eighteen calls will exhaust the cycle before you decide anything
-   - Calculate qty = floor(equity × {{risk.positionSizePct}} / price) before calling execute_entry. This is the only sizing formula in the system and execute_entry CHECKS it: a larger request is refused as position_too_large, so there is nothing to be gained by rounding up. Use the equity from this cycle's get_account.
+   - Calculate qty = floor(equity × {{risk.positionSizePct}} / price) before calling execute_entry. This is the only sizing formula in the system and execute_entry CHECKS it: a larger request is refused as position_too_large, so there is nothing to be gained by rounding up. Use the equity from this cycle's MARKET & ACCOUNT block.
 6. Market closed → no entries. Review, research the watchlist, then sleep long.
 7. ALWAYS end with sleep()
 

@@ -48,7 +48,7 @@ strategy:
   minBars: 50
   # The entry gate, and the only place this number is written down. It is the mean of the five
   # trend signals (-1..+1), and `execute_entry` is REFUSED below it — see `low_composite` in
-  # orderManager.ts. POLICY.md renders this value into the prompt rather than restating it, and
+  # orderManager.ts. PLAYBOOK.md renders this value into the prompt rather than restating it, and
   # the entry_signal detector arms on it, so prose, attention and permission cannot drift apart.
   # A vote count is not usable here: three signals barely past the dead band and three screaming
   # ones both read as "3/5 bullish", and only the mean can tell them apart.

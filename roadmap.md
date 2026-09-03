@@ -41,11 +41,11 @@ So this is not a rebuild. It is a list of specific missing **edges**.
    entry/stop/TP/high/low *per symbol* and nothing aggregate. No sector, no weight, no
    concentration, no held-vs-held correlation, no equity peak. Ten of the eleven detectors are
    per-symbol; only `dailyLossDetector` looks at the account.
-2. **The prompt names a vocabulary no tool can populate.** `policy/POLICY.md:40` ("Avoid sector
+2. **The prompt names a vocabulary no tool can populate.** `policy/PLAYBOOK.md:40` ("Avoid sector
    concentration — check PORTFOLIO CONTEXT and use judgment") and
    `src/agents/trader.ts:211` ("assess the sectors of open positions") both point the model at
    information the system does not have. This is the `get_signals` fabrication class exactly.
-3. **"Exit when the thesis is done" is unanswerable from context.** `POLICY.md:27` asks it;
+3. **"Exit when the thesis is done" is unanswerable from context.** `PLAYBOOK.md:27` asks it;
    `buildPortfolioContext` (`trader.ts:194`) renders entry/SL/TP and *not* the rationale the
    position was opened for. The link already exists — `PositionSnapshot.entryDecisionId` →
    `journal.jsonl` — and the context builder does not use it.
@@ -139,7 +139,7 @@ the type comment where it is declared, and assert it in a replay scenario.
 3. Add a `case` to the `executeTraderTool` switch. Its central `catch` already converts
    `GuardRejection` → `{error, rejectedBy:'guard', rule}` and `BrokerRejection` →
    `{error, rejectedBy:'broker', status, venueCode, venueMessage}` — do not catch locally.
-4. Teach `policy/POLICY.md` that the tool exists, then run `npm run verify:policy`.
+4. Teach `policy/PLAYBOOK.md` that the tool exists, then run `npm run verify:policy`.
 
 ### 5.3 Yahoo calls
 
@@ -181,7 +181,7 @@ failure mode this whole document exists to avoid.
 
 ### Why
 
-`POLICY.md:40` and `trader.ts:211` both instructed the model to assess sector concentration. No
+`PLAYBOOK.md:40` and `trader.ts:211` both instructed the model to assess sector concentration. No
 tool in the system returned a sector. Either delete the instruction or supply the data — supplied
 it. Same failure class as the TSLA incident where the prompt listed five signal names and the
 model reported "4/5 bullish" with zero signal data (measured: 1/5 bullish, 3 bearish).
@@ -251,7 +251,7 @@ exposure was unavailable — a context builder must never take down a cycle.
 
 ### Done when — met
 
-The model can state a sector weight and cite `get_exposure` for it, and `POLICY.md` no longer
+The model can state a sector weight and cite `get_exposure` for it, and `PLAYBOOK.md` no longer
 asks for a judgment the system cannot inform.
 
 ---
@@ -262,7 +262,7 @@ asks for a judgment the system cannot inform.
 
 ### Why
 
-`POLICY.md:27` says exit "when the thesis is done, not when it is uncomfortable". The thesis lived
+`PLAYBOOK.md:27` says exit "when the thesis is done, not when it is uncomfortable". The thesis lived
 in `data/journal.jsonl`, reachable only via `get_journal`, and the model had no reason to call it
 for a position it could already see in context. So "is the thesis done" was decided without the
 thesis.
@@ -351,7 +351,7 @@ errors the mean return sits above **zero**, not above the sample's own mean, bec
 is an artificially low bar. `perTradeSharpe` is documented as *not* the Sharpe ratio: there is no
 time in it, so an hourly and a weekly strategy score identically.
 
-**Tool `get_benchmark(days?)`**, added to the concierge's shared set too. POLICY.md ADAPTATION:
+**Tool `get_benchmark(days?)`**, added to the concierge's shared set too. PLAYBOOK.md ADAPTATION:
 *the benchmark is the scoreboard, the scorecard explains it* — plus the line that losing to the
 index while making money is the finding most worth a `write_lesson`, since it is invisible without
 the call.
@@ -573,7 +573,7 @@ Adding to a position. `already_holding` stays. Averaging into a loser is not a c
 handing over, and the comment there already says adding to a winner is a different decision with a
 different stop.
 
-### POLICY.md
+### PLAYBOOK.md
 
 - CYCLE FRAMEWORK step 4 gains the new verbs.
 - RISK RULES states the tighten-only rule as a rule, and lists `stop_not_tightened` /
@@ -610,7 +610,7 @@ see *What shipped*.
 ### Why
 
 A momentum book holding through an earnings print is a coin flip with gap risk no ATR stop
-protects against — the stop is *jumped*, not hit. The example lesson written into `POLICY.md` is
+protects against — the stop is *jumped*, not hit. The example lesson written into `PLAYBOOK.md` is
 literally about not checking the calendar. Today the only route to a date is `web_search`, the
 least reliable tool in the box for a date.
 
@@ -632,7 +632,7 @@ Cache for one day (§5.4) — dates move, unlike sectors, so this cache needs a 
 
 ### Prose first, guard later
 
-Start with a POLICY.md rule ("do not open inside N days of earnings without naming the reason").
+Start with a PLAYBOOK.md rule ("do not open inside N days of earnings without naming the reason").
 Promote it to a guard rule in `enterPosition` **only if the journal shows it being ignored** — that
 is the same evidence standard the policy asks of the model.
 
@@ -644,7 +644,7 @@ later* above was met (Rank 3 of #15: the rule was ignorable, and unlike a stop-l
 earnings gap is not bounded by `stopLossAtrMult`). `earningsVeto` (pure) / `refuseIfEarningsWindow`
 (fetch) in `src/strategy/orderManager.ts`, wired into `enterPosition` before the signal gate.
 Refuses as `earnings_window` inside `risk.earningsBlackoutDays` (default 5, new policy field) of
-`nextEarningsAt` — confirmed and estimated dates blocked identically, since the uncertainty POLICY.md
+`nextEarningsAt` — confirmed and estimated dates blocked identically, since the uncertainty PLAYBOOK.md
 already named is about the day, not the risk, and gating only on confirmed dates would flap open the
 moment an estimate firmed up. Fails **closed** as `earnings_unavailable` when the calendar can't be
 read, mirroring `signals_unavailable`: no evidence, no position. Crypto is skipped before the fetch —
@@ -746,7 +746,7 @@ decision in it applies here.
 
 Add `portfolio_review` to the `EventKind` union in `eventBus.ts`.
 
-### POLICY.md
+### PLAYBOOK.md
 
 Name it in ADAPTATION as the **second** exception to "WARN events are context", alongside
 `review_ready`. Say what the cycle is for: read the exposure and the benchmark, decide whether a
@@ -788,7 +788,7 @@ Every session close puts the book — not a symbol — in front of the model exa
 | `src/review/scheduledReview.ts` *(new)*, modelled on `src/review/reviewReady.ts` | P6 |
 | `src/features/scheduler.ts` — `maybeReconcile` | P6 |
 | `src/scripts/replay.ts` — `scenario`, `checkCount`, `slowBleed` | P3, P6 |
-| `policy/POLICY.md` | every P |
+| `policy/PLAYBOOK.md` | every P |
 
 ## 14. Verification — run in this order, every increment
 
@@ -798,8 +798,8 @@ Every session close puts the book — not a symbol — in front of the model exa
    assertions are listed in each work order.
 3. **`npm run replay`** for anything touching detectors or state machines (P3, P6). **Assert event
    counts, not just presence.**
-4. **`npm run verify:policy`** after every POLICY.md edit. `renderPolicy` throws on an unknown
-   placeholder or a bad filter, and POLICY.md is **not** covered by the guarded reload that
+4. **`npm run verify:policy`** after every PLAYBOOK.md edit. `renderPolicy` throws on an unknown
+   placeholder or a bad filter, and PLAYBOOK.md is **not** covered by the guarded reload that
    protects `policy.yaml` — a prose typo would otherwise brick the loop on first start.
 5. **Read the rendered prompt.** Every increment adds prose the model will treat as fact. The
    check is the one this document opens with: **does every noun in the prompt have a tool that

@@ -12,7 +12,7 @@
  * real name has. So it returned the flat notional number in every case that ever reached it
  * (measured across the watchlist's price/ATR range: identical every time), while its tool called that
  * number "vol-scaled" and named a cause for it. One knob, one meaning: `positionSizePct` is a notional
- * budget, POLICY.md gives the model the formula, and `enterPosition` enforces it as
+ * budget, PLAYBOOK.md gives the model the formula, and `enterPosition` enforces it as
  * `position_too_large`. Equal-risk sizing needs its own smaller knob before it can mean anything.
  *
  * What is exported:

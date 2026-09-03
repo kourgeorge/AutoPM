@@ -2,7 +2,7 @@
  * Portfolio exposure as measured fact — weights, sectors, concentration, held-vs-held
  * correlation.
  *
- * This exists because POLICY.md instructed the model to "avoid sector concentration" and
+ * This exists because PLAYBOOK.md instructed the model to "avoid sector concentration" and
  * no tool in the system returned a sector. Naming a vocabulary the prompt cannot populate
  * is the fabrication vector `get_signals` was added to close; this closes the portfolio one.
  *
@@ -26,7 +26,10 @@ import { correlate, returnsMatrix } from './portfolioRisk';
 export interface ExposurePosition {
   symbol: string;
   qty: number;
+  avgCost: number;
   marketValue: number;
+  /** `undefined` when the broker did not report one. Never derived from marketValue/avgCost. */
+  unrealizedPnL?: number;
   /** Percentage points of equity. */
   weightPct: number;
   /** `null` = Yahoo reports none (normal for ETFs). Never guessed from the ticker. */
@@ -64,6 +67,8 @@ export interface Concentration {
 
 export interface Exposure extends Concentration {
   at: string;
+  cash: number;
+  buyingPower: number;
   /** Upper triangle — each held pair exactly once. */
   correlations: HeldCorrelation[];
   maxHeldCorrelation: number;
@@ -121,7 +126,9 @@ export function concentration(
   const exposures: ExposurePosition[] = withValue.map(({ position, marketValue }) => ({
     symbol: position.symbol,
     qty: position.qty,
+    avgCost: position.avgCost,
     marketValue,
+    unrealizedPnL: position.unrealizedPnL,
     weightPct: equityOk ? (marketValue / equity) * 100 : 0,
     sector: sectors[position.symbol] ?? null,
   }));
@@ -204,6 +211,8 @@ export async function exposure(): Promise<Exposure> {
   return {
     at: new Date().toISOString(),
     ...base,
+    cash: account.cash,
+    buyingPower: account.buyingPower,
     correlations,
     maxHeldCorrelation,
     maxHeldPair,

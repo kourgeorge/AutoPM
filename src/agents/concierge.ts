@@ -11,7 +11,7 @@
 import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
-import { mutatePolicy } from '../policy/mutate';
+import { updateTradingSettings } from '../policy/mutate';
 import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState } from '../state/state';
@@ -87,7 +87,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: 'update_policy',
+    name: 'update_trading_settings',
     description: 'Persistently change trading behaviour: add/remove watchlist symbols, adjust position sizing, risk limits, or stop/target multipliers. Changes are validated and hot-reloaded — the trader sees them on its next cycle. Immutable safety ceilings are always enforced.',
     input_schema: {
       type: 'object',
@@ -153,7 +153,7 @@ WHEN TO USE send_to_trader
 - Always call the tool, never just say you did — if you don't call it, the trader is NOT woken
 - After calling, tell the operator: "Woken — it will run a cycle now and then sleep again." Do NOT say "awake and ready" — the cycle takes ~1 min and then the trader goes back to sleep automatically
 - A one-off instruction goes to the trader; a lasting rule change ("only trade these five names",
-  "cut size to 3%") belongs in update_policy, or it dies with that cycle
+  "cut size to 3%") belongs in update_trading_settings, or it dies with that cycle
 
 TONE
 - Friendly but professional
@@ -272,8 +272,8 @@ export class ConciergeAgent {
       return JSON.stringify({ ok: true, sent: message });
     }
 
-    if (name === 'update_policy') {
-      return JSON.stringify(mutatePolicy(input as any));
+    if (name === 'update_trading_settings') {
+      return JSON.stringify(updateTradingSettings(input as any));
     }
 
     if (CHART_TOOL_NAMES.has(name)) {

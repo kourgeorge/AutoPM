@@ -73,7 +73,7 @@ Passed events accumulate in an in-memory registry, capped at 100. The Trader rea
 
 There are exactly three ways a cycle starts, and only one of them is a clock:
 
-1. **Its own `sleep(minutes)` expires.** Every cycle must end with `sleep(minutes, reason)`. This is a *maximum silence*, not a polling interval — the guidance in POLICY.md is 60 min while the market is open, 240 while it is closed. If the model never calls `sleep`, the default is 10 min; after a cycle throws, the retry is 1 min.
+1. **Its own `sleep(minutes)` expires.** Every cycle must end with `sleep(minutes, reason)`. This is a *maximum silence*, not a polling interval — the guidance in PLAYBOOK.md is 60 min while the market is open, 240 while it is closed. If the model never calls `sleep`, the default is 10 min; after a cycle throws, the retry is 1 min.
 2. **The Router wakes it** because a tick produced an `urgent` or `critical` event. The wake carries no payload — events travel via the registry and are read at cycle start, so N wakes and one wake produce an identical cycle. This is why the Router coalesces to **one** `wakeTrader()` per tick.
 3. **The operator wakes it** through the Concierge's `send_to_trader(message)`. The message is queued and rendered under `=== OPERATOR INSTRUCTIONS ===` in the next cycle context.
 
@@ -217,14 +217,14 @@ Acting and recording:
 | `write_lesson(lesson)` | Append one changed rule of thumb to `data/LESSONS.md` — the only thing a cycle can say that outlives it |
 | `sleep(minutes, reason)` | End the cycle and set the maximum silence before the next one |
 
-**Why the measuring tools exist at all.** POLICY.md names the five signal vocabulary, which was enough for the model to report "4/5 bullish, EMA momentum + trend + volume + breakout green" for a symbol whose EMA9 sat 3.4% *below* its EMA21 — measured, it was 1/5. Naming a vocabulary in a prompt without a tool to populate it invites confabulation, so each of `get_signals`, `get_exposure`, `get_scorecard` and `get_benchmark` is declared in its own description as the *only* admissible source for its numbers.
+**Why the measuring tools exist at all.** PLAYBOOK.md names the five signal vocabulary, which was enough for the model to report "4/5 bullish, EMA momentum + trend + volume + breakout green" for a symbol whose EMA9 sat 3.4% *below* its EMA21 — measured, it was 1/5. Naming a vocabulary in a prompt without a tool to populate it invites confabulation, so each of `get_signals`, `get_exposure`, `get_scorecard` and `get_benchmark` is declared in its own description as the *only* admissible source for its numbers.
 
 ### The Concierge
 
 A separate LLM agent that maintains a persistent conversation with the operator. It has the Trader's read-only tools (no `execute_entry` / `execute_exit` / `annotate_position` / `write_lesson`) plus `get_state`, and two of its own:
 
 - `send_to_trader(message)` — queue an instruction and wake the Trader
-- `update_policy({...})` — persist a change to the watchlist, sizing or risk parameters; validated against the immutable ceilings, hot-reloaded, and picked up on the Trader's next cycle
+- `update_trading_settings({...})` — persist a change to the watchlist, sizing or risk parameters; validated against the immutable ceilings, hot-reloaded, and picked up on the Trader's next cycle
 
 It also receives every `warn`/`critical` alert from the Router via `pushAlert`, which prints to the UI and is injected into its conversation history so the operator can ask about it.
 
@@ -235,16 +235,16 @@ The Trader never talks to the operator directly.
 Strategy and risk parameters live in YAML, split by mutability:
 
 - `policy/default.yaml` — the read-only default the project **ships**. Never written at runtime.
-- `data/policy/policy.yaml` — the **live** policy. Seeded from the default on first run; every `update_policy` writes here.
+- `data/policy/policy.yaml` — the **live** policy. Seeded from the default on first run; every `update_trading_settings` writes here.
 - `data/policy/history/` — a timestamped copy of the previous file for every accepted mutation.
 
-The system prompt for the Trader is `policy/POLICY.md` — a template with `{{placeholders}}` interpolated from the live policy at the start of every cycle, so the prose in the system prompt cannot drift from the numbers in the config.
+The system prompt for the Trader is `policy/PLAYBOOK.md` — a template with `{{placeholders}}` interpolated from the live policy at the start of every cycle, so the prose in the system prompt cannot drift from the numbers in the config.
 
-Failure semantics differ by phase on purpose: the **first** load throws, because trading on defaults nobody declared is worse than not trading. A **reload** never throws — it reports the errors and leaves the last good policy active, so a typo cannot take a running daemon down. The same applies to `POLICY.md` rendering, which falls back to the last successfully rendered prompt.
+Failure semantics differ by phase on purpose: the **first** load throws, because trading on defaults nobody declared is worse than not trading. A **reload** never throws — it reports the errors and leaves the last good policy active, so a typo cannot take a running daemon down. The same applies to `PLAYBOOK.md` rendering, which falls back to the last successfully rendered prompt.
 
 The `immutable` block is the part the Concierge and the Trader cannot argue with: `maxPositionsCeiling`, `maxDailyLossPctCeiling`, `positionSizePctCeiling`, `stopLossAtrMultCeiling`, `minTickIntervalMs`. A stop on every entry is enforced unconditionally in code (`missing_stop`), not by a policy flag.
 
-POLICY.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`, `position_too_large`, `daily_loss_unmeasurable`, `low_composite`, `signals_unavailable`, plus the four from the approval gate below.
+PLAYBOOK.md's rules are prose and mostly unenforced. The hard guards live in `enterPosition`, and each one names itself in the journal as a `vetoRule`: `missing_stop`, `invalid_intent`, `max_positions`, `already_holding`, `insufficient_buying_power`, `daily_loss_breached`, `position_too_large`, `daily_loss_unmeasurable`, `low_composite`, `signals_unavailable`, plus the four from the approval gate below.
 
 ### The operator approval gate
 
@@ -266,7 +266,7 @@ approval:
 
 A refusal is journalled as a `vetoRule` like any other guard: `approval_denied` (you said no), `approval_timeout` (nobody answered in time), `approval_unavailable` (an armed gate in a process with no operator attached — a script or a headless run, which therefore cannot trade), `approval_busy` (a second request while one was already on screen). `grep '"vetoRule":"approval_timeout"' data/journal.jsonl` answers "what did I miss by not being at the desk".
 
-The block is **absent from `update_policy`**: the Concierge cannot disarm the gate on your behalf. Only a human editing `data/policy/policy.yaml` can — and it hot-reloads like the rest of the policy, so a change takes effect on the next order, with the panel badge following on the next tick. A policy file written before this feature existed has no `approval:` block; it defaults to **armed** (`live_only`), never to off.
+The block is **absent from `update_trading_settings`**: the Concierge cannot disarm the gate on your behalf. Only a human editing `data/policy/policy.yaml` can — and it hot-reloads like the rest of the policy, so a change takes effect on the next order, with the panel badge following on the next tick. A policy file written before this feature existed has no `approval:` block; it defaults to **armed** (`live_only`), never to off.
 
 **One consequence, stated plainly:** with `require.exit: true` and `onTimeout: deny`, an unattended live agent cannot close a losing position — a stop-breach exit is refused at the gate and journalled as `approval_timeout`. If you are not watching the terminal, either set `require.exit: false` (entries gated, exits free) or `onTimeout: allow` (the gate becomes delay-and-notify rather than a veto).
 
@@ -289,7 +289,7 @@ The reconciler runs every 5 minutes off the tick, unconditionally when the sessi
 
 `data/LESSONS.md` — free-text markdown, append-only, synchronous writes. Entries are `## <iso> — policy v<n>` sections. This closes the last open edge in adaptation: keep the three layers straight — the journal is what was **decided**, the scorecard is what **worked**, LESSONS.md is what was **concluded**. Before it, a conclusion died with the cycle that drew it.
 
-Deliberately no schema, no dedup, no pruning, no rate limit. The bar is prose in POLICY.md and in the tool description ("most cycles must write no lesson"), because a mechanical gate would have to decide when a conclusion is *allowed* to happen, and the moment worth writing is when the evidence is in context — not when a clock says so.
+Deliberately no schema, no dedup, no pruning, no rate limit. The bar is prose in PLAYBOOK.md and in the tool description ("most cycles must write no lesson"), because a mechanical gate would have to decide when a conclusion is *allowed* to happen, and the moment worth writing is when the evidence is in context — not when a clock says so.
 
 Injected by `buildLessons()` capped at 20 and rendered **in full**, never as headlines: a compressed lesson is a slogan. There is no `get_lessons` tool and nothing hints at lessons beyond the cap, because a truncated list the model cannot reach is exactly the fabrication trap `get_signals` was built to close. Only the operator can delete or edit a lesson; the agent can only append a correction.
 
@@ -382,8 +382,8 @@ src/
 │   └── index.ts          # Active broker, selected by BROKER env var
 ├── policy/
 │   ├── load.ts           # Seed + parse + validate + hot-reload watcher
-│   ├── render.ts         # POLICY.md template interpolation
-│   ├── mutate.ts         # Validated, hot-reloaded writes (update_policy)
+│   ├── render.ts         # PLAYBOOK.md template interpolation
+│   ├── mutate.ts         # Validated, hot-reloaded writes (update_trading_settings)
 │   └── types.ts          # Policy shape
 ├── state/
 │   └── state.ts          # Durable baselines (data/state.json)
@@ -410,11 +410,11 @@ src/
 ├── scripts/
 │   ├── replay.ts         # Detector/gate scenario harness (npm run replay)
 │   ├── journal.ts        # Journal inspection (npm run journal)
-│   └── verifyPolicyPrompt.ts  # POLICY.md render check (npm run verify:policy)
+│   └── verifyPolicyPrompt.ts  # PLAYBOOK.md render check (npm run verify:policy)
 └── daemon.ts             # Entry point — wires all three processes together
 
 policy/
-├── POLICY.md             # Trader system prompt template (shipped, hot-reloaded)
+├── PLAYBOOK.md             # Trader system prompt template (shipped, hot-reloaded)
 └── default.yaml          # Shipped default policy (read-only at runtime)
 ```
 
@@ -483,14 +483,14 @@ npm run build            # tsc → dist/
 npm start                # node dist/daemon.js
 npm run replay           # detector + gate scenario harness
 npm run journal          # inspect data/journal.jsonl
-npm run verify:policy    # render POLICY.md and check for unfilled placeholders
+npm run verify:policy    # render PLAYBOOK.md and check for unfilled placeholders
 ```
 
 ---
 
 ## Configuration
 
-Strategy and risk parameters are in `data/policy/policy.yaml` (seeded from `policy/default.yaml` on first run). The Trader's system prompt in `policy/POLICY.md` is re-rendered on every cycle — edit either file while the daemon is running and the next cycle picks up the change.
+Strategy and risk parameters are in `data/policy/policy.yaml` (seeded from `policy/default.yaml` on first run). The Trader's system prompt in `policy/PLAYBOOK.md` is re-rendered on every cycle — edit either file while the daemon is running and the next cycle picks up the change.
 
 Key parameters, with the shipped defaults:
 

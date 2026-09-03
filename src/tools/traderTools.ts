@@ -329,7 +329,20 @@ export async function executeTraderTool(
 
 // ── Implementations ───────────────────────────────────────────────────────────
 
-async function toolGetMarketStatus(): Promise<string> {
+export interface MarketStatusSnapshot {
+  isOpen: boolean;
+  etTime: string;
+  utcTime: string;
+  isWeekend: boolean;
+  minutesUntilChange: number | null;
+  changeLabel: string;
+}
+
+/**
+ * Shared by the `get_market_status` tool and the cycle-context header, so the two never
+ * derive market-open/close timing differently.
+ */
+export async function getMarketStatusSnapshot(): Promise<MarketStatusSnapshot> {
   const isOpen = await broker.isMarketOpen();
   const { day, hours, minutes, timeStr } = etNow();
   const isWeekend = day === 0 || day === 6;
@@ -347,14 +360,18 @@ async function toolGetMarketStatus(): Promise<string> {
     changeLabel = 'market open';
   }
 
-  return JSON.stringify({
+  return {
     isOpen,
     etTime: timeStr,
     utcTime: new Date().toISOString(),
     isWeekend,
     minutesUntilChange,
     changeLabel,
-  });
+  };
+}
+
+async function toolGetMarketStatus(): Promise<string> {
+  return JSON.stringify(await getMarketStatusSnapshot());
 }
 
 async function toolGetMacroRegime(): Promise<string> {
@@ -370,7 +387,7 @@ async function toolGetMacroRegime(): Promise<string> {
  * `entry_signal` event — which fires on an EMA cross, not on being asked about. A
  * discretionary scan ("enter the best setup on the watchlist") therefore had no way to
  * obtain them, and the rationale it wrote named signals it had never seen, using the
- * five names POLICY.md lists.
+ * five names PLAYBOOK.md lists.
  *
  * Same bar request and same `minBars` floor as `collectAndCompute`, so a scan and an
  * event cannot report different scores for the same symbol at the same moment.
@@ -453,7 +470,7 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
  * that the numbers were computed a few seconds ago by `collectAndCompute` and then thrown
  * away. `get_signals` had to re-fetch bars per symbol to rebuild them, so a discretionary
  * pass over eighteen names spent eighteen of thirty rounds rebuilding a table that had been
- * in memory — which is why POLICY.md's "assess watchlist candidates" step was unfollowable
+ * in memory — which is why PLAYBOOK.md's "assess watchlist candidates" step was unfollowable
  * as written, and an unfollowable instruction is a fabrication vector.
  *
  * Thin on purpose. The projection lives in `features/watchlistScan.ts`, beside the tick it
@@ -544,7 +561,24 @@ async function toolGetFundamentals(input: Record<string, unknown>): Promise<stri
   });
 }
 
-async function toolGetAccount(): Promise<string> {
+export interface AccountSnapshot {
+  equity: number;
+  cash: number;
+  buyingPower: number;
+  startOfDayEquity: number | null;
+  dailyPnL: number | null;
+  dailyPnLPct: number | null;
+  lossLimitPct: number;
+  lossLimitBreached: boolean | null;
+  lossLimitUnmeasurable?: string;
+  maxPositions: number;
+}
+
+/**
+ * Shared by the `get_account` tool and the cycle-context header, so the two never compute the
+ * daily-loss verdict two ways.
+ */
+export async function getAccountSnapshot(): Promise<AccountSnapshot> {
   const account = await broker.getAccountInfo();
   const risk = getPolicy().risk;
 
@@ -562,7 +596,7 @@ async function toolGetAccount(): Promise<string> {
   const daily = dailyLossStatus(account.equity, startEquity, risk.maxDailyLossPct);
   const measurable = daily.state !== 'unmeasurable';
 
-  return JSON.stringify({
+  return {
     equity: account.equity,
     cash: account.cash,
     buyingPower: account.buyingPower,
@@ -577,7 +611,11 @@ async function toolGetAccount(): Promise<string> {
       ? undefined
       : `${daily.reason}. Entries are blocked until the daily reset establishes a baseline; exits are unaffected.`,
     maxPositions: risk.maxPositions,
-  });
+  };
+}
+
+async function toolGetAccount(): Promise<string> {
+  return JSON.stringify(await getAccountSnapshot());
 }
 
 /**
@@ -1212,7 +1250,7 @@ async function toolGetBenchmark(input: Record<string, unknown>): Promise<string>
  * cycle rather than this one.
  *
  * Deliberately unguarded beyond "not empty": there is no rate limit and no dedup, so the
- * bar is prose in POLICY.md and the tool description. A mechanical gate here would have to
+ * bar is prose in PLAYBOOK.md and the tool description. A mechanical gate here would have to
  * decide when a conclusion is allowed to occur, and the moment a lesson is worth writing is
  * the moment its evidence is in context — not a time of day. If the file starts growing
  * every cycle that is visible in `data/LESSONS.md` on the first read.

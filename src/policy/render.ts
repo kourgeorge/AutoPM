@@ -1,7 +1,7 @@
 /**
  * L0 — the policy renderer.
  *
- * Interpolates policy.yaml values into policy/POLICY.md to produce the L3 system
+ * Interpolates policy.yaml values into policy/PLAYBOOK.md to produce the L3 system
  * prompt. The point is that a risk number appears in the prompt because it appears
  * in the policy — prose and machine config cannot drift.
  *
@@ -64,7 +64,7 @@ function resolve(policy: Policy, key: string): unknown {
 /**
  * Render a template against a policy.
  *
- * Trailing newlines are stripped: POLICY.md is a file and ends with one, the prompt
+ * Trailing newlines are stripped: PLAYBOOK.md is a file and ends with one, the prompt
  * it replaces does not.
  */
 export function renderTemplate(template: string, policy: Policy): string {
@@ -90,7 +90,7 @@ export function renderTemplate(template: string, policy: Policy): string {
   return rendered.replace(/\n+$/, '');
 }
 
-/** The L3 system prompt: policy/POLICY.md rendered against the active policy. */
+/** The L3 system prompt: policy/PLAYBOOK.md rendered against the active policy. */
 export function renderPolicy(policy: Policy = getPolicy()): string {
   return renderTemplate(fs.readFileSync(TEMPLATE_FILE, 'utf8'), policy);
 }

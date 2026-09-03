@@ -1015,7 +1015,7 @@ async function guardRules(): Promise<void> {
   // absurd equity baseline refuses every intent as `daily_loss_breached` two guards earlier, and
   // the judgement is pure anyway.
   //
-  // This is the number POLICY.md asked the model to apply to itself while nothing checked, and the
+  // This is the number PLAYBOOK.md asked the model to apply to itself while nothing checked, and the
   // one that had no guard at all — `maxPositions x positionSizePct` is 100% of equity by default, so
   // the untested case was the whole book in one name.
   const sizePol = getPolicy();
@@ -1150,7 +1150,7 @@ async function guardRules(): Promise<void> {
   // intent as `daily_loss_breached` two guards earlier. What matters is the decision, and
   // the decision is pure.
   //
-  // POLICY.md asked the model to apply this threshold to itself for as long as it existed
+  // PLAYBOOK.md asked the model to apply this threshold to itself for as long as it existed
   // and nothing checked. These are the checks.
   const pol = getPolicy();
   const gateMin = pol.strategy.compositeMin;
@@ -1293,7 +1293,7 @@ function watchlistScanProjection(): void {
       && msft.tally.bullish === srcMsft.signals.filter((s) => s.score > 0.1).length,
     JSON.stringify(msft?.tally));
 
-  // The number POLICY.md thresholds on, checked against the tick's own scores rather than
+  // The number PLAYBOOK.md thresholds on, checked against the tick's own scores rather than
   // against a constant: a hard-coded +0.42 would keep passing while the mean was being taken
   // over the wrong array.
   const meanOfSrc = srcMsft.signals.reduce((sum, s) => sum + s.score, 0) / srcMsft.signals.length;

@@ -33,11 +33,11 @@ import { DATA_DIR } from '../core/paths';
 
 /**
  * Read-only defaults shipped with the project source. These stay under `policy/` in the repo
- * whatever DATA_DIR is set to: they are tracked source, not per-broker record, and POLICY.md
+ * whatever DATA_DIR is set to: they are tracked source, not per-broker record, and PLAYBOOK.md
  * is the system prompt itself.
  */
 export const DEFAULT_POLICY_FILE = path.join(process.cwd(), 'policy', 'default.yaml');
-export const TEMPLATE_FILE = path.join(process.cwd(), 'policy', 'POLICY.md');
+export const TEMPLATE_FILE = path.join(process.cwd(), 'policy', 'PLAYBOOK.md');
 
 /** Live (user-managed) policy and its history — inside the gitignored data directory. */
 export const DATA_POLICY_DIR = path.join(DATA_DIR, 'policy');
@@ -80,7 +80,7 @@ function block(root: Record<string, unknown>, name: string, errs: Errors): Recor
 const DEFAULT_CONFIRM_TICKS = 2;
 
 /**
- * Fallback for `strategy.compositeMin` when the key is absent, and the value POLICY.md stated as
+ * Fallback for `strategy.compositeMin` when the key is absent, and the value PLAYBOOK.md stated as
  * prose for the whole time nothing enforced it.
  *
  * Optional for the same reason as `confirmTicks` above: every policy.yaml written before the
@@ -104,7 +104,7 @@ const DEFAULT_MAX_GROSS_EXPOSURE_PCT_CEILING = 1.5;
 /**
  * Fallback for `risk.earningsBlackoutDays` when absent — same reason as `compositeMin` above:
  * every policy.yaml written before the guard existed is missing this key, and the first load
- * THROWS on a validation error. 5 is the number POLICY.md stated as prose for as long as this
+ * THROWS on a validation error. 5 is the number PLAYBOOK.md stated as prose for as long as this
  * was unenforced, so an operator who has never heard of the field inherits the rule they were
  * already meant to be following.
  */

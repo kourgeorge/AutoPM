@@ -297,7 +297,7 @@ export function signalTally(signals: SignalScore[]): SignalTally {
 /**
  * One-line summary: "composite +0.42 - 3/5 bullish, 1 neutral, 1 bearish"
  *
- * Composite first, because it is the number POLICY.md thresholds on and the counts are its
+ * Composite first, because it is the number PLAYBOOK.md thresholds on and the counts are its
  * context. No surrounding parentheses: callers wrap this themselves (the `entry_signal`
  * headline appends it in brackets), and a self-parenthesising summary nested inside those
  * produced `((composite ...))`.

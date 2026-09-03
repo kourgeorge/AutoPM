@@ -4,8 +4,9 @@
  * collectAll() + persisted baselines + indicators -> one TickData.
  *
  * TickData is ephemeral: computed each tick, passed to detectors, then discarded.
- * It is never stored and never served to the LLM — the LLM reads live numbers via
- * get_account and get_positions.
+ * It is never stored and never served to the LLM — the LLM reads live numbers from the
+ * MARKET & ACCOUNT / PORTFOLIO CONTEXT blocks pushed into the cycle context, with
+ * get_account and get_positions available as an on-demand fallback.
  *
  * Two invariants this file exists to hold:
  *  1. NO NEW MATH. Indicators come from strategy/indicators.ts verbatim; everything

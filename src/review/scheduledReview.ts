@@ -124,7 +124,7 @@ export function publishPortfolioReview(
     const shape = concentration(book, tick.account.equity ?? NaN, getCachedSectors(Object.keys(tick.positions)));
 
     // The one thing in a book that is unambiguously wrong rather than a matter of judgement:
-    // a position the machine is not watching a level for. Cheap to spot, and POLICY.md already
+    // a position the machine is not watching a level for. Cheap to spot, and PLAYBOOK.md already
     // requires it fixed or exited in the cycle it is noticed.
     const unstopped = Object.values(tick.positions)
       .filter((p) => p.stopLevel === null)
