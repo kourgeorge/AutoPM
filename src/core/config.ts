@@ -12,8 +12,7 @@ function requireEnv(key: string): string {
  *
  * A boolean an operator sets by hand can disagree with the endpoint the orders actually go
  * to, and the one thing that must never be wrong here is which account is live: the UI
- * paints it red, and `policy.approval.mode: live_only` arms the operator approval gate off
- * it. Both read this, so they cannot disagree.
+ * paints it red based on this, so it cannot disagree with where orders actually go.
  *
  * Alpaca announces it in the hostname. IBKR announces it only in the port — 7497 (TWS) and
  * 4002 (Gateway) are the paper listeners — so an unrecognised port is treated as LIVE. That
@@ -57,7 +56,7 @@ export const config = {
   /**
    * Which account the active broker's orders reach. Derived from the endpoint above by
    * `resolveVenue` — see the note there. `daemon.ts` pushes it to the UI banner and
-   * `core/approvals.ts` arms the approval gate off it.
+   * `core/automation.ts` arms the automation gate off it.
    */
   venue: resolveVenue(BROKER, ALPACA_BASE_URL, IBKR_PORT),
 

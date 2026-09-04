@@ -34,6 +34,7 @@
 import type { Policy } from '../policy/types';
 import { getState, updateState } from '../state/state';
 import type { TickData } from './compute';
+import { appendEventLog } from './eventLog';
 
 export type EventKind =
   | 'stop_breach'
@@ -413,6 +414,7 @@ function enqueue(event: TriggerEvent, tick?: TickState): void {
 
   pending.set(event.id, event);
   live.set(event.cooldownKey, event);
+  appendEventLog(event);
 
   // Bound the queue. Oldest first, so a neglected backlog cannot crowd out the event
   // that just fired.

@@ -14,16 +14,22 @@
 import * as blessed from 'blessed';
 import { InputEditor } from './inputEditor';
 import {
+  isOpenProposal,
+  needsAttention,
   POS_ROW_COLS,
+  renderEventsPanel,
   renderSidebar,
   renderStatus,
   renderStrip,
   type Cycle,
   type DashboardModel,
   type Environment,
+  type EventRow,
   type Lane,
+  type ProposalRow,
   type TickSnapshot,
 } from './dashboard';
+import { decideProposal } from '../core/proposals';
 import { escapeTags, plainWidth, wrapPlain } from './format';
 import { makeGlyphs, type Glyphs } from './glyphs';
 
@@ -162,32 +168,12 @@ function clipPlain(s: string, width: number): string {
 // ── UI singleton ─────────────────────────────────────────────────────────────
 
 /**
- * What the approval gate hands over, structurally.
- *
- * A copy of `ApprovalRequest` from `core/approvals.ts` rather than an import, for the reason
- * documented on `setTick`: that module imports `core/config`, which THROWS at import when
- * `AI_API_KEY` is absent, and this file is reached by probe scripts. Structural typing keeps
- * the compile-time check without adding the edge — `daemon.ts` assigns `askApproval` into the
- * `ApprovalChannel` slot, so a drift in the real shape fails there.
+ * `approve <id>` / `reject <id> [reason...]`, case-insensitive. Matched against the raw input
+ * line BEFORE anything reaches the concierge — same layer the old bare y/n used to intercept at
+ * — so a decision never passes through a language model. Explicit ids rather than a bare y/n:
+ * multiple proposals can be open at once, and a bare y/n has nothing to disambiguate against.
  */
-export interface ApprovalPrompt {
-  action: 'entry' | 'exit';
-  symbol: string;
-  venue: 'paper' | 'live';
-  qty: number;
-  price: number | null;
-  notional: number | null;
-  stopLoss: number | null;
-  takeProfit: number | null;
-  pnl: number | null;
-  reason: string;
-  /** Absolute epoch ms. The same number the gate is timing against. */
-  deadline: number;
-}
-
-/** Exact, case-insensitive, trimmed. A near-miss must reach the concierge, not the venue. */
-const APPROVE_WORDS = /^(y|yes|approve|ok|go)$/i;
-const DENY_WORDS = /^(n|no|deny|reject|cancel|stop)$/i;
+const DECIDE_COMMAND = /^(approve|reject)\s+(\S+)(?:\s+([\s\S]*))?$/i;
 
 class TerminalUI {
   private screen: blessed.Widgets.Screen;
@@ -196,6 +182,7 @@ class TerminalUI {
   private statusBar: blessed.Widgets.BoxElement;
   private sidebar: blessed.Widgets.BoxElement;
   private strip: blessed.Widgets.BoxElement;
+  private eventsBox: blessed.Widgets.BoxElement;
   private onSubmit?: (line: string) => void;
 
   // ── Dashboard state ──
@@ -205,19 +192,19 @@ class TerminalUI {
   private glyphs: Glyphs;
   private mode: PanelMode = 'off';
   private panelEnabled = true;
+  /**
+   * Orthogonal to `mode`: `mode` is decided by terminal size in `layout()` and answers how much
+   * room the auto-sized live panel gets; `mainView` is a manual F3 toggle and answers what
+   * occupies the log's own rect. Keeping them separate means the sidebar's live P&L glance stays
+   * up while the inbox is open.
+   */
+  private mainView: 'log' | 'events' = 'log';
+  private events: EventRow[] = [];
+  private eventLog: EventRow[] = [];
+  private proposals: ProposalRow[] = [];
   private tick: TickSnapshot | null = null;
   private env: Environment = { broker: '', venue: '', provider: '', model: '' };
   private traderLane: Lane = { state: 'starting' };
-  /**
-   * The one approval on screen, if any. `prevLane` is captured on entry and restored on
-   * settle: this is the only code that knows the trader is stopped at the gate, so it is also
-   * the only code that can put the lane back to whatever it was saying before.
-   */
-  private approval: {
-    req: ApprovalPrompt;
-    resolve: (answer: 'approve' | 'deny') => void;
-    prevLane: Lane;
-  } | null = null;
   private conciergeLane: Lane = { state: 'idle' };
   private cycleInfo: Cycle = { n: 0 };
   /** Advances once a second. Drives the spinner and the session blink — nothing else. */
@@ -279,7 +266,7 @@ class TerminalUI {
       tags: true,
       // One row high: a wrap here would not spill, it would silently CUT the line short.
       wrap: false,
-      content: ' {bold}AutoTrade{/}  |  Enter send  |  ←/→ ⌥←/→ edit  |  ↑/↓ history  |  Esc clear  |  PgUp/PgDn scroll  |  Ctrl+C quit',
+      content: ' {bold}AutoTrade{/}  |  Enter send  |  ←/→ ⌥←/→ edit  |  ↑/↓ history  |  Esc clear  |  F3 inbox  |  PgUp/PgDn scroll  |  Ctrl+C quit',
       padding: { left: 1 },
     });
 
@@ -337,6 +324,24 @@ class TerminalUI {
       hidden: true,
     });
 
+    // ── Events inbox ─────────────────────────────────────────────────────
+    // Takes `logBox`'s exact rect when `mainView === 'events'` — `layout()` copies the geometry
+    // every call, this is just built once like `sidebar`/`strip` above.
+    this.eventsBox = blessed.box({
+      parent: this.screen,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 4,
+      border: { type: 'line' },
+      style: { border: { fg: 'blue' } },
+      label: ' {bold}{blue-fg}AutoTrade{/} {gray-fg}— Inbox{/} ',
+      tags: true,
+      // `renderEventsPanel` measures its own widths and clips to the box height itself.
+      wrap: false,
+      hidden: true,
+    });
+
     // ── Key bindings ─────────────────────────────────────────────────────────
     this.screen.key(['C-c'], () => process.exit(0));
 
@@ -351,6 +356,12 @@ class TerminalUI {
       this.paint();
     });
 
+    this.screen.key('f3', () => {
+      this.mainView = this.mainView === 'events' ? 'log' : 'events';
+      this.layout();
+      this.paint();
+    });
+
     // Blessed renders once with the old geometry before emitting this, so the relayout costs
     // at most one stale frame — and never a wrong-sized panel that persists.
     this.screen.on('resize', () => {
@@ -360,17 +371,12 @@ class TerminalUI {
 
     this.input.onSubmit((line) => {
       this.appendUserMessage(line);
-      // The approval answer is matched HERE, before anything reaches the concierge: the
-      // decision to send an order to a live venue must not pass through a language model, and
-      // the concierge has no approval tool precisely so it cannot answer on the operator's
-      // behalf. Anything that is not an exact yes or no falls through to the conversation as
-      // it always did, with a reminder that the gate is still holding.
-      if (this.approval) {
-        const answer = line.trim();
-        if (APPROVE_WORDS.test(answer)) return this.settleApproval('approve');
-        if (DENY_WORDS.test(answer)) return this.settleApproval('deny');
-        this.log('WARN', `Still waiting on y/n for ${this.approval.req.action} ${this.approval.req.symbol} — that message goes to the concierge, not to the gate.`);
-      }
+      // Matched HERE, before anything reaches the concierge: the decision to act on a proposal
+      // must not pass through a language model, and the concierge has no decide tool precisely
+      // so it cannot answer on the operator's behalf. Anything that doesn't match the command
+      // syntax falls through to the conversation exactly as it always did.
+      const match = DECIDE_COMMAND.exec(line.trim());
+      if (match) return this.decide(match[1].toLowerCase() as 'approve' | 'reject', match[2], match[3]);
       this.onSubmit?.(line);
     });
 
@@ -388,7 +394,6 @@ class TerminalUI {
     // imports this module is not held open by one more handle.
     this.ticker = setInterval(() => {
       this.frame++;
-      this.expireApproval();
       this.paint();
     }, 1000);
     this.ticker.unref();
@@ -488,54 +493,6 @@ class TerminalUI {
   }
 
 
-  /**
-   * Put an order in front of the operator and wait for `y` or `n`.
-   *
-   * Registered as the gate's channel by `daemon.ts` — nothing here decides WHETHER to ask;
-   * `core/approvals.ts` owns that, and this is only how a human is reached.
-   *
-   * The promise may be ABANDONED: the gate races it against its own deadline timer, so a
-   * lapse settles over there and this one is simply never awaited again. That is why
-   * `expireApproval` clears the slot without resolving — see the note on it.
-   */
-  askApproval(req: ApprovalPrompt): Promise<'approve' | 'deny'> {
-    // Defensive, and a refusal rather than a queue: the gate already serialises requests, so
-    // reaching here means two prompts would share one screen and one `y`.
-    if (this.approval) {
-      this.log('WARN', `Second approval for ${req.action} ${req.symbol} refused — ${this.approval.req.symbol} still on screen.`);
-      return Promise.resolve('deny');
-    }
-
-    const f = (n: number | null, prefix = '$') => (n == null ? '—' : `${prefix}${n.toFixed(2)}`);
-    const verb = req.action === 'entry' ? 'BUY' : 'SELL';
-    const mins = Math.max(1, Math.round((req.deadline - Date.now()) / 60_000));
-
-    const lines = [
-      `${verb} ${req.qty} ${req.symbol} on the ${req.venue.toUpperCase()} account`,
-      `  price ${f(req.price)}   notional ${f(req.notional)}`,
-      req.action === 'entry'
-        ? `  stop ${f(req.stopLoss)}   target ${f(req.takeProfit)}`
-        : `  unrealized ${req.pnl == null ? '—' : `${req.pnl >= 0 ? '+' : '-'}$${Math.abs(req.pnl).toFixed(2)}`}`,
-      `  reason: ${req.reason}`,
-      `Type y to approve, n to deny. No answer within ~${mins} min and it is refused.`,
-    ];
-    this.prompt(lines.join('\n'), req.venue === 'live');
-
-    // The bell is the point of the whole feature on a live account: the operator may not be
-    // looking at this window, and the alternative to a noise is a silent ten-minute timeout.
-    process.stdout.write('\x07');
-
-    return new Promise((resolve) => {
-      this.approval = { req, resolve, prevLane: this.traderLane };
-      this.traderLane = {
-        state: 'awaiting',
-        until: req.deadline,
-        detail: `${req.action} ${req.symbol}`,
-      };
-      this.paint();
-    });
-  }
-
   // ── Dashboard inputs ─────────────────────────────────────────────────────
 
   /**
@@ -548,6 +505,19 @@ class TerminalUI {
    */
   setTick(tick: TickSnapshot): void {
     this.tick = tick;
+    this.paint();
+  }
+
+  /** Pushed every tick from `daemon.ts`, next to `setTick` — see that call site for why. */
+  setEvents(events: EventRow[], eventLog: EventRow[]): void {
+    this.events = events;
+    this.eventLog = eventLog;
+    this.paint();
+  }
+
+  /** Pushed every tick from `daemon.ts`, next to `setEvents` — see `core/proposals.ts`. */
+  setProposals(proposals: ProposalRow[]): void {
+    this.proposals = proposals;
     this.paint();
   }
 
@@ -587,58 +557,18 @@ class TerminalUI {
   // ── Private ──────────────────────────────────────────────────────────────
 
   /**
-   * The approval block. `alert`'s shape — blank row, dated first line, continuations padded
-   * into the same column — with its own marker so it cannot be skimmed as one more warning,
-   * and red on a live venue because that is the only detail that changes what it costs to
-   * get this wrong.
+   * Resolve one `approve <id>` / `reject <id> [reason]` command against the live proposal
+   * store. A synchronous state mutation, not a promise settle — creation and decision are
+   * fully decoupled, and `strategy/proposalExecutor.ts` picks up an `approved` proposal on its
+   * own next tick, independent of whatever this process does next.
    */
-  private prompt(msg: string, live: boolean): void {
-    const ts = stamp();
-    const marker = '▶ APPROVE?';
-    const color = live ? COLORS.error : COLORS.warn;
-    const gutter = ' '.repeat(ts.length + 2 + marker.length + 2);
-
-    this.emit('');
-    msg.split('\n').forEach((line, i) => {
-      const prefix = i === 0
-        ? `{bold}${color}${ts}{/}  {bold}${color}${marker}{/}  `
-        : gutter;
-      this.emit(`${prefix}{bold}${color}${this.escape(line)}{/}`);
-    });
-    this.emit('');
-    this.screen.render();
-  }
-
-  /** Hand the answer back and put the screen back the way it was. */
-  private settleApproval(answer: 'approve' | 'deny'): void {
-    const pending = this.approval;
-    if (!pending) return;
-    // Cleared BEFORE resolving, so a handler that immediately asks for another approval finds
-    // an empty slot rather than a busy one.
-    this.approval = null;
-    this.traderLane = pending.prevLane;
-    this.log(answer === 'approve' ? 'TRADE' : 'WARN',
-      `Operator ${answer === 'approve' ? 'approved' : 'denied'} ${pending.req.action} ${pending.req.symbol}.`);
-    pending.resolve(answer);
-    this.paint();
-  }
-
-  /**
-   * Drop a prompt whose window has closed. Called from the 1s repaint, which is already
-   * counting the same `deadline` down on screen.
-   *
-   * Deliberately does NOT resolve the promise. The gate settles a lapse on its own timer, by
-   * `policy.approval.onTimeout` — and with `onTimeout: allow` a `deny` from here landing a
-   * moment first would silently overturn the operator's configured choice. Clearing the slot
-   * is this side's whole job: it stops a `y` typed at the dead prompt from being read as an
-   * answer to it.
-   */
-  private expireApproval(): void {
-    const pending = this.approval;
-    if (!pending || Date.now() < pending.req.deadline) return;
-    this.approval = null;
-    this.traderLane = pending.prevLane;
-    this.log('WARN', `Approval window closed for ${pending.req.action} ${pending.req.symbol} — settled by policy, not by you.`);
+  private decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
+    try {
+      const p = decideProposal(id, decision, 'human', reason?.trim() || undefined);
+      this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
+    } catch (err: any) {
+      this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
+    }
   }
 
   /**
@@ -803,6 +733,20 @@ class TerminalUI {
       this.logBox.bottom = chromeRows;
     }
 
+    // The inbox always takes the exact rect the log just claimed above — F3 swaps only which of
+    // the two widgets is visible, never their geometry.
+    this.eventsBox.top = this.logBox.top;
+    this.eventsBox.right = this.logBox.right;
+    this.eventsBox.bottom = this.logBox.bottom;
+    this.eventsBox.left = this.logBox.left;
+    if (this.mainView === 'events') {
+      this.logBox.hide();
+      this.eventsBox.show();
+    } else {
+      this.eventsBox.hide();
+      this.logBox.show();
+    }
+
     // Reallocate rather than trusting a diff render: the widget that just shrank leaves its old
     // characters in the screen buffer, and a stale border column is exactly the "garbled on
     // resize" symptom this layout exists to avoid.
@@ -836,12 +780,19 @@ class TerminalUI {
         this.strip.setContent(renderStrip(m, this.innerWidth(this.strip)).join('\n'));
       }
 
+      if (this.mainView === 'events') {
+        const width = this.innerWidth(this.eventsBox);
+        const height = this.innerHeight(this.eventsBox);
+        this.eventsBox.setContent(renderEventsPanel(m, width, height).join('\n'));
+      }
+
       this.statusBar.setContent(renderStatus(m, this.innerWidth(this.statusBar), this.panelHint()));
       this.screen.render();
     } catch (err: any) {
       const msg = err?.message ?? String(err);
       this.sidebar.setContent(`{red-fg}panel render failed{/}`);
       this.strip.setContent(`{red-fg}panel render failed{/}`);
+      this.eventsBox.setContent(`{red-fg}panel render failed{/}`);
       // Once only: this runs on a 1s timer, and a per-second error log would bury the trading
       // record it shares a file with.
       if (!this.paintFailed) {
@@ -866,12 +817,22 @@ class TerminalUI {
       now: Date.now(),
       frame: this.frame,
       glyphs: this.glyphs,
+      events: this.events,
+      eventLog: this.eventLog,
+      proposals: this.proposals,
     };
   }
 
   private panelHint(): string {
-    if (!this.panelEnabled) return 'F2 panel on';
-    return this.mode === 'off' ? 'F2 panel (needs a bigger window)' : 'F2 panel off';
+    const f2 = this.panelEnabled
+      ? (this.mode === 'off' ? 'F2 panel (needs a bigger window)' : 'F2 panel off')
+      : 'F2 panel on';
+    // Proposals lead the count: a proposal is the one thing on this panel that ONLY a human can
+    // move, so it is the more urgent reason to open the inbox.
+    const openProposals = this.proposals.filter(isOpenProposal).length;
+    const unacked = openProposals + this.events.filter(needsAttention).length;
+    const f3 = this.mainView === 'events' ? 'F3 log' : unacked > 0 ? `F3 inbox (${unacked}!)` : 'F3 inbox';
+    return `${f2} ${this.glyphs.sep} ${f3}`;
   }
 
   /** Columns inside the borders and padding. `iwidth` is what the frame costs. */

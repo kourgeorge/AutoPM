@@ -75,6 +75,40 @@ export interface TickSnapshot {
   policyVersion: number;
 }
 
+/**
+ * Structural subset of `eventBus.ts`'s `TriggerEvent` — same reasoning as `TickSnapshot` above:
+ * this file must not import `eventBus.ts` (it pulls in `policy/types` and `state/state`), so the
+ * shape is copied rather than imported, and `getPendingEvents()`'s real return value satisfies it
+ * directly.
+ */
+export interface EventRow {
+  id: string;
+  kind: string;
+  severity: 'info' | 'warn' | 'urgent' | 'critical';
+  symbol: string | null;
+  firedAt: string;
+  headline: string;
+  suggestedAction: string | null;
+  ackedAt: string | null;
+  ackDisposition: string | null;
+  wakeCount: number;
+}
+
+/**
+ * Structural subset of `core/proposals.ts`'s `Proposal` — same reasoning as `EventRow` above:
+ * this file must stay import-free of `state/state.ts`, so the shape is copied, and
+ * `getOpenProposals()`'s real return value satisfies it directly.
+ */
+export interface ProposalRow {
+  id: string;
+  kind: string;
+  symbol: string;
+  status: string;
+  reason: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
 export type LaneState = 'starting' | 'idle' | 'thinking' | 'sleeping' | 'awaiting' | 'error';
 
 /**
@@ -123,6 +157,12 @@ export interface DashboardModel {
   /** Monotonic repaint counter; drives the spinner and the heartbeat blink. */
   frame: number;
   glyphs: Glyphs;
+  /** Open events from the live registry — see `needsAttention`/`sortedEvents` below. */
+  events: EventRow[];
+  /** Tail of the durable event log, oldest-first — see `src/features/eventLog.ts`. */
+  eventLog: EventRow[];
+  /** Every proposal currently in the store — see `src/core/proposals.ts`'s `getAllProposals()`. */
+  proposals: ProposalRow[];
 }
 
 // ── Small internal helpers ────────────────────────────────────────────────────
@@ -312,6 +352,39 @@ function sortedWatchlist(tick: TickSnapshot): WatchEntry[] {
         (b.composite ?? -Infinity) - (a.composite ?? -Infinity) ||
         a.row.symbol.localeCompare(b.row.symbol),
     );
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+
+/**
+ * An event a human should look at: severity warn or critical, and no ack recorded yet.
+ *
+ * Derived, not stored — `eventBus.ts` owns `severity` and `ackedAt`; this just reads both. Urgent
+ * is deliberately excluded: it wakes the TRADER (`wakesTrader()` in `eventBus.ts`), not the
+ * human, and counting it here would put a badge in front of the operator for something already
+ * being handled.
+ */
+export function needsAttention(e: EventRow): boolean {
+  return (e.severity === 'warn' || e.severity === 'critical') && e.ackedAt == null;
+}
+
+/**
+ * Bucketed newest-first: unacked-critical, then unacked-warn, then everything else (acked, info,
+ * and urgent-but-unacked — urgent is the trader's problem, not sorted to the top of a human's
+ * list). Within a bucket, `firedAt` descending, so the panel reads like a feed.
+ */
+export function sortedEvents(events: EventRow[]): EventRow[] {
+  const bucket = (e: EventRow): number => {
+    if (e.severity === 'critical' && e.ackedAt == null) return 0;
+    if (e.severity === 'warn' && e.ackedAt == null) return 1;
+    return 2;
+  };
+  return [...events].sort((a, b) => {
+    const ba = bucket(a);
+    const bb = bucket(b);
+    if (ba !== bb) return ba - bb;
+    return Date.parse(b.firedAt) - Date.parse(a.firedAt);
+  });
 }
 
 // ── Rows ──────────────────────────────────────────────────────────────────────
@@ -681,6 +754,258 @@ function listBody<T>(
   const hidden = items.length - shown.length;
   shown.push(`{gray-fg}${escapeCell(f.fit(`+${hidden} more`, width))}{/}`);
   return shown;
+}
+
+// ── Events panel ──────────────────────────────────────────────────────────────
+
+const EVENT_SYM_W = 6;
+const EVENT_KIND_W = 12;
+const EVENT_AGE_W = 9;
+const EVENT_ACTION_W = 9;
+/** Floor on the headline column so it never collapses to nothing before the trailing columns do. */
+const EVENT_HEADLINE_MIN = 10;
+
+function severityGlyph(g: Glyphs, sev: EventRow['severity']): string {
+  switch (sev) {
+    case 'critical':
+      return g.sevCritical;
+    case 'urgent':
+      return g.sevUrgent;
+    case 'warn':
+      return g.sevWarn;
+    default:
+      return g.sevInfo;
+  }
+}
+
+/** Full severity colour while open; dimmed once acked — same rule `positionRow` uses for a dead feed. */
+function severityColor(e: EventRow): string {
+  if (e.ackedAt != null) return 'gray-fg';
+  switch (e.severity) {
+    case 'critical':
+      return 'red-fg';
+    case 'urgent':
+      return 'magenta-fg';
+    case 'warn':
+      return 'yellow-fg';
+    default:
+      return 'gray-fg';
+  }
+}
+
+/**
+ * Decide, most-important-first, which optional trailing columns fit next to the headline at this
+ * width. The headline is the only column with no width of its own — it takes whatever the
+ * trailing columns leave — so this has to run before either `eventRow` or the legend can lay
+ * anything out, and both call it so a label is never positioned over a column its own row already
+ * dropped. Least important last, so it is the first dropped as the panel narrows: suggested
+ * action, then age, then kind, keeping severity+headline+symbol. No ack column: OPEN's rows are
+ * unacked by construction (`needsAttention`) and RECENT ACTIVITY's ack state goes stale across a
+ * restart (see `eventLog.ts`), so neither section has a truthful answer to show there.
+ */
+function planEventColumns(
+  width: number,
+): { headlineW: number; sym: boolean; kind: boolean; age: boolean; action: boolean } {
+  const candidates: Array<{ key: 'sym' | 'kind' | 'age' | 'action'; w: number }> = [
+    { key: 'sym', w: EVENT_SYM_W },
+    { key: 'kind', w: EVENT_KIND_W },
+    { key: 'age', w: EVENT_AGE_W },
+    { key: 'action', w: EVENT_ACTION_W },
+  ];
+  const show = { sym: false, kind: false, age: false, action: false };
+  let trailingW = 0;
+  for (const c of candidates) {
+    const next = trailingW + 1 + c.w;
+    if (EVENT_HEADLINE_MIN + next > width) break;
+    show[c.key] = true;
+    trailingW = next;
+  }
+  return { headlineW: Math.max(EVENT_HEADLINE_MIN, width - trailingW), ...show };
+}
+
+/** Legend for `sectionHeader`, laid out on the exact same plan `eventRow` uses at this width. */
+function eventLegend(width: number): Col[] {
+  const plan = planEventColumns(width);
+  const legend: Col[] = [{ text: '', w: plan.headlineW }];
+  if (plan.sym) legend.push({ text: 'sym', w: EVENT_SYM_W, right: true });
+  if (plan.kind) legend.push({ text: 'kind', w: EVENT_KIND_W, right: true });
+  if (plan.age) legend.push({ text: 'age', w: EVENT_AGE_W, right: true });
+  if (plan.action) legend.push({ text: 'action', w: EVENT_ACTION_W, right: true });
+  return legend;
+}
+
+function eventRow(m: DashboardModel, f: Fmt, e: EventRow, width: number): string {
+  const g = m.glyphs;
+  const plan = planEventColumns(width);
+  const sev = severityGlyph(g, e.severity);
+  const color = severityColor(e);
+
+  const cols: Col[] = [{ text: `${sev} ${e.headline}`, w: plan.headlineW, color }];
+  if (plan.sym) cols.push({ text: e.symbol ?? g.dash, w: EVENT_SYM_W, color: 'bold' });
+  if (plan.kind) cols.push({ text: e.kind.replace(/_/g, ' '), w: EVENT_KIND_W, color: 'gray-fg' });
+  if (plan.age) {
+    cols.push({ text: `${f.ageOf(e.firedAt, m.now)} ago`, w: EVENT_AGE_W, right: true, color: 'gray-fg' });
+  }
+  if (plan.action) {
+    cols.push({ text: e.suggestedAction ?? g.dash, w: EVENT_ACTION_W, right: true, color: 'cyan-fg' });
+  }
+  return packRow(f, width, cols);
+}
+
+// ── Proposals ─────────────────────────────────────────────────────────────────
+
+const PROPOSAL_KIND_W = 12;
+const PROPOSAL_SYM_W = 6;
+const PROPOSAL_AGE_W = 9;
+/** Floor on the headline column, same reasoning as `EVENT_HEADLINE_MIN`. */
+const PROPOSAL_HEADLINE_MIN = 10;
+
+/** Only `pending`/`approved` are still waiting on anything — everything else is history. */
+export function isOpenProposal(p: ProposalRow): boolean {
+  return p.status === 'pending' || p.status === 'approved';
+}
+
+/** Soonest deadline first — that is the one an operator is about to miss. */
+function sortedProposals(proposals: ProposalRow[]): ProposalRow[] {
+  return [...proposals].sort((a, b) => a.expiresAt - b.expiresAt);
+}
+
+function proposalColor(status: string): string {
+  switch (status) {
+    case 'pending':
+      return 'yellow-fg';
+    case 'approved':
+      return 'cyan-fg';
+    case 'executed':
+      return 'green-fg';
+    case 'rejected':
+    case 'failed':
+      return 'red-fg';
+    default:
+      return 'gray-fg';
+  }
+}
+
+/** Same reasoning as `planEventColumns`: the headline has no width of its own, so this runs first. */
+function planProposalColumns(width: number): { headlineW: number; sym: boolean; kind: boolean; age: boolean } {
+  const candidates: Array<{ key: 'sym' | 'kind' | 'age'; w: number }> = [
+    { key: 'sym', w: PROPOSAL_SYM_W },
+    { key: 'kind', w: PROPOSAL_KIND_W },
+    { key: 'age', w: PROPOSAL_AGE_W },
+  ];
+  const show = { sym: false, kind: false, age: false };
+  let trailingW = 0;
+  for (const c of candidates) {
+    const next = trailingW + 1 + c.w;
+    if (PROPOSAL_HEADLINE_MIN + next > width) break;
+    show[c.key] = true;
+    trailingW = next;
+  }
+  return { headlineW: Math.max(PROPOSAL_HEADLINE_MIN, width - trailingW), ...show };
+}
+
+function proposalLegend(width: number): Col[] {
+  const plan = planProposalColumns(width);
+  const legend: Col[] = [{ text: '', w: plan.headlineW }];
+  if (plan.sym) legend.push({ text: 'sym', w: PROPOSAL_SYM_W, right: true });
+  if (plan.kind) legend.push({ text: 'kind', w: PROPOSAL_KIND_W, right: true });
+  if (plan.age) legend.push({ text: 'expires', w: PROPOSAL_AGE_W, right: true });
+  return legend;
+}
+
+function proposalRow(m: DashboardModel, f: Fmt, p: ProposalRow, width: number): string {
+  const g = m.glyphs;
+  const plan = planProposalColumns(width);
+  const color = proposalColor(p.status);
+
+  const cols: Col[] = [{ text: `[${p.id}] ${p.status} — ${p.reason}`, w: plan.headlineW, color }];
+  if (plan.sym) cols.push({ text: p.symbol, w: PROPOSAL_SYM_W, color: 'bold' });
+  if (plan.kind) cols.push({ text: p.kind.replace(/_/g, ' '), w: PROPOSAL_KIND_W, color: 'gray-fg' });
+  if (plan.age) {
+    const remainingMs = p.expiresAt - m.now;
+    const text = !isOpenProposal(p) ? g.dash : remainingMs > 0 ? f.duration(remainingMs) : 'due';
+    cols.push({ text, w: PROPOSAL_AGE_W, right: true, color: 'gray-fg' });
+  }
+  return packRow(f, width, cols);
+}
+
+// ── Events panel ──────────────────────────────────────────────────────────────
+
+/**
+ * The full-height inbox panel. Three independent sections, not a merge:
+ *
+ * PROPOSALS is a human's own queue — the only thing on this panel that only a human can move —
+ * so it is drawn first and, unlike OPEN/RECENT ACTIVITY, costs nothing when empty: under the
+ * default policy every action is `auto` and this store stays empty, so the panel looks exactly
+ * like it did before proposals existed.
+ *
+ * OPEN is the live event registry (`getPendingEvents()`) filtered to `needsAttention` — an inbox
+ * holds what needs a human, not every event that happens to be pending. RECENT ACTIVITY is venue
+ * history, not condition noise: entries, exits, and stop/target moves, newest first, sourced from
+ * the decision journal (`journal.ts`'s `readDecisions` filtered by `isTradeAction`) rather than
+ * the event bus — a `data_stale`/`heartbeat`/`condition_resolved` never belongs here, only a
+ * decision that actually touched the venue does. Neither section shows an ack column: OPEN's rows
+ * are unacked by construction, and RECENT ACTIVITY's rows are facts, not conditions to acknowledge.
+ * Row budgeting mirrors `renderSidebar`'s positions/watchlist split.
+ */
+export function renderEventsPanel(m: DashboardModel, width: number, height: number): string[] {
+  if (width <= 0 || height <= 0) return [];
+  const f = makeFormat(m.glyphs);
+
+  const proposals = sortedProposals(m.proposals);
+  const lines: string[] = [];
+
+  if (proposals.length > 0 && height >= 2) {
+    const budget = Math.min(1 + proposals.length, height);
+    lines.push(sectionHeader(f, width, 'PROPOSALS', proposals.length, proposalLegend(width)));
+    lines.push(
+      ...listBody(f, width, budget - 1, proposals, (p, w) => proposalRow(m, f, p, w), 'nothing pending'),
+    );
+    if (height - lines.length >= 3) lines.push(' '.repeat(width));
+  }
+
+  const remaining = height - lines.length;
+  if (remaining <= 0) return lines.slice(0, height);
+
+  // An inbox holds what needs a human, not everything that happens to be live: `info` readings
+  // and `urgent` (the trader's wake, not the operator's) are real events but not an operator's
+  // problem, so OPEN excludes them via the same predicate that drives the status-bar badge.
+  const open = sortedEvents(m.events.filter(needsAttention));
+  const recent = [...m.eventLog].reverse();
+
+  const openNeed = 1 + Math.max(1, open.length);
+  const recentNeed = 1 + Math.max(1, recent.length);
+  const sep = remaining >= openNeed + recentNeed + 1 ? 1 : 0;
+  const listRows = remaining - sep;
+
+  let openBudget = openNeed;
+  let recentBudget = 0;
+  if (openNeed + recentNeed <= listRows) {
+    recentBudget = recentNeed;
+  } else if (listRows >= 4) {
+    recentBudget = Math.min(recentNeed, Math.max(2, Math.floor(listRows / 2)));
+    openBudget = Math.min(openNeed, listRows - recentBudget);
+  } else {
+    openBudget = Math.min(openNeed, listRows);
+  }
+
+  let drewOpen = false;
+  if (openBudget >= 2) {
+    lines.push(sectionHeader(f, width, 'OPEN', open.length, eventLegend(width)));
+    lines.push(
+      ...listBody(f, width, openBudget - 1, open, (e, w) => eventRow(m, f, e, w), 'nothing open'),
+    );
+    drewOpen = true;
+  }
+  if (recentBudget >= 2) {
+    if (sep && drewOpen) lines.push(' '.repeat(width));
+    lines.push(sectionHeader(f, width, 'RECENT ACTIVITY', recent.length, eventLegend(width)));
+    lines.push(
+      ...listBody(f, width, recentBudget - 1, recent, (e, w) => eventRow(m, f, e, w), 'no history yet'),
+    );
+  }
+
+  return lines.slice(0, height);
 }
 
 // ── Strip ─────────────────────────────────────────────────────────────────────

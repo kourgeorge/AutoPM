@@ -7,6 +7,8 @@ dist/
 data/state.json
 data/journal.jsonl
 data/fills.jsonl
+data/events.jsonl
+data/proposals.jsonl
 data/LESSONS.md
 data/sectors.json
 data/fundamentals.json

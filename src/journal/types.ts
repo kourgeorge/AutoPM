@@ -78,3 +78,15 @@ export interface DecisionRecord {
 
 /** Everything a caller must supply. `id` and `at` are stamped by `recordDecision`. */
 export type DecisionInput = Omit<DecisionRecord, 'id' | 'at'>;
+
+/**
+ * A decision that actually touched the venue — an order placed, or a resting stop/target
+ * moved. `hold` is also used for a plain event acknowledgement (`toolAckEvent`), which never
+ * sets `intendedStop`; only the annotation flow (`actAnnotation`) does, so that field is the
+ * discriminator between the two.
+ */
+export function isTradeAction(r: DecisionRecord): boolean {
+  if (r.kind === 'entry' || r.kind === 'exit') return r.executed;
+  if (r.kind === 'hold') return r.intendedStop != null;
+  return false;
+}

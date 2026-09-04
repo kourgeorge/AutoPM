@@ -107,34 +107,40 @@ export interface ImmutablePolicy {
   maxGrossExposurePctCeiling: number;
 }
 
-/** Which trader actions the operator approval gate covers. One key per ENFORCED action. */
-export interface ApprovalRequire {
+/** `auto` — the machine acts immediately. `manual` — a proposal is created and a human decides. */
+export type AutomationLevel = 'auto' | 'manual';
+
+/** One level per action kind the gate covers — see `ProposalKind` in `state/state.ts`. */
+export interface AutomationLevels {
   /** `execute_entry` — new capital committed. */
-  entry: boolean;
+  entry: AutomationLevel;
   /** `execute_exit` — closing a position. See the warning in `policy/default.yaml`. */
-  exit: boolean;
+  exit: AutomationLevel;
+  /** `annotate_position` tightening a resting stop. */
+  stopAdjust: AutomationLevel;
+  /** `annotate_position` lowering a resting take-profit. */
+  targetAdjust: AutomationLevel;
 }
 
-/** When the gate is armed. `live_only` reads `config.venue`, which is derived from the endpoint. */
-export type ApprovalMode = 'off' | 'live_only' | 'always';
-
-/** What an unanswered request settles as. */
-export type ApprovalTimeout = 'deny' | 'allow';
+/** What an unanswered proposal settles as. */
+export type AutomationTimeout = 'deny' | 'allow';
 
 /**
- * The operator approval gate.
+ * The automation gate: for each action kind, does the machine act or does a human decide via a
+ * proposal (`core/proposals.ts`)?
  *
- * Behaviour, so it lives here rather than in `core/config.ts`: an operator tunes it to
- * change how the system trades. It is deliberately absent from `TradingSettingsUpdate` in
- * `policy/mutate.ts` — the concierge's `update_trading_settings` must not be able to disarm
- * the gate on the operator's behalf. Only a human editing policy.yaml can.
+ * The level applies uniformly on paper and live — there is no venue-based exemption.
+ *
+ * Behaviour, so it lives here rather than in `core/config.ts`: an operator tunes it to change
+ * how the system trades. It is deliberately absent from `TradingSettingsUpdate` in
+ * `policy/mutate.ts` — the concierge's `update_trading_settings` must not be able to disarm the
+ * gate on the operator's behalf. Only a human editing policy.yaml can.
  */
-export interface ApprovalPolicy {
-  mode: ApprovalMode;
-  /** How long a request waits for an answer before settling as `onTimeout`. */
+export interface AutomationPolicy {
+  level: AutomationLevels;
+  /** How long a pending proposal waits for a human before settling as `onTimeout`. */
   timeoutMs: number;
-  onTimeout: ApprovalTimeout;
-  require: ApprovalRequire;
+  onTimeout: AutomationTimeout;
 }
 
 export interface Policy {
@@ -143,7 +149,7 @@ export interface Policy {
   strategy: StrategyPolicy;
   triggers: TriggerPolicy;
   regime: RegimePolicy;
-  approval: ApprovalPolicy;
+  automation: AutomationPolicy;
   immutable: ImmutablePolicy;
 }
 
