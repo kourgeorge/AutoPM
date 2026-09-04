@@ -73,7 +73,9 @@ export function recordDecision(input: DecisionInput): DecisionRecord {
  * An unparseable line is SKIPPED rather than thrown on: a process killed mid-append
  * leaves a torn final line, and that must cost the last record, not the file.
  */
-export function readDecisions(opts: { symbol?: string; limit?: number } = {}): DecisionRecord[] {
+export function readDecisions(
+  opts: { symbol?: string; limit?: number; filter?: (r: DecisionRecord) => boolean } = {},
+): DecisionRecord[] {
   let raw: string;
   try {
     raw = fs.readFileSync(JOURNAL_FILE, 'utf8');
@@ -93,9 +95,12 @@ export function readDecisions(opts: { symbol?: string; limit?: number } = {}): D
 
   // Canonical, so a `BTC/USD` decision is found by a caller holding the venue's `BTCUSD`.
   const wanted = opts.symbol ? canonicalSymbol(opts.symbol) : null;
-  const filtered = wanted
+  const bySymbol = wanted
     ? records.filter((r) => r.symbol != null && canonicalSymbol(r.symbol) === wanted)
     : records;
+
+  // Applied before the slice so the limit bounds matching records, not the last N raw lines.
+  const filtered = opts.filter ? bySymbol.filter(opts.filter) : bySymbol;
 
   return opts.limit != null ? filtered.slice(-opts.limit) : filtered;
 }

@@ -74,6 +74,39 @@ export interface PositionSnapshot {
   takeProfitOrderId?: string;
 }
 
+/** One per action kind the automation gate covers — see `policy/types.ts`'s `AutomationLevels`. */
+export type ProposalKind = 'entry' | 'exit' | 'stop_adjust' | 'target_adjust';
+
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'executed' | 'failed';
+
+/**
+ * A trade action the automation gate held back for a human to decide, instead of the AI
+ * acting directly. Created ONLY when `automationLevel(kind)` is `'manual'` — see
+ * `core/automation.ts`. Lives in `state.json` for current status; every transition is also
+ * appended to `data/proposals.jsonl` (`core/proposalLog.ts`) for history.
+ *
+ * `params` is intentionally untyped: its shape differs per `kind` (an entry proposal carries
+ * qty/price/stopLoss/takeProfit; a stop_adjust carries just the new stop level), and the
+ * executor (`strategy/proposalExecutor.ts`) re-derives fresh venue state at execution time
+ * rather than trusting these as anything but a human-readable record of what was asked.
+ */
+export interface Proposal {
+  id: string;
+  kind: ProposalKind;
+  symbol: string;
+  venue: 'paper' | 'live';
+  params: Record<string, unknown>;
+  reason: string;
+  eventId: string | null;
+  createdAt: number;
+  expiresAt: number;
+  status: ProposalStatus;
+  decidedBy: 'human' | 'timeout' | null;
+  decidedAt: number | null;
+  rejectReason: string | null;
+  result: { orderId?: string; qty?: number; error?: string } | null;
+}
+
 export interface SystemState {
   startOfDayEquity: number;
   lastResetDate: string;           // YYYY-MM-DD
@@ -115,6 +148,9 @@ export interface SystemState {
    * that portfolio-level drawdown is measured against must survive it.
    */
   equityPeak: number;
+
+  /** Every proposal not yet pruned. See `Proposal` above and `core/proposals.ts`. */
+  proposals: Record<string, Proposal>;
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -131,6 +167,7 @@ const DEFAULT_STATE: SystemState = {
   lastReviewedExitAt: '',
   lastPortfolioReviewAt: '',
   equityPeak: 0,
+  proposals: {},
 };
 
 /**

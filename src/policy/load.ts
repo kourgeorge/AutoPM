@@ -22,7 +22,7 @@ import path from 'path';
 import { load as parseYaml } from 'js-yaml';
 import { logger } from '../core/logger';
 import type {
-  ApprovalPolicy,
+  AutomationPolicy,
   Policy,
   PolicyLoadResult,
   PolicyMeta,
@@ -136,15 +136,6 @@ function num(
   if (opts.int && !Number.isInteger(v)) errs.push(`${where}.${key}: expected an integer, got ${v}`);
   if (opts.min !== undefined && v < opts.min) errs.push(`${where}.${key}: ${v} < minimum ${opts.min}`);
   if (opts.max !== undefined && v > opts.max) errs.push(`${where}.${key}: ${v} > maximum ${opts.max}`);
-  return v;
-}
-
-function bool(src: Record<string, unknown>, where: string, key: string, errs: Errors): boolean {
-  const v = src[key];
-  if (typeof v !== 'boolean') {
-    errs.push(`${where}.${key}: expected a boolean, got ${JSON.stringify(v)}`);
-    return false;
-  }
   return v;
 }
 
@@ -303,54 +294,53 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
   };
 
 
-  // ── Approval gate ───────────────────────────────────────────────────────────
+  // ── Automation gate ─────────────────────────────────────────────────────────
   //
   // Optional block, ARMED by default. Every policy.yaml written before the gate existed is
   // missing it, and the first load THROWS on a validation error (see the header) — so
-  // requiring the block would take down every daemon that upgraded. The fallback is
-  // `live_only` rather than `off`: an operator who has never heard of this feature should
-  // find their live account gated, not silently unguarded.
+  // requiring the block would take down every daemon that upgraded. The level defaults to
+  // manual entry/exit rather than auto: an operator who has never heard of this feature
+  // should find their account gated, not silently unguarded. The level applies uniformly on
+  // paper and live — there is no venue-based exemption.
   //
   // Stricter than `regime` above on purpose. There, a wrong type falls back to the default;
-  // here it is an error. `mode: live-only` (a hyphen) must not quietly become the default —
-  // on a safety gate, a typo that reads as "configured" is the whole failure mode.
-  const DEFAULT_APPROVAL: ApprovalPolicy = {
-    mode: 'live_only',
+  // here it is an error. Each `level.*` entry: `manual` misspelled must not silently read as
+  // `auto` — on a safety gate, a typo that reads as "configured" is the whole failure mode.
+  const DEFAULT_AUTOMATION: AutomationPolicy = {
+    level: { entry: 'manual', exit: 'manual', stopAdjust: 'auto', targetAdjust: 'auto' },
     timeoutMs: 600_000,
     onTimeout: 'deny',
-    require: { entry: true, exit: true },
   };
 
-  const a = isRecord(root.approval) ? root.approval : {};
-  if (root.approval !== undefined && !isRecord(root.approval)) {
-    errs.push('approval: present but not a mapping');
+  const a = isRecord(root.automation) ? root.automation : {};
+  if (root.automation !== undefined && !isRecord(root.automation)) {
+    errs.push('automation: present but not a mapping');
   }
-  const reqRaw = isRecord(a.require) ? a.require : {};
-  if (a.require !== undefined && !isRecord(a.require)) {
-    errs.push('approval.require: present but not a mapping');
+  const levelRaw = isRecord(a.level) ? a.level : {};
+  if (a.level !== undefined && !isRecord(a.level)) {
+    errs.push('automation.level: present but not a mapping');
   }
 
-  const optBool = (src: Record<string, unknown>, where: string, key: string, fallback: boolean): boolean => {
-    if (src[key] === undefined) return fallback;
-    return bool(src, where, key, errs);
-  };
+  const LEVELS = ['auto', 'manual'] as const;
+  const level = (key: keyof AutomationPolicy['level']) =>
+    enumOf(levelRaw, 'automation.level', key, LEVELS, errs) ?? DEFAULT_AUTOMATION.level[key];
 
-  const approval: ApprovalPolicy = {
-    mode: enumOf(a, 'approval', 'mode', ['off', 'live_only', 'always'] as const, errs)
-      ?? DEFAULT_APPROVAL.mode,
+  const automation: AutomationPolicy = {
+    level: {
+      entry: level('entry'),
+      exit: level('exit'),
+      stopAdjust: level('stopAdjust'),
+      targetAdjust: level('targetAdjust'),
+    },
     // Floors at 5s (an unanswerable window is a denial with extra steps) and caps at 24h.
     timeoutMs: a.timeoutMs === undefined
-      ? DEFAULT_APPROVAL.timeoutMs
-      : num(a, 'approval', 'timeoutMs', errs, { int: true, min: 5_000, max: 86_400_000 }),
-    onTimeout: enumOf(a, 'approval', 'onTimeout', ['deny', 'allow'] as const, errs)
-      ?? DEFAULT_APPROVAL.onTimeout,
-    require: {
-      entry: optBool(reqRaw, 'approval.require', 'entry', DEFAULT_APPROVAL.require.entry),
-      exit: optBool(reqRaw, 'approval.require', 'exit', DEFAULT_APPROVAL.require.exit),
-    },
+      ? DEFAULT_AUTOMATION.timeoutMs
+      : num(a, 'automation', 'timeoutMs', errs, { int: true, min: 5_000, max: 86_400_000 }),
+    onTimeout: enumOf(a, 'automation', 'onTimeout', ['deny', 'allow'] as const, errs)
+      ?? DEFAULT_AUTOMATION.onTimeout,
   };
 
-  return { policy: { version, risk, strategy, triggers, regime, approval, immutable }, errors: errs };
+  return { policy: { version, risk, strategy, triggers, regime, automation, immutable }, errors: errs };
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────────
@@ -416,6 +406,18 @@ export function reloadPolicy(): PolicyLoadResult {
 
 export function getPolicy(): Policy {
   return _policy ?? loadPolicy();
+}
+
+/**
+ * Test-only seam, mirroring `useEphemeralState`/`useEphemeralJournal`: swap the in-memory
+ * active policy without touching `POLICY_FILE`. Exists because `automationLevel()` and
+ * `enterPosition`/`exitPosition`/`toolAnnotatePosition` all read `getPolicy()` directly rather
+ * than taking a policy parameter — the replay harness needs a way to flip `automation.level`
+ * to `manual` for a manual-path scenario without writing to the operator's real policy file.
+ */
+export function useEphemeralPolicy(policy: Policy): void {
+  _policy = policy;
+  _meta = { version: policy.version, hash: 'ephemeral', loadedAt: new Date().toISOString(), source: 'ephemeral' };
 }
 
 /** Raw yaml text of the active policy file. Used by mutate.ts and history snapshots. */

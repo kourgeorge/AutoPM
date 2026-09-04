@@ -8,6 +8,7 @@ import { getState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
+import { getOpenProposals } from '../core/proposals';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
 import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
@@ -580,6 +581,29 @@ function buildMachineEvents(): string {
   return lines.join('\n');
 }
 
+/**
+ * Proposals the automation policy is holding for a human to decide, and any that a human has
+ * already decided but the executor hasn't gotten to yet. Read-only for the trader — there is no
+ * tool to approve or reject one, on purpose, so this block exists only to make what is already
+ * waiting visible across cycle boundaries, not to invite the model to act on it.
+ */
+function buildPendingProposals(): string {
+  const proposals = getOpenProposals();
+  if (proposals.length === 0) return '';
+
+  const lines = [`=== PENDING PROPOSALS (${proposals.length}) ===`];
+
+  for (const p of proposals) {
+    const remainingMs = p.expiresAt - Date.now();
+    const remaining = remainingMs > 0 ? `expires in ${Math.round(remainingMs / 60_000)}m` : 'past expiry, awaiting sweep';
+    lines.push(`[${p.id}] ${p.status.toUpperCase()} ${p.kind} ${p.symbol} — ${p.reason} (${remaining})`);
+  }
+
+  lines.push('These wait on a human decision, not on you — get_proposals for the full detail. Nothing here needs a tool call.');
+  lines.push('=== END PENDING PROPOSALS ===');
+  return lines.join('\n');
+}
+
 /** Beyond this it stops being a summary. `get_journal` reaches the rest. */
 const MAX_DECISION_LINES = 8;
 
@@ -731,6 +755,9 @@ export async function buildCycleContext(
   // routine periodic check.
   const eventCtx = buildMachineEvents();
   if (eventCtx) { lines.push(eventCtx); lines.push(''); }
+
+  const proposalCtx = buildPendingProposals();
+  if (proposalCtx) { lines.push(proposalCtx); lines.push(''); }
 
   lines.push(await buildAccountStatus());
 

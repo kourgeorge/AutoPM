@@ -29,6 +29,7 @@ import { reconcileFills } from '../review/reconcile';
 import { publishReviewReady } from '../review/reviewReady';
 import { publishPortfolioReview } from '../review/scheduledReview';
 import { sweepStops } from '../strategy/stopOrders';
+import { sweepProposals } from '../strategy/proposalExecutor';
 import { collectAndCompute, type TickData } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, releaseAllLatches, type Detector, type TriggerEvent } from './eventBus';
@@ -231,6 +232,15 @@ export class FeatureScheduler {
       await sweepStops();
     } catch (err: any) {
       logger.warn(`[Scheduler] Stop sweep failed: ${err?.message ?? err}`);
+    }
+
+    // Same reasoning as the stop sweep above: a human's `approve <id>` waits at most one tick
+    // to actually execute, not until the trader's next cycle. `sweepProposals` catches its own
+    // per-proposal failures; this `try` is for the rest — A TICK NEVER THROWS OUT.
+    try {
+      await sweepProposals();
+    } catch (err: any) {
+      logger.warn(`[Scheduler] Proposal sweep failed: ${err?.message ?? err}`);
     }
 
     return events;

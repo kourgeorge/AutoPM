@@ -6,10 +6,15 @@ import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
 import { recordTick } from './features/lastTick';
+import { getPendingEvents } from './features/eventBus';
+import { readDecisions } from './journal/journal';
+import { isTradeAction, type DecisionRecord } from './journal/types';
 import { reconcileOnStartup } from './review/reconcile';
 import { DATA_DIR } from './core/paths';
 import { config } from './core/config';
-import { approvalRequired, approvalSummary, setApprovalChannel } from './core/approvals';
+import { automationLevel, automationSummary } from './core/automation';
+import { getOpenProposals } from './core/proposals';
+import type { EventRow } from './ui/dashboard';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -19,17 +24,12 @@ ui.captureStreams();
 // the blessed screen clears the terminal, so anything printed earlier is gone.
 logger.info(`[Boot] data dir: ${DATA_DIR}`);
 
-// The operator approval gate's one wire to a human.
-//
-// Registered here because this is the only module that owns both halves: `core/approvals.ts`
-// must stay free of `src/ui/`, which builds a blessed screen AT IMPORT. Any process that does
-// NOT run this line — a script, the replay harness, a probe — has no operator to ask, and an
-// armed gate there refuses rather than assuming consent.
-setApprovalChannel((req) => ui.askApproval(req));
-
 // Announced, not left to be discovered by an order that stops dead. `config.venue` is derived
-// from the endpoint (see resolveVenue), so this line and the gate read the same truth.
-logger.info(`[Boot] approvals: ${approvalSummary()}`);
+// from the endpoint (see resolveVenue), so this line and the gate read the same truth. Unlike
+// the old approval gate, there is no channel to wire up here: a human decides a pending
+// proposal by typing `approve <id>`/`reject <id>` straight into the UI, which reads and writes
+// the proposal store (`core/proposals.ts`) directly.
+logger.info(`[Boot] automation: ${automationSummary()}`);
 
 /**
  * The dashboard cannot read config itself (`src/ui/` must stay importable without an API key),
@@ -44,7 +44,9 @@ logger.info(`[Boot] approvals: ${approvalSummary()}`);
  * strings the panel already renders every second.
  */
 function pushEnvironment(): void {
-  const armed = (['entry', 'exit'] as const).filter((a) => approvalRequired(a));
+  const armed = (['entry', 'exit', 'stop_adjust', 'target_adjust'] as const).filter(
+    (kind) => automationLevel(kind) === 'manual',
+  );
   ui.setEnvironment({
     broker: config.broker,
     venue: config.venue,
@@ -57,6 +59,42 @@ function pushEnvironment(): void {
 }
 
 pushEnvironment();
+
+/**
+ * RECENT ACTIVITY wants venue-touching facts (entered, exited, stop/target moved), not
+ * `EventRow`s — so this adapts a journaled `DecisionRecord` into the shape the panel already
+ * renders. `EventRow` is structural (see `dashboard.ts`), so no renderer change is needed.
+ */
+function decisionToActivityRow(r: DecisionRecord): EventRow {
+  const symbol = r.symbol ?? '?';
+  let kind: string;
+  let headline: string;
+  if (r.kind === 'entry') {
+    kind = 'entry';
+    const target = r.intendedTarget != null ? `, target $${r.intendedTarget}` : '';
+    headline = `Entered ${symbol}: qty=${r.qty} @ $${r.price}, stop $${r.intendedStop}${target} — ${r.rationale}`;
+  } else if (r.kind === 'exit') {
+    kind = 'exit';
+    const pnl = r.pnl != null ? `, P&L $${r.pnl}` : '';
+    headline = `Exited ${symbol}: ${r.rationale} — qty=${r.qty} @ $${r.price}${pnl}`;
+  } else {
+    kind = 'stop/target';
+    const target = r.intendedTarget != null ? `, target $${r.intendedTarget}` : '';
+    headline = `Stop/target updated for ${symbol}: stop $${r.intendedStop}${target} — ${r.rationale}`;
+  }
+  return {
+    id: r.id,
+    kind,
+    severity: 'info',
+    symbol: r.symbol,
+    firedAt: r.at,
+    headline,
+    suggestedAction: null,
+    ackedAt: null,
+    ackDisposition: null,
+    wakeCount: 1,
+  };
+}
 
 const trader = new Trader();
 const concierge = new ConciergeAgent(msg => trader.wake(msg));
@@ -79,6 +117,9 @@ const scheduler = new FeatureScheduler({
   onTick: (data) => {
     recordTick(data);
     ui.setTick(data);
+    const activity = readDecisions({ limit: 20, filter: isTradeAction }).map(decisionToActivityRow);
+    ui.setEvents(getPendingEvents(), activity);
+    ui.setProposals(getOpenProposals());
     pushEnvironment(); // policy may have been reloaded since the last tick
   },
 });

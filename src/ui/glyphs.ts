@@ -31,6 +31,11 @@ export interface Glyphs {
   sep: string;
   /** Truncation marker; one column wide in both modes. */
   ellipsis: string;
+  /** Event severity, for the inbox panel. */
+  sevCritical: string;
+  sevUrgent: string;
+  sevWarn: string;
+  sevInfo: string;
 }
 
 const UNICODE: Glyphs = {
@@ -43,6 +48,10 @@ const UNICODE: Glyphs = {
   stale: '⋯',
   sep: '·',
   ellipsis: '…',
+  sevCritical: '⛔',
+  sevUrgent: '▲',
+  sevWarn: '⚠',
+  sevInfo: '·',
 };
 
 const ASCII: Glyphs = {
@@ -55,6 +64,10 @@ const ASCII: Glyphs = {
   stale: '~',
   sep: '|',
   ellipsis: '+',
+  sevCritical: 'X',
+  sevUrgent: '^',
+  sevWarn: '!',
+  sevInfo: '-',
 };
 
 /**

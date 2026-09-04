@@ -92,34 +92,32 @@ triggers:
   # Percentage points of drawdown from the equity peak before portfolio_drawdown fires —
   # a slower, book-wide bleed the per-position detectors below can't see.
   portfolioDrawdownPct: 6
-approval:
-  # Operator approval gate — the trader asks before an order reaches the venue.
+automation:
+  # The automation gate — for each action kind below, does the machine act immediately, or
+  # does it create a PROPOSAL and wait for a human to type `approve <id>` / `reject <id>` in
+  # the terminal UI?
   #
-  # Scope: covers order ENTRY and EXIT only (see require: below). Stop-arming
-  # (sweepStops/armStop, every tick) and stop-tightening (moveStopTo, via
-  # annotate_position) are NOT gated and never ask — by design, since both are
-  # strictly protective (moveStopTo can only tighten, never loosen a stop) and
-  # gating them would delay protection while a request waits on you.
+  # All four action kinds are gated uniformly: order ENTRY, order EXIT, tightening a resting
+  # stop, and lowering a resting take-profit. Earlier versions of this policy exempted
+  # stop/target moves as "strictly protective" — that exemption is gone by design: a manual
+  # level now holds those too, and you accept the wait.
   #
-  # mode:  off       never ask
-  #        live_only ask only on a live account (paper stays fully autonomous)
-  #        always    ask on both, useful while building trust in the agent
-  #
-  # The venue is DERIVED from the endpoint (Alpaca hostname / IBKR port), not configured
-  # here — see resolveVenue in src/core/config.ts. Answer a prompt by typing y or n in the
-  # terminal UI; the match is exact and deterministic, so the concierge never sees it and
-  # cannot answer on your behalf.
-  mode: live_only
-  # How long a request waits for you. Refused as approval_timeout when it lapses.
+  # The level applies the same on paper and live — there is no venue-based exemption; to run
+  # unattended, set the level to auto rather than relying on which account you're connected to.
+  # A human decides a proposal by typing `approve <id>` / `reject <id>` in the terminal UI; the
+  # match is exact and deterministic, so the concierge never sees it and cannot decide on your
+  # behalf.
+  level:
+    entry: manual
+    exit: manual
+    stopAdjust: auto
+    targetAdjust: auto
+  # How long a pending proposal waits for you before settling as onTimeout.
   timeoutMs: 600000
-  # deny | allow. WARNING on `deny` with `require.exit: true`: an unattended live agent
-  # then cannot close a losing position — a stop-breach exit is refused at the gate and
-  # journalled as a veto. If you are not watching the terminal, set `exit: false` (entries
-  # gated, exits free) or `onTimeout: allow` (gate becomes delay-and-notify).
+  # deny | allow. WARNING on `deny` with `exit: manual`: an unattended agent then cannot close
+  # a losing position — a stop-breach exit proposal expires unexecuted. If you are not watching
+  # the terminal, set `exit: auto` or `onTimeout: allow` (gate becomes delay-and-notify).
   onTimeout: deny
-  require:
-    entry: true
-    exit: true
 immutable:
   maxPositionsCeiling: 10
   maxDailyLossPctCeiling: 0.05

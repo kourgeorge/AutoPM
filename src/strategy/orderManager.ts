@@ -26,7 +26,9 @@ import {
   hasEnoughBuyingPower,
   isAtMaxPositions,
 } from './riskManager';
-import { requestApproval } from '../core/approvals';
+import { automationLevel } from '../core/automation';
+import { createProposal } from '../core/proposals';
+import { config } from '../core/config';
 
 /**
  * A refusal by this system's own rules, as opposed to the venue's (`BrokerRejection`).
@@ -316,22 +318,28 @@ async function refuseIfEarningsWindow(symbol: string): Promise<void> {
   if (veto) reject(veto.rule, veto.message);
 }
 
+/** Everything `enterPosition` knows once the guard chain has passed, ready to place the order. */
+export interface ValidatedEntry {
+  symbol: string;
+  price: number;
+  stopLoss: number;
+  takeProfit: number;
+  regimeQty: number;
+  reason: string;
+}
+
+export type EnteredPosition = { status: 'executed'; orderId: string; qty: number; venueOco: OcoArmResult };
+
+export type EnterPositionResult =
+  | EnteredPosition
+  | { status: 'pending'; proposalId: string };
+
 /**
- * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
- * that was asked for: `applyRegimeSizing` may cut it. The caller journals what it is
- * given, so returning the requested number here would record a position size that never
- * existed.
- *
- * `venueOco` is the outcome of arming the real resting stop/take-profit pair at the broker. It is
- * returned rather than written here because the snapshot does not exist yet —
- * `patchPositionSnapshot` is a no-op for an unknown symbol, and the caller's single
- * `openPositionSnapshot` call is the one write. A failure there is reported, never thrown: see
- * `armEntryOco`.
+ * The guard chain, unchanged from before the automation split — every `reject()` call below
+ * is the same rule, same order, same message, whether the action ends up executed immediately
+ * or held as a proposal for a human to decide.
  */
-export async function enterPosition(
-  signal: SignalResult,
-  qty: number,
-): Promise<{ orderId: string; qty: number; venueOco: OcoArmResult }> {
+export async function validateEntry(signal: SignalResult, qty: number): Promise<ValidatedEntry> {
   const { symbol, price, stopLoss, takeProfit, atr } = signal;
 
   // Local and free, so first: a NaN qty must be reported as a malformed intent, not as
@@ -451,28 +459,61 @@ export async function enterPosition(
   // so late_cycle/recession positions are automatically smaller.
   const regimeQty = await applyRegimeSizing(qty);
 
-  // LAST, and after regime sizing: the operator approves the qty that will actually reach
-  // the venue, and is never woken for an order the guards above would have refused anyway.
-  // Disarmed by policy — the common case — this returns `not_required` without touching the
-  // UI, so the ordering above is unchanged for a paper account.
-  const nod = await requestApproval('entry', {
-    symbol,
-    qty: regimeQty,
-    price,
-    notional: regimeQty * price,
-    stopLoss,
-    takeProfit,
-    pnl: null,
+  return { symbol, price, stopLoss, takeProfit, regimeQty, reason: signal.reason };
+}
+
+/** Places the order and arms the venue OCO pair. Never called until a `validateEntry` has passed. */
+export async function actEntry(v: ValidatedEntry): Promise<EnteredPosition> {
+  logger.trade(`Entering ${v.symbol}: qty=${v.regimeQty} @ ~$${v.price.toFixed(2)}, SL=$${v.stopLoss.toFixed(2)}, TP=$${v.takeProfit.toFixed(2)}`);
+  const { id } = await broker.placeOrder({ symbol: v.symbol, side: 'buy', qty: v.regimeQty, type: 'market' });
+  logger.trade(`Order ${id} submitted for ${v.symbol}`);
+
+  const venueOco = await armEntryOco(v.symbol, v.stopLoss, v.takeProfit);
+  return { status: 'executed', orderId: id, qty: v.regimeQty, venueOco };
+}
+
+/**
+ * `qty` in the result is the qty that reached the venue, which is not necessarily the qty
+ * that was asked for: `applyRegimeSizing` may cut it. The caller journals what it is
+ * given, so returning the requested number here would record a position size that never
+ * existed.
+ *
+ * `venueOco` is the outcome of arming the real resting stop/take-profit pair at the broker. It is
+ * returned rather than written here because the snapshot does not exist yet —
+ * `patchPositionSnapshot` is a no-op for an unknown symbol, and the caller's single
+ * `openPositionSnapshot` call is the one write. A failure there is reported, never thrown: see
+ * `armEntryOco`.
+ *
+ * When the automation level for `entry` is `manual`, this validates and then STOPS — it creates
+ * a proposal and returns `pending` immediately, never placing an order. A human's `approve <id>`
+ * is picked up by `proposalExecutor.ts`'s `sweepProposals()` on a later tick, which re-validates
+ * against the account/position state at that moment and only then calls `actEntry`.
+ */
+export async function enterPosition(signal: SignalResult, qty: number): Promise<EnterPositionResult> {
+  const validated = await validateEntry(signal, qty);
+
+  if (automationLevel('entry') === 'auto') return actEntry(validated);
+
+  const proposal = createProposal({
+    kind: 'entry',
+    symbol: validated.symbol,
+    venue: config.venue,
+    // `signal`/`qty` are the RAW inputs, kept so the executor's re-validation runs the exact
+    // same guard chain (including `applyRegimeSizing`) fresh at execution time, against
+    // whatever the account/position state is by then — not against this snapshot. The rest
+    // are display-only, for the human deciding, and are ignored by the executor.
+    params: {
+      signal,
+      qty,
+      regimeQty: validated.regimeQty,
+      price: validated.price,
+      stopLoss: validated.stopLoss,
+      takeProfit: validated.takeProfit,
+    },
     reason: signal.reason,
+    timeoutMs: getPolicy().automation.timeoutMs,
   });
-  if (!nod.granted) reject(nod.rule, nod.message);
-
-  logger.trade(`Entering ${symbol}: qty=${regimeQty} @ ~$${price.toFixed(2)}, SL=$${stopLoss.toFixed(2)}, TP=$${takeProfit.toFixed(2)}`);
-  const { id } = await broker.placeOrder({ symbol, side: 'buy', qty: regimeQty, type: 'market' });
-  logger.trade(`Order ${id} submitted for ${symbol}`);
-
-  const venueOco = await armEntryOco(symbol, stopLoss, takeProfit);
-  return { orderId: id, qty: regimeQty, venueOco };
+  return { status: 'pending', proposalId: proposal.id };
 }
 
 /**
@@ -625,11 +666,21 @@ function describe(o: OpenOrder): string {
     + `${trigger !== undefined ? ` @ ${trigger}` : ''} [${o.id}]`;
 }
 
-export async function exitPosition(
-  symbol: string,
-  reason: string,
-  qty?: number,
-): Promise<{ orderId: string; cancelled: string[]; qty: number }> {
+/** Everything `exitPosition` knows once the position lookup and qty check have passed. */
+export interface ValidatedExit {
+  pos: Position;
+  sellQty: number;
+  price: number | null;
+  pnl: number | null;
+}
+
+export type ExitedPosition = { status: 'executed'; orderId: string; cancelled: string[]; qty: number };
+
+export type ExitPositionResult =
+  | ExitedPosition
+  | { status: 'pending'; proposalId: string };
+
+export async function validateExit(symbol: string, qty?: number): Promise<ValidatedExit> {
   const positions = await broker.getPositions();
   // `sameSymbol`, for the same reason as `already_holding` above — with `===` a crypto
   // position could not be exited AT ALL: the venue reports `BTCUSD`, the caller says
@@ -658,18 +709,17 @@ export async function exitPosition(
   // the venue's own qty and unrealized P&L — the numbers that make the decision — not the
   // model's account of them.
   const price = pos.marketValue != null && pos.qty !== 0 ? pos.marketValue / pos.qty : null;
-  const nod = await requestApproval('exit', {
-    symbol,
-    qty: sellQty,
-    price,
-    notional: price != null ? price * sellQty : null,
-    stopLoss: null,
-    takeProfit: null,
-    pnl: pos.unrealizedPnL ?? null,
-    reason,
-  });
-  if (!nod.granted) reject(nod.rule, nod.message);
+  return { pos, sellQty, price, pnl: pos.unrealizedPnL ?? null };
+}
 
+/**
+ * Cancels the resting protection and sells. Never called until a `validateExit` has passed —
+ * and, on the manual path, until a human has approved: cancelling the reservation on an exit
+ * that is then denied would leave the position worse off than if the tool had never been
+ * called. That ordering is the reason this is a separate function at all.
+ */
+export async function actExit(symbol: string, reason: string, v: ValidatedExit): Promise<ExitedPosition> {
+  const { pos, sellQty } = v;
   logger.trade(`Exiting ${symbol}: ${reason}`);
 
   // Under the stop lock for everything that follows. Between the cancel loop and the sell this
@@ -782,6 +832,33 @@ export async function exitPosition(
     }
 
     logger.trade(`Exit order ${id} submitted for ${symbol}`);
-    return { orderId: id, cancelled, qty: sellQty };
+    return { status: 'executed', orderId: id, cancelled, qty: sellQty };
   });
+}
+
+/**
+ * When the automation level for `exit` is `manual`, this validates and then STOPS — it creates
+ * a proposal and returns `pending` immediately, WITHOUT cancelling the resting stop/take-profit
+ * pair or touching the venue. A human's `approve <id>` is picked up by `proposalExecutor.ts`'s
+ * `sweepProposals()` on a later tick, which re-validates against the position as it stands at
+ * that moment and only then calls `actExit` — the point in the code where cancellation happens,
+ * unchanged from before this split.
+ */
+export async function exitPosition(symbol: string, reason: string, qty?: number): Promise<ExitPositionResult> {
+  const validated = await validateExit(symbol, qty);
+
+  if (automationLevel('exit') === 'auto') return actExit(symbol, reason, validated);
+
+  const proposal = createProposal({
+    kind: 'exit',
+    symbol,
+    venue: config.venue,
+    // The RAW requested qty (or `null` for a full exit), so the executor's re-validation calls
+    // `validateExit` with the same intent, against whatever position state exists by then — not
+    // against this snapshot's `sellQty`, which may no longer be the full position.
+    params: { qty: qty ?? null, sellQty: validated.sellQty, price: validated.price, pnl: validated.pnl },
+    reason,
+    timeoutMs: getPolicy().automation.timeoutMs,
+  });
+  return { status: 'pending', proposalId: proposal.id };
 }

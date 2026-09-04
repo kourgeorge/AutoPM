@@ -35,6 +35,7 @@ import {
   type EventKind,
   type TriggerEvent,
 } from '../features/eventBus';
+import { useEphemeralEventLog } from '../features/eventLog';
 import { getLastTick, recordTick, resetLastTick } from '../features/lastTick';
 import { createLiveRouter } from '../features/router';
 import { watchlistScan } from '../features/watchlistScan';
@@ -49,6 +50,15 @@ import {
 import { useEphemeralLessons } from '../journal/lessons';
 import type { DecisionRecord } from '../journal/types';
 import { useEphemeralFillsLedger } from '../review/fillsLedger';
+import { useEphemeralProposalLog } from '../core/proposalLog';
+import {
+  createProposal,
+  decideProposal,
+  getOpenProposals,
+  getProposal,
+  transitionProposal,
+} from '../core/proposals';
+import { sweepProposals } from '../strategy/proposalExecutor';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
@@ -96,6 +106,13 @@ useEphemeralFillsLedger();
 // reasoning as the ledger above: the cost of the line is nothing, and the cost of the first
 // scenario that does reach it is a synthetic rule of thumb the live trader then obeys.
 useEphemeralLessons();
+// No scenario should splice a synthetic entry into the operator's real event history —
+// same reasoning, one file over.
+useEphemeralEventLog();
+// Same reasoning again: a manual-path scenario creates and transitions real `Proposal`
+// objects, and the audit trail for those must not land in the operator's real
+// `data/proposals.jsonl`.
+useEphemeralProposalLog();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -2172,6 +2189,100 @@ function concentrationSingleBreach(): void {
   checkCount(all, 'concentration_breach', 1);
 }
 
+/**
+ * 31. Proposal lifecycle — pending, approved/rejected, and the illegal moves that must throw.
+ *
+ * Exercises `core/proposals.ts` directly: no broker, no venue call. The `transitionProposal(...,
+ * 'executed', ...)` call below stands in for what the real executor's act step would record
+ * after a successful `actEntry`/`actAnnotation` — calling those for real would need a broker,
+ * which this harness never touches.
+ */
+function proposalLifecycle(): void {
+  const toReject = createProposal({
+    kind: 'entry',
+    symbol: 'AAPL',
+    venue: 'paper',
+    params: { qty: 10 },
+    reason: 'test entry',
+    timeoutMs: 60_000,
+  });
+  check('a fresh proposal is pending', toReject.status === 'pending');
+  check('a fresh proposal is visible via getProposal', getProposal(toReject.id)?.id === toReject.id);
+  check('a fresh proposal is open', getOpenProposals().some((p) => p.id === toReject.id));
+
+  const toApprove = createProposal({
+    kind: 'stop_adjust',
+    symbol: 'MSFT',
+    venue: 'paper',
+    params: { symbol: 'MSFT', stopLoss: 95, thesis: 'tighten' },
+    reason: 'tighten stop',
+    timeoutMs: 60_000,
+  });
+
+  decideProposal(toReject.id, 'reject', 'human', 'not now');
+  const afterReject = getProposal(toReject.id);
+  check('rejecting moves the proposal to rejected', afterReject?.status === 'rejected');
+  check('the reject reason is recorded', afterReject?.rejectReason === 'not now');
+  check('a rejected proposal is no longer open', !getOpenProposals().some((p) => p.id === toReject.id));
+
+  decideProposal(toApprove.id, 'approve', 'human');
+  const afterApprove = getProposal(toApprove.id);
+  check('approving moves the proposal to approved', afterApprove?.status === 'approved');
+  check(
+    'an approved-but-unexecuted proposal is still open',
+    getOpenProposals().some((p) => p.id === toApprove.id),
+  );
+
+  transitionProposal(toApprove.id, 'executed', { result: { orderId: 'sim-1' } });
+  const afterExecute = getProposal(toApprove.id);
+  check('executing moves the proposal to executed', afterExecute?.status === 'executed');
+  check('an executed proposal is no longer open', !getOpenProposals().some((p) => p.id === toApprove.id));
+
+  let threwOnExecutedApprove = false;
+  try {
+    transitionProposal(toApprove.id, 'approved');
+  } catch {
+    threwOnExecutedApprove = true;
+  }
+  check('approving an already-executed proposal throws', threwOnExecutedApprove);
+
+  let threwOnRejectedApprove = false;
+  try {
+    transitionProposal(toReject.id, 'approved');
+  } catch {
+    threwOnRejectedApprove = true;
+  }
+  check('approving an already-rejected proposal throws', threwOnRejectedApprove);
+}
+
+/**
+ * 32. Proposal timeout — the default policy's onTimeout:deny expires a stale proposal
+ * without ever reaching the venue. Deliberately not testing onTimeout:allow: that path falls
+ * through to sweepProposals()'s second, broker-touching pass in the SAME call, which this
+ * no-broker harness must never run.
+ */
+async function proposalTimeout(): Promise<void> {
+  const stale = createProposal({
+    kind: 'exit',
+    symbol: 'TSLA',
+    venue: 'paper',
+    params: { qty: null },
+    reason: 'test exit',
+    timeoutMs: -1,
+  });
+  check(
+    'a proposal with a past deadline is still pending until swept',
+    getProposal(stale.id)?.status === 'pending',
+  );
+
+  await sweepProposals();
+
+  const after = getProposal(stale.id);
+  check('the default policy onTimeout:deny expires a stale proposal', after?.status === 'expired');
+  check('the expiry is attributed to the timeout, not a human', after?.decidedBy === 'timeout');
+  check('an expired proposal is no longer open', !getOpenProposals().some((p) => p.id === stale.id));
+}
+
 async function main(): Promise<void> {
   // Loaded once, before any state is faked — a failure here is a broken policy file,
   // not a failed scenario.
@@ -2242,6 +2353,16 @@ async function main(): Promise<void> {
   await scenario('28. Concentration flutter — one name either side of the 15% limit', plain, concentrationFlutter);
   await scenario('29. Concentration — a single name alone breaching the limit', plain, concentrationSingleBreach);
   await scenario('30. OCO pairing — the take-profit leg rests linked to the stop, not alone', plain, ocoPairing);
+  await scenario(
+    '31. Proposal lifecycle — pending, approved, rejected, and the illegal moves that must throw',
+    {},
+    proposalLifecycle,
+  );
+  await scenario(
+    '32. Proposal timeout — deny expires it without ever reaching the venue',
+    {},
+    proposalTimeout,
+  );
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {
