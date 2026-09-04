@@ -320,7 +320,9 @@ export async function executeTraderTool(
     // with a reason into a bare status code the model then explained for itself, so the
     // typed fields survive here too — the safety net, not the primary handler.
     if (err instanceof GuardRejection) {
-      return JSON.stringify({ error: err.message, rejectedBy: 'guard', rule: err.rule });
+      return JSON.stringify({
+        error: err.message, rejectedBy: 'guard', rule: err.rule, venueMessage: err.venueMessage,
+      });
     }
     if (err instanceof BrokerRejection) {
       return JSON.stringify({
@@ -836,8 +838,10 @@ function journalRefusal(
   fields: Partial<DecisionInput> & { rationale: string },
 ): string | null {
   if (err instanceof GuardRejection) {
-    recordDecision(decision('veto', 'guard', { ...fields, vetoRule: err.rule }));
-    return JSON.stringify({ error: err.message, rejectedBy: 'guard', rule: err.rule });
+    recordDecision(decision('veto', 'guard', { ...fields, vetoRule: err.rule, venueMessage: err.venueMessage }));
+    return JSON.stringify({
+      error: err.message, rejectedBy: 'guard', rule: err.rule, venueMessage: err.venueMessage,
+    });
   }
 
   if (err instanceof BrokerRejection) {
