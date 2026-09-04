@@ -1,4 +1,4 @@
-import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
+import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
 import { BrokerRejection } from './errors';
 import { alpacaTimeToMs, alpacaTrading as trading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
@@ -58,12 +58,19 @@ export class AlpacaBroker implements IBroker {
   }
 
   /**
-   * `nested` is deliberately not requested: bracket legs already arrive as their own top-level
-   * rows, and asking for them nested would hide a resting stop inside a parent order.
+   * `nested` IS requested, and then flattened back out. This is the flip side of the asymmetry
+   * documented on `placeOco`: for an `order_class: 'oco'` pair, the flat (non-nested) open-orders
+   * list returns only the parent row — which is itself the take-profit leg — and never surfaces
+   * the stop child as a row of its own. Without `nested`, the stop leg is invisible to this list
+   * even though it is very much still resting at the venue, so `restingStop` reads a live pair as
+   * absent and the sweep tears down and rebuilds a perfectly good stop every tick. Requesting
+   * `nested` and re-emitting each leg as its own row restores the one-row-per-order-in-the-book
+   * shape the rest of this file assumes.
    */
   async getOpenOrders(): Promise<OpenOrder[]> {
-    const res = await trading.get('/v2/orders', { params: { status: 'open' } });
-    return (res.data as any[]).map((o) => ({
+    const res = await trading.get('/v2/orders', { params: { status: 'open', nested: true } });
+    const rows = (res.data as any[]).flatMap((o) => [o, ...((o.legs ?? []) as any[])]);
+    return rows.map((o) => ({
       id:           o.id,
       symbol:       o.symbol,
       side:         o.side as 'buy' | 'sell',
@@ -118,6 +125,70 @@ export class AlpacaBroker implements IBroker {
    */
   private tifFor(req: OrderRequest): 'gtc' | 'day' {
     return req.type === 'stop' || isCryptoSymbol(req.symbol) ? 'gtc' : 'day';
+  }
+
+  /**
+   * Place a linked stop + take-profit pair for the same shares.
+   *
+   * `order_class: 'oco'` on a plain `sell` order: the base leg carries no price of its own,
+   * `take_profit`/`stop_loss` supply both. Always `gtc` for the same reason a lone stop is —
+   * this is the overnight/weekend protection, and a `day` leg would evaporate at the close.
+   *
+   * The response is asymmetric, confirmed against a live order: the *parent* order returned by
+   * this call IS the take-profit (limit) leg — it carries `limit_price` and its own `id` is the
+   * take-profit order id — and `legs[]` holds only its stop sibling, one element, not both
+   * children as two array entries. Building the candidate list from parent-plus-legs (rather
+   * than assuming both live inside `legs[]`) is what makes this work regardless of which of the
+   * two Alpaca happens to nest.
+   */
+  async placeOco(req: OcoRequest): Promise<{ stopOrderId: string; takeProfitOrderId: string }> {
+    try {
+      const res = await trading.post('/v2/orders', {
+        symbol:        req.symbol,
+        qty:           req.qty,
+        side:          'sell',
+        type:          'limit',
+        time_in_force: 'gtc',
+        order_class:   'oco',
+        take_profit:   { limit_price: req.takeProfitPrice },
+        stop_loss:     { stop_price: req.stopPrice },
+      });
+      const candidates = [res.data, ...((res.data.legs ?? []) as any[])];
+      const stopLeg = candidates.find(l => num(l.stop_price) != null);
+      const takeProfitLeg = candidates.find(l => l.id !== stopLeg?.id && num(l.limit_price) != null);
+      if (!stopLeg || !takeProfitLeg) {
+        throw new BrokerRejection(
+          null, `OCO order ${res.data.id} did not return two distinguishable legs`, null, req,
+        );
+      }
+      return { stopOrderId: stopLeg.id, takeProfitOrderId: takeProfitLeg.id };
+    } catch (err: any) {
+      if (err instanceof BrokerRejection) throw err;
+      throw new BrokerRejection(
+        err.response?.status ?? null,
+        err.response?.data?.message ?? err.message,
+        err.response?.data?.code ?? null,
+        req,
+      );
+    }
+  }
+
+  /**
+   * Same shape as `replaceStopOrder` — Alpaca mints a new id on every PATCH, this one for the
+   * take-profit leg's limit price instead of the stop leg's trigger price.
+   */
+  async replaceTakeProfitOrder(id: string, limitPrice: number): Promise<{ id: string }> {
+    try {
+      const res = await trading.patch(`/v2/orders/${id}`, { limit_price: limitPrice });
+      return { id: res.data.id };
+    } catch (err: any) {
+      throw new BrokerRejection(
+        err.response?.status ?? null,
+        err.response?.data?.message ?? err.message,
+        err.response?.data?.code ?? null,
+        { replaceTakeProfitOrderId: id, limitPrice },
+      );
+    }
   }
 
   async cancelOrder(id: string): Promise<void> {

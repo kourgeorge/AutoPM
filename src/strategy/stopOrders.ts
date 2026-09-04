@@ -19,7 +19,7 @@
  */
 
 import { broker } from '../broker';
-import type { OpenOrder, OrderRequest, Position } from '../broker/IBroker';
+import type { OcoRequest, OpenOrder, OrderRequest, Position } from '../broker/IBroker';
 import { logger } from '../core/logger';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
 import {
@@ -36,15 +36,15 @@ export type StopPlan =
   | { ok: true; request: OrderRequest }
   | { ok: false; reason: string };
 
+export type OcoPlan =
+  | { ok: true; request: OcoRequest }
+  | { ok: false; reason: string };
+
 /**
- * The order that would protect this position, or the reason no order can.
- *
- * A reason rather than a bare `null` because every caller has to report it: "no venue stop" and
- * "no venue stop because Alpaca will not take a plain stop on a coin" are different facts, and
- * the model asked to manage the position needs the second one. Silence here is what makes a
- * missing stop look like an oversight instead of a constraint.
+ * The checks `stopOrderFor` and `ocoOrderFor` share: is this symbol/qty combination something a
+ * protective sell order can even be placed against, independent of what the level(s) are.
  */
-export function stopOrderFor(symbol: string, qty: number, stopLevel: number): StopPlan {
+function guardProtectable(symbol: string, qty: number): { ok: false; reason: string } | null {
   if (isCryptoSymbol(symbol)) {
     return {
       ok: false,
@@ -65,6 +65,20 @@ export function stopOrderFor(symbol: string, qty: number, stopLevel: number): St
         : `${symbol} has no positive qty to protect (got ${qty})`,
     };
   }
+  return null;
+}
+
+/**
+ * The order that would protect this position, or the reason no order can.
+ *
+ * A reason rather than a bare `null` because every caller has to report it: "no venue stop" and
+ * "no venue stop because Alpaca will not take a plain stop on a coin" are different facts, and
+ * the model asked to manage the position needs the second one. Silence here is what makes a
+ * missing stop look like an oversight instead of a constraint.
+ */
+export function stopOrderFor(symbol: string, qty: number, stopLevel: number): StopPlan {
+  const guard = guardProtectable(symbol, qty);
+  if (guard) return guard;
   if (!Number.isFinite(stopLevel) || stopLevel <= 0) {
     return { ok: false, reason: `${symbol} has no usable stop level recorded (got ${stopLevel})` };
   }
@@ -74,22 +88,65 @@ export function stopOrderFor(symbol: string, qty: number, stopLevel: number): St
   };
 }
 
+/**
+ * The linked stop + take-profit pair that would protect this position, or the reason no pair
+ * can. Same refusal shape and same crypto/short/qty guard as `stopOrderFor` — a stop and a
+ * take-profit leg fail for the same venue reasons — plus one refusal unique to the pair: a
+ * target that is not above the stop can't bracket anything.
+ */
+export function ocoOrderFor(
+  symbol: string,
+  qty: number,
+  stopLevel: number,
+  takeProfitLevel: number,
+): OcoPlan {
+  const guard = guardProtectable(symbol, qty);
+  if (guard) return guard;
+  if (!Number.isFinite(stopLevel) || stopLevel <= 0) {
+    return { ok: false, reason: `${symbol} has no usable stop level recorded (got ${stopLevel})` };
+  }
+  if (!Number.isFinite(takeProfitLevel) || takeProfitLevel <= 0) {
+    return { ok: false, reason: `${symbol} has no usable take-profit level recorded (got ${takeProfitLevel})` };
+  }
+  if (takeProfitLevel <= stopLevel) {
+    return {
+      ok: false,
+      reason: `${symbol} take-profit $${takeProfitLevel} is not above stop $${stopLevel} — `
+        + `can't bracket a position with an inverted target`,
+    };
+  }
+  return {
+    ok: true,
+    request: { symbol, qty, stopPrice: stopLevel, takeProfitPrice: takeProfitLevel },
+  };
+}
+
 /** A live sell stop resting for this symbol, if there is one. */
 export function restingStop(orders: OpenOrder[], symbol: string): OpenOrder | undefined {
   return orders.find(o => o.side === 'sell' && o.type === 'stop' && sameSymbol(o.symbol, symbol));
 }
 
+/** A live sell limit (take-profit) order resting for this symbol, if there is one. */
+export function restingTakeProfit(orders: OpenOrder[], symbol: string): OpenOrder | undefined {
+  return orders.find(o => o.side === 'sell' && o.type === 'limit' && sameSymbol(o.symbol, symbol));
+}
+
 /**
- * How many shares are still free to be reserved by a new sell order.
+ * How many shares are still free to be reserved by a new sell order, optionally ignoring one
+ * order id already resting.
  *
  * The venue counts what nothing else has a claim on, not what is owned — the same arithmetic
  * `restingSells` documents. A hand-placed take-profit limit over half the position leaves half
  * the position stoppable, and arming for the full qty there is not "more protection", it is an
  * order the venue refuses every single tick.
+ *
+ * `ignoreOrderId` exists for the OCO repair path: cancelling a lone leg before re-arming frees
+ * its qty, and the candidate has to be sized against that FUTURE state, not the current one
+ * where the stale leg still shows as reserved.
  */
-function freeQty(position: Position, orders: OpenOrder[]): number {
+function freeQty(position: Position, orders: OpenOrder[], ignoreOrderId?: string): number {
   const reserved = orders
-    .filter(o => o.side === 'sell' && sameSymbol(o.symbol, position.symbol))
+    .filter(o => o.side === 'sell' && sameSymbol(o.symbol, position.symbol) && o.id !== ignoreOrderId)
     .reduce((sum, o) => sum + Math.max(0, o.qty - o.filled), 0);
   return position.qty - reserved;
 }
@@ -123,7 +180,13 @@ export function needsArming(
   for (const p of positions) {
     if (isCryptoSymbol(p.symbol) || p.qty <= 0) continue;
 
-    const stopLevel = snapshots[canonicalSymbol(p.symbol)]?.stopLevel;
+    const snap = snapshots[canonicalSymbol(p.symbol)];
+    // A recorded take-profit means this position belongs to the OCO pair, owned exclusively by
+    // `needsOcoAction` below — arming a lone stop here as well would double-reserve the qty the
+    // pair needs and race the pair's own arm/repair logic over the same order.
+    if (snap?.takeProfitLevel != null && snap.takeProfitLevel > 0) continue;
+
+    const stopLevel = snap?.stopLevel;
     if (stopLevel == null || !(stopLevel > 0)) continue;
 
     if (restingStop(orders, p.symbol)) continue;
@@ -135,6 +198,81 @@ export function needsArming(
     if (mark != null && Number.isFinite(mark) && mark > 0 && stopLevel >= mark) continue;
 
     out.push({ symbol: p.symbol, qty, stopLevel });
+  }
+
+  return out;
+}
+
+export type OcoAction =
+  | { kind: 'arm'; symbol: string; qty: number; stopLevel: number; takeProfitLevel: number }
+  | {
+      kind: 'repair';
+      symbol: string;
+      qty: number;
+      stopLevel: number;
+      takeProfitLevel: number;
+      staleLegId: string;
+      staleLegSide: 'stop' | 'takeProfit';
+    };
+
+/**
+ * Positions holding BOTH a recorded stop and a recorded take-profit, and what the venue book
+ * needs to do about them.
+ *
+ * Four states per position, same join discipline as `needsArming` (`sameSymbol`, skip when
+ * already through either level with a measurable mark):
+ *  - both legs resting → nothing to do, not returned.
+ *  - neither leg resting → `arm` the pair fresh.
+ *  - exactly one leg resting (a position protected before this feature existed, or a prior
+ *    failed pairing) → `repair`: the lone leg is stale and must be cancelled before the pair can
+ *    be armed, since the venue will not accept a second full-qty sell alongside it. The qty for
+ *    the fresh pair is sized against the state AFTER that cancellation (`freeQty`'s
+ *    `ignoreOrderId`), not the current one where the stale leg still reserves shares.
+ */
+export function needsOcoAction(
+  positions: Position[],
+  orders: OpenOrder[],
+  snapshots: Record<string, PositionSnapshot>,
+): OcoAction[] {
+  const out: OcoAction[] = [];
+
+  for (const p of positions) {
+    if (isCryptoSymbol(p.symbol) || p.qty <= 0) continue;
+
+    const snap = snapshots[canonicalSymbol(p.symbol)];
+    const stopLevel = snap?.stopLevel;
+    const takeProfitLevel = snap?.takeProfitLevel;
+    if (stopLevel == null || !(stopLevel > 0)) continue;
+    if (takeProfitLevel == null || !(takeProfitLevel > 0)) continue;
+
+    const mark = p.marketValue != null && p.qty !== 0 ? p.marketValue / p.qty : null;
+    const markKnown = mark != null && Number.isFinite(mark) && mark > 0;
+    if (markKnown && (stopLevel >= mark! || takeProfitLevel <= mark!)) continue;
+
+    const stopLeg = restingStop(orders, p.symbol);
+    const tpLeg = restingTakeProfit(orders, p.symbol);
+
+    if (stopLeg && tpLeg) continue;
+
+    if (!stopLeg && !tpLeg) {
+      const qty = freeQty(p, orders);
+      if (!(qty > 0)) continue;
+      out.push({ symbol: p.symbol, qty, stopLevel, takeProfitLevel, kind: 'arm' });
+      continue;
+    }
+
+    const staleLeg = stopLeg ?? tpLeg!;
+    const qty = freeQty(p, orders, staleLeg.id);
+    if (!(qty > 0)) continue;
+    out.push({
+      symbol: p.symbol,
+      qty,
+      stopLevel,
+      takeProfitLevel,
+      kind: 'repair',
+      staleLegId: staleLeg.id,
+      staleLegSide: stopLeg ? 'stop' : 'takeProfit',
+    });
   }
 
   return out;
@@ -180,6 +318,20 @@ export function canTighten(current: number | undefined | null, next: number): bo
   if (!Number.isFinite(next) || next <= 0) return false;
   if (current == null || !Number.isFinite(current) || current <= 0) return true;
   return next >= current;
+}
+
+/**
+ * Tighten-only, mirrored: a take-profit may be lowered toward the market or restated, never
+ * raised further away.
+ *
+ * Same "never loosen protection" discipline as `canTighten`, on the other side of the position —
+ * a take-profit that keeps moving up is a target that keeps getting harder to reach, which is a
+ * risk decision dressed up as a tighten.
+ */
+export function canLowerTakeProfit(current: number | undefined | null, next: number): boolean {
+  if (!Number.isFinite(next) || next <= 0) return false;
+  if (current == null || !Number.isFinite(current) || current <= 0) return true;
+  return next <= current;
 }
 
 // ── The symbol lock ───────────────────────────────────────────────────────────
@@ -295,6 +447,103 @@ export async function moveStopTo(
   });
 }
 
+export type OcoArmResult =
+  | { ok: true; stopOrderId: string; takeProfitOrderId: string }
+  | { ok: false; reason: string };
+
+/**
+ * Place the linked stop + take-profit pair and return both venue ids. Writes NO state — same
+ * split as `armStop`, for the same reason: the two callers (entry, sweep) record the ids in
+ * different places.
+ *
+ * Never throws — same contract as `armStop`.
+ */
+export async function armOco(
+  symbol: string,
+  qty: number,
+  stopLevel: number,
+  takeProfitLevel: number,
+): Promise<OcoArmResult> {
+  const plan = ocoOrderFor(symbol, qty, stopLevel, takeProfitLevel);
+  if (!plan.ok) return plan;
+
+  try {
+    const { stopOrderId, takeProfitOrderId } = await broker.placeOco(plan.request);
+    logger.trade(
+      `OCO armed for ${symbol}: ${qty} @ stop $${stopLevel} / target $${takeProfitLevel} `
+        + `resting as ${stopOrderId} / ${takeProfitOrderId}`,
+    );
+    return { ok: true, stopOrderId, takeProfitOrderId };
+  } catch (err: any) {
+    return { ok: false, reason: err?.venueMessage ?? err?.message ?? String(err) };
+  }
+}
+
+/**
+ * Move both legs of a resting OCO pair, arming a fresh pair if neither rests, and record where
+ * they now live.
+ *
+ * Replaces both legs in place rather than cancel-and-place, for the same reason `moveStopTo`
+ * does. The two replace calls run under `Promise.allSettled`, not `Promise.all`: if the
+ * take-profit replace is refused after the stop replace already succeeded, `Promise.all` would
+ * reject the whole call and the stop's new id — a real, live order at the venue — would never be
+ * recorded. `allSettled` lets each leg's outcome be handled on its own, so a successfully moved
+ * leg is never stranded because its sibling failed.
+ */
+export async function moveOcoTo(
+  symbol: string,
+  qty: number,
+  nextStop: number,
+  nextTakeProfit: number,
+): Promise<OcoArmResult> {
+  return withStopLock(symbol, async () => {
+    const snap = getPositionSnapshot(symbol);
+    const existingStopId = snap?.stopOrderId;
+    const existingTpId = snap?.takeProfitOrderId;
+
+    if (existingStopId && existingTpId) {
+      const [stopResult, tpResult] = await Promise.allSettled([
+        broker.replaceStopOrder(existingStopId, nextStop),
+        broker.replaceTakeProfitOrder(existingTpId, nextTakeProfit),
+      ]);
+
+      const patch: Partial<PositionSnapshot> = {};
+      const failures: string[] = [];
+
+      if (stopResult.status === 'fulfilled') {
+        patch.stopOrderId = stopResult.value.id;
+      } else {
+        const reason = (stopResult.reason as any)?.venueMessage ?? stopResult.reason?.message ?? String(stopResult.reason);
+        failures.push(`stop leg (order ${existingStopId}): ${reason}`);
+      }
+
+      if (tpResult.status === 'fulfilled') {
+        patch.takeProfitOrderId = tpResult.value.id;
+      } else {
+        const reason = (tpResult.reason as any)?.venueMessage ?? tpResult.reason?.message ?? String(tpResult.reason);
+        failures.push(`take-profit leg (order ${existingTpId}): ${reason}`);
+      }
+
+      if (Object.keys(patch).length > 0) patchPositionSnapshot(symbol, patch);
+
+      if (failures.length > 0) {
+        return { ok: false as const, reason: `could not move the OCO pair — ${failures.join('; ')}` };
+      }
+      logger.trade(`OCO for ${symbol} moved to stop $${nextStop} / target $${nextTakeProfit}`);
+      return { ok: true as const, stopOrderId: patch.stopOrderId!, takeProfitOrderId: patch.takeProfitOrderId! };
+    }
+
+    const armed = await armOco(symbol, qty, nextStop, nextTakeProfit);
+    if (armed.ok) {
+      patchPositionSnapshot(symbol, {
+        stopOrderId: armed.stopOrderId,
+        takeProfitOrderId: armed.takeProfitOrderId,
+      });
+    }
+    return armed;
+  });
+}
+
 /**
  * Failure reasons already logged, per symbol, so a position that cannot be armed does not
  * write the same warning every 60 seconds for the rest of the day. Cleared when the symbol
@@ -405,6 +654,19 @@ export async function sweepStops(): Promise<void> {
     }
   }
 
+  // Symmetric to the stop-id clearing above, for the take-profit leg of an OCO pair.
+  for (const p of positions) {
+    const recorded = getPositionSnapshot(p.symbol)?.takeProfitOrderId;
+    if (!recorded || isStopLocked(p.symbol)) continue;
+    if (!orders.some(o => o.id === recorded)) {
+      patchPositionSnapshot(p.symbol, { takeProfitOrderId: undefined });
+      logger.warn(
+        `[Stops] ${p.symbol} recorded take-profit order ${recorded}, which is no longer resting `
+          + `at the venue — cleared. It filled, expired, or was cancelled outside this system.`,
+      );
+    }
+  }
+
   for (const candidate of needsArming(positions, orders, getState().positionSnapshots)) {
     // Re-checked HERE, not only in the selection above: an exit or an entry can take the lock
     // during any of the awaits in this loop, and the selection is already stale by then.
@@ -418,6 +680,40 @@ export async function sweepStops(): Promise<void> {
       lastFailure.delete(canonicalSymbol(candidate.symbol));
     } else {
       logFailureOnce(candidate.symbol, armed.reason);
+    }
+  }
+
+  for (const action of needsOcoAction(positions, orders, getState().positionSnapshots)) {
+    // Re-checked HERE for the same reason as the stop loop above.
+    if (isStopLocked(action.symbol)) continue;
+
+    const armed = await withStopLock(action.symbol, async () => {
+      if (action.kind === 'repair') {
+        try {
+          await broker.cancelOrder(action.staleLegId);
+        } catch (err: any) {
+          // "Already gone" is fine — the leg may have filled or been cancelled outside this
+          // system between the read that found it and now. A genuine refusal just means the
+          // fresh pair below will be rejected too (still-reserved qty), which is reported the
+          // same way any other arm failure is.
+          logger.warn(
+            `[Stops] ${action.symbol} could not cancel stale ${action.staleLegSide} leg `
+              + `${action.staleLegId} before repairing the OCO pair: ${err?.message ?? err} `
+              + `(continuing — treated as already gone)`,
+          );
+        }
+      }
+      return armOco(action.symbol, action.qty, action.stopLevel, action.takeProfitLevel);
+    });
+
+    if (armed.ok) {
+      patchPositionSnapshot(action.symbol, {
+        stopOrderId: armed.stopOrderId,
+        takeProfitOrderId: armed.takeProfitOrderId,
+      });
+      lastFailure.delete(canonicalSymbol(action.symbol));
+    } else {
+      logFailureOnce(action.symbol, armed.reason);
     }
   }
 }

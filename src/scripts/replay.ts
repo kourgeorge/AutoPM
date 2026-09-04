@@ -57,7 +57,16 @@ import { computeSignals, signalTally } from '../strategy/signals';
 import { dailyLossStatus } from '../strategy/riskManager';
 import { GuardRejection, earningsVeto, enterPosition, entrySignalVeto, exposureVeto, positionSizeVeto, restingSells } from '../strategy/orderManager';
 import type { Fundamentals } from '../collect/fundamentals';
-import { canTighten, needsArming, stopOrderFor, unheldSnapshots } from '../strategy/stopOrders';
+import {
+  canLowerTakeProfit,
+  canTighten,
+  needsArming,
+  needsOcoAction,
+  ocoOrderFor,
+  restingTakeProfit,
+  stopOrderFor,
+  unheldSnapshots,
+} from '../strategy/stopOrders';
 import { isCryptoSymbol } from '../core/symbols';
 import {
   getState,
@@ -1799,6 +1808,155 @@ function venueStops(): void {
 }
 
 /**
+ * 30. OCO pairing — the take-profit leg rests at the venue linked to the stop, not alone.
+ *
+ *     A stop and a take-profit for the same shares can't both rest independently — the venue
+ *     reserves qty against the first sell it sees, so a naive second order is refused every
+ *     tick, forever. Everything here guards a place where that gets confused: bracketing a
+ *     position with an inverted target, mistaking a hand-placed limit for the managed leg,
+ *     double-arming a position `needsArming` already owns, and — the case with no history to
+ *     learn from — a position that has exactly one leg resting, which only happens once
+ *     (existed before this feature, or a prior pairing attempt landed one leg and failed the
+ *     other) and must be repaired rather than left half-protected forever.
+ *
+ *     Only the pure selections are asserted, same reason as scenario 22: `broker` has no
+ *     injection seam here.
+ */
+function ocoPairing(): void {
+  const pos = (p: Partial<Position>): Position => ({
+    symbol: 'AAPL', qty: 10, avgCost: 100, marketValue: 1100, ...p,
+  });
+  const order = (o: Partial<OpenOrder>): OpenOrder => ({
+    id: 'o1', symbol: 'AAPL', side: 'sell', qty: 10, filled: 0,
+    type: 'stop', rawType: 'stop', status: 'new', ...o,
+  });
+
+  // ── ocoOrderFor: what may be sent, and what may not
+  const pair = ocoOrderFor('AAPL', 10, 95, 110);
+  check(
+    'a level pair and shares gets a well-formed bracket request',
+    pair.ok && pair.request.qty === 10 && pair.request.stopPrice === 95 && pair.request.takeProfitPrice === 110,
+    JSON.stringify(pair),
+  );
+
+  for (const sym of ['BTC/USD', 'BTCUSD']) {
+    const c = ocoOrderFor(sym, 0.5, 38000, 44000);
+    check(
+      `no pair can rest for ${sym}, and the refusal says why — the same crypto guard as the lone stop`,
+      !c.ok && /crypto/i.test(c.reason),
+      c.ok ? 'placed anyway' : c.reason,
+    );
+  }
+
+  const short = ocoOrderFor('AAPL', -10, 95, 110);
+  check(
+    'a short is skipped rather than guessed at, same as the lone-stop path',
+    !short.ok && /short/i.test(short.reason),
+    short.ok ? 'placed anyway' : short.reason,
+  );
+
+  check('no stop level recorded means no pair', !ocoOrderFor('AAPL', 10, 0, 110).ok);
+  check('no take-profit level recorded means no pair', !ocoOrderFor('AAPL', 10, 95, 0).ok);
+
+  const inverted = ocoOrderFor('AAPL', 10, 110, 95);
+  check(
+    "a target at or below the stop can't bracket anything",
+    !inverted.ok && /inverted/i.test(inverted.reason),
+    inverted.ok ? 'placed anyway' : inverted.reason,
+  );
+
+  // ── restingTakeProfit: found by type and side, not confused with a stop or a buy
+  const book = [
+    order({ id: 'tp', type: 'limit', rawType: 'limit', limitPrice: 110 }),
+    order({ id: 'stop', type: 'stop', rawType: 'stop', stopPrice: 95 }),
+    order({ id: 'buy', side: 'buy', type: 'limit', rawType: 'limit', limitPrice: 90 }),
+  ];
+  check('a resting sell limit is the take-profit leg', restingTakeProfit(book, 'AAPL')?.id === 'tp');
+  check(
+    'a buy limit on the same symbol is not mistaken for a take-profit',
+    restingTakeProfit([order({ id: 'buy', side: 'buy', type: 'limit', rawType: 'limit' })], 'AAPL') === undefined,
+  );
+  // Same naming split as the stop side — the venue reports BTCUSD, the snapshot may hold BTC/USD.
+  const cryptoTp = restingTakeProfit([order({ id: 'btc-tp', symbol: 'BTCUSD', type: 'limit', rawType: 'limit' })], 'BTC/USD');
+  check('a take-profit leg is found across the crypto naming split', cryptoTp?.id === 'btc-tp');
+
+  // ── needsOcoAction: the four-state join across positions, orders and snapshots
+  const snaps: Record<string, PositionSnapshot> = {
+    AAPL:   snapshotSeed('AAPL', { entryPrice: 100, stopLevel: 95, takeProfitLevel: 110 }, OPENED),   // neither leg → arm
+    MSFT:   snapshotSeed('MSFT', { entryPrice: 120, stopLevel: 110, takeProfitLevel: 140 }, OPENED),  // both legs → nothing
+    TSLA:   snapshotSeed('TSLA', { entryPrice: 200, stopLevel: 180, takeProfitLevel: 220 }, OPENED),  // stop leg only → repair
+    GE:     snapshotSeed('GE',   { entryPrice: 50,  stopLevel: 45,  takeProfitLevel: 65 }, OPENED),   // tp leg only → repair
+    XLE:    snapshotSeed('XLE',  { entryPrice: 80,  stopLevel: 75 }, OPENED),                          // no tp recorded → needsArming's, not this
+    BTCUSD: snapshotSeed('BTC/USD', { entryPrice: 40000, stopLevel: 38000, takeProfitLevel: 44000 }, OPENED), // crypto → nothing can rest
+    RIOT:   snapshotSeed('RIOT', { entryPrice: 30,  stopLevel: 29,  takeProfitLevel: 32 }, OPENED),    // already through the stop
+    NFLX:   snapshotSeed('NFLX', { entryPrice: 300, stopLevel: 290, takeProfitLevel: 350 }, OPENED),   // already through the target
+  };
+  const positions = [
+    pos({ symbol: 'AAPL', qty: 10, marketValue: 1000 }),
+    pos({ symbol: 'MSFT', qty: 5,  marketValue: 600 }),
+    pos({ symbol: 'TSLA', qty: 8,  marketValue: 1600 }),
+    pos({ symbol: 'GE',   qty: 20, marketValue: 1100 }),
+    pos({ symbol: 'XLE',  qty: 100, marketValue: 8000 }),
+    pos({ symbol: 'BTCUSD', qty: 0.5, marketValue: 20000 }),
+    pos({ symbol: 'GOOG', qty: -10, marketValue: -1500 }),          // a short, whatever the snapshot says
+    pos({ symbol: 'RIOT', qty: 50, marketValue: 1450 }),             // mark 29 — at the stop
+    pos({ symbol: 'NFLX', qty: 10, marketValue: 3600 }),             // mark 360 — through the target
+  ];
+  const orders = [
+    order({ id: 'msft-stop', symbol: 'MSFT', qty: 5,  stopPrice: 110 }),
+    order({ id: 'msft-tp',   symbol: 'MSFT', qty: 5,  type: 'limit', rawType: 'limit', limitPrice: 140 }),
+    order({ id: 'tsla-stop', symbol: 'TSLA', qty: 8,  stopPrice: 180 }),
+    order({ id: 'ge-tp',     symbol: 'GE',   qty: 20, type: 'limit', rawType: 'limit', limitPrice: 65 }),
+  ];
+  snaps.GOOG = snapshotSeed('GOOG', { entryPrice: 150, stopLevel: 140, takeProfitLevel: 170 }, OPENED);
+
+  const actions = needsOcoAction(positions, orders, snaps);
+  const bySymbol = new Map(actions.map(a => [a.symbol, a]));
+
+  check(
+    'exactly the positions needing an arm or a repair are selected, nothing more',
+    JSON.stringify([...bySymbol.keys()].sort()) === JSON.stringify(['AAPL', 'GE', 'TSLA']),
+    [...bySymbol.keys()].join(', ') || '(none)',
+  );
+  check('neither leg resting means arm the pair fresh', bySymbol.get('AAPL')?.kind === 'arm');
+  check(
+    'a position with both legs already resting needs nothing',
+    !bySymbol.has('MSFT'),
+  );
+  const tsla = bySymbol.get('TSLA');
+  const ge = bySymbol.get('GE');
+  check(
+    'a stop leg with no take-profit leg is a stale single, not a fresh arm — it must be repaired',
+    tsla?.kind === 'repair' && tsla.staleLegSide === 'stop',
+  );
+  check(
+    'a take-profit leg with no stop leg is the mirror case',
+    ge?.kind === 'repair' && ge.staleLegSide === 'takeProfit',
+  );
+  check(
+    'the repair candidate is sized against the qty freed by cancelling the stale leg, not the current reservation',
+    tsla?.qty === 8 && ge?.qty === 20,
+    `TSLA ${tsla?.qty}, GE ${ge?.qty}`,
+  );
+  check(
+    'a position with no take-profit recorded belongs to needsArming, not this join',
+    !bySymbol.has('XLE'),
+  );
+  check('a crypto pair with both levels recorded still cannot hold either leg', !bySymbol.has('BTCUSD'));
+  check('a short keeps its snapshot but is never armed here either', !bySymbol.has('GOOG'));
+  check('a position already at its stop is left to the breach detector, not armed instantly', !bySymbol.has('RIOT'));
+  check('a position already through its target is left alone, not armed instantly', !bySymbol.has('NFLX'));
+  check('nothing held means nothing to arm or repair', needsOcoAction([], orders, snaps).length === 0);
+
+  // ── canLowerTakeProfit: the mirror-image tighten rule — toward the market, never away
+  check('lowering a take-profit toward the market is allowed', canLowerTakeProfit(110, 105));
+  check('raising a take-profit further away is refused', !canLowerTakeProfit(110, 115));
+  check('restating the same target is not loosening, so a retry is not a violation', canLowerTakeProfit(110, 110));
+  check('nothing recorded yet means nothing to loosen', canLowerTakeProfit(undefined, 110));
+  check('a nonsense level is refused whatever is recorded', !canLowerTakeProfit(110, 0));
+}
+
+/**
  * Reversal — the sign convention, and the size interaction that needs a market cap.
  *
  * Two things are worth asserting here and the rest is arithmetic nobody will break. First the
@@ -2083,6 +2241,7 @@ async function main(): Promise<void> {
   await scenario('27. Portfolio drawdown — the daily reset does not touch the peak', plain, portfolioDrawdownSurvivesReset);
   await scenario('28. Concentration flutter — one name either side of the 15% limit', plain, concentrationFlutter);
   await scenario('29. Concentration — a single name alone breaching the limit', plain, concentrationSingleBreach);
+  await scenario('30. OCO pairing — the take-profit leg rests linked to the stop, not alone', plain, ocoPairing);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {

@@ -14,7 +14,7 @@ import { getFundamentals, type Fundamentals } from '../collect/fundamentals';
 import { logger } from '../core/logger';
 import { isCryptoSymbol, sameSymbol } from '../core/symbols';
 import { getPositionSnapshot, getState, patchPositionSnapshot } from '../state/state';
-import { armStop, withStopLock, type ArmResult } from './stopOrders';
+import { armOco, armStop, withStopLock, type OcoArmResult } from './stopOrders';
 import { computeSignals, signalTally } from './signals';
 import { Bar, SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
@@ -316,15 +316,16 @@ async function refuseIfEarningsWindow(symbol: string): Promise<void> {
  * given, so returning the requested number here would record a position size that never
  * existed.
  *
- * `venueStop` is the outcome of arming a real resting stop at the broker. It is returned rather
- * than written here because the snapshot does not exist yet — `patchPositionSnapshot` is a no-op
- * for an unknown symbol, and the caller's single `openPositionSnapshot` call is the one write.
- * A failure there is reported, never thrown: see `armEntryStop`.
+ * `venueOco` is the outcome of arming the real resting stop/take-profit pair at the broker. It is
+ * returned rather than written here because the snapshot does not exist yet —
+ * `patchPositionSnapshot` is a no-op for an unknown symbol, and the caller's single
+ * `openPositionSnapshot` call is the one write. A failure there is reported, never thrown: see
+ * `armEntryOco`.
  */
 export async function enterPosition(
   signal: SignalResult,
   qty: number,
-): Promise<{ orderId: string; qty: number; venueStop: ArmResult }> {
+): Promise<{ orderId: string; qty: number; venueOco: OcoArmResult }> {
   const { symbol, price, stopLoss, takeProfit, atr } = signal;
 
   // Local and free, so first: a NaN qty must be reported as a malformed intent, not as
@@ -464,8 +465,8 @@ export async function enterPosition(
   const { id } = await broker.placeOrder({ symbol, side: 'buy', qty: regimeQty, type: 'market' });
   logger.trade(`Order ${id} submitted for ${symbol}`);
 
-  const venueStop = await armEntryStop(symbol, stopLoss);
-  return { orderId: id, qty: regimeQty, venueStop };
+  const venueOco = await armEntryOco(symbol, stopLoss, takeProfit);
+  return { orderId: id, qty: regimeQty, venueOco };
 }
 
 /**
@@ -484,19 +485,20 @@ const FILL_WAIT_MS = 4_000;
 const FILL_POLL_MS = 400;
 
 /**
- * Arm the venue stop for a position just opened, and report rather than throw.
+ * Arm the venue stop/take-profit pair for a position just opened, and report rather than throw.
  *
  * NEVER FAILS THE ENTRY. The shares are already bought by the time this runs, so throwing would
  * report a failed entry for a position that exists — the worst of the available outcomes, because
  * the caller would not journal it. Everything this can fail at is also repaired by the sweep on
- * the next tick, and the recorded `stopLevel` and its detector are untouched either way.
+ * the next tick, and the recorded `stopLevel`/`takeProfitLevel` and their detectors are untouched
+ * either way.
  *
  * Under the stop lock, and this is not belt-and-braces. A LEFTOVER SNAPSHOT from a previous closed
- * trade in the same symbol is a documented fact of this system, and it carries the OLD stop level.
- * A sweep landing during the poll below sees a held position and that stale level, and would arm
- * at last trade's stop while this arms at today's.
+ * trade in the same symbol is a documented fact of this system, and it carries the OLD levels. A
+ * sweep landing during the poll below sees a held position and those stale levels, and would arm
+ * at last trade's stop/target while this arms at today's.
  */
-async function armEntryStop(symbol: string, stopLoss: number): Promise<ArmResult> {
+async function armEntryOco(symbol: string, stopLoss: number, takeProfit: number): Promise<OcoArmResult> {
   return withStopLock(symbol, async () => {
     const deadline = Date.now() + FILL_WAIT_MS;
     let lastRefusal: string | null = null;
@@ -512,9 +514,9 @@ async function armEntryStop(symbol: string, stopLoss: number): Promise<ArmResult
       }
 
       // The FILLED qty, not the requested one. A partial fill holds fewer shares than were
-      // ordered, and a stop for more than is held is refused in full rather than trimmed.
+      // ordered, and a pair for more than is held is refused in full rather than trimmed.
       if (held > 0) {
-        const armed = await armStop(symbol, held, stopLoss);
+        const armed = await armOco(symbol, held, stopLoss, takeProfit);
         if (armed.ok) return armed;
         // KEEP TRYING until the deadline rather than surrendering to the first refusal. The
         // position existing does not mean its shares can be sold yet: Alpaca reserves against
@@ -532,10 +534,11 @@ async function armEntryStop(symbol: string, stopLoss: number): Promise<ArmResult
     return {
       ok: false,
       reason: lastRefusal
-        ? `the shares were held but the stop was refused for ${FILL_WAIT_MS / 1000}s: ${lastRefusal}`
+        ? `the shares were held but the stop/take-profit pair was refused for ${FILL_WAIT_MS / 1000}s: ${lastRefusal}`
         : `the buy did not confirm as a position within ${FILL_WAIT_MS / 1000}s, so there were `
-          + `no settled shares to place a stop against. The recorded level is being watched by the `
-          + `breach detector, and the stop sweep will arm the venue stop on a later tick.`,
+          + `no settled shares to place a stop/take-profit pair against. The recorded levels are `
+          + `being watched by the breach detector, and the stop sweep will arm the venue pair on a `
+          + `later tick.`,
     };
   });
 }
@@ -669,16 +672,19 @@ export async function exitPosition(
   // the sell below would fail with `insufficient qty available`: the precise error the cancel loop
   // exists to prevent, reintroduced by the thing meant to prevent it.
   return withStopLock(symbol, async () => {
-    // Which resting stop is OURS, read before anything is cancelled. It decides what may be put
-    // back if the sell fails — see the restore below.
+    // Which resting stop/take-profit legs are OURS, read before anything is cancelled. It
+    // decides what may be put back if the sell fails — see the restore below.
     const ourStopId = getPositionSnapshot(symbol)?.stopOrderId;
     const recordedStop = getPositionSnapshot(symbol)?.stopLevel;
+    const ourTpId = getPositionSnapshot(symbol)?.takeProfitOrderId;
+    const recordedTakeProfit = getPositionSnapshot(symbol)?.takeProfitLevel;
 
     // Clear the reservation before selling, and only AFTER approval — cancelling the
     // protection on an exit the operator then denies would leave the position worse off than
     // if the tool had never been called.
     const cancelled: string[] = [];
     let cancelledOurStop = false;
+    let cancelledOurTp = false;
     for (const order of restingSells(await broker.getOpenOrders(), symbol)) {
       try {
         await broker.cancelOrder(order.id);
@@ -698,6 +704,7 @@ export async function exitPosition(
         );
       }
       if (order.id === ourStopId) cancelledOurStop = true;
+      if (order.id === ourTpId) cancelledOurTp = true;
       cancelled.push(describe(order));
       logger.trade(`Cancelled ${describe(order)} — it reserved the ${symbol} shares`);
     }
@@ -705,6 +712,7 @@ export async function exitPosition(
     // Recorded the moment it is true. The order is gone from the venue, so an id still sitting in
     // state would read as protection that is not there.
     if (cancelledOurStop) patchPositionSnapshot(symbol, { stopOrderId: undefined });
+    if (cancelledOurTp) patchPositionSnapshot(symbol, { takeProfitOrderId: undefined });
 
     // CAVEAT, IBKR ONLY: `IBKRBroker.cancelOrder` does not await anything — TWS takes the
     // request and confirms asynchronously, so the loop above reports success it has not seen.
@@ -716,13 +724,38 @@ export async function exitPosition(
     } catch (err) {
       // The regression this feature creates, and its repair. Before venue stops the cancel loop
       // could only ever remove protection this system had not placed, so a failed sell left the
-      // position exactly as protected as it had ever been. Now the loop takes down OUR stop
+      // position exactly as protected as it had ever been. Now the loop takes down OUR leg(s)
       // first, and a failed sell would leave the position naked with nobody having decided that.
       //
       // Only ours goes back. A hand-placed order cancelled alongside it is not this system's to
       // recreate — its qty, type and intent were somebody else's decision — and `cancelled[]`
       // already tells the operator it is gone.
-      if (cancelledOurStop && recordedStop != null && recordedStop > 0) {
+      //
+      // A position with a recorded take-profit is pair-managed: restore both legs together via
+      // `armOco`, whichever of the two was actually cancelled — the venue frees the shares that
+      // failed sell never took, so the pair sizes against the position's full qty either way. A
+      // position with no take-profit recorded is a legacy single-stop position (or one whose
+      // stop pre-dates this feature); restore the stop alone.
+      if (cancelledOurStop && cancelledOurTp && recordedStop != null && recordedStop > 0
+        && recordedTakeProfit != null && recordedTakeProfit > 0) {
+        const restored = await armOco(symbol, pos.qty, recordedStop, recordedTakeProfit);
+        if (restored.ok) {
+          patchPositionSnapshot(symbol, {
+            stopOrderId: restored.stopOrderId,
+            takeProfitOrderId: restored.takeProfitOrderId,
+          });
+          logger.warn(
+            `[Guard] ${symbol} sell failed — its stop/take-profit pair was put back at `
+              + `$${recordedStop}/$${recordedTakeProfit} `
+              + `(orders ${restored.stopOrderId}/${restored.takeProfitOrderId})`,
+          );
+        } else {
+          logger.error(
+            `[Guard] ${symbol} sell failed AND its stop/take-profit pair could not be put back — `
+              + `the position is unprotected at the venue: ${restored.reason}`,
+          );
+        }
+      } else if (cancelledOurStop && recordedStop != null && recordedStop > 0) {
         const restored = await armStop(symbol, pos.qty, recordedStop);
         if (restored.ok) {
           patchPositionSnapshot(symbol, { stopOrderId: restored.orderId });
