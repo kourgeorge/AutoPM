@@ -11,7 +11,7 @@
  * can ignore it by forgetting to check a field.
  */
 
-import type { OrderRequest } from './IBroker';
+import type { OcoRequest, OrderRequest } from './IBroker';
 
 /**
  * What was asked of the venue. Not every request is a new order: moving a resting stop names
@@ -20,12 +20,21 @@ import type { OrderRequest } from './IBroker';
  */
 export type BrokerAttempt =
   | OrderRequest
-  | { replaceStopOrderId: string; stopPrice: number };
+  | OcoRequest
+  | { replaceStopOrderId: string; stopPrice: number }
+  | { replaceTakeProfitOrderId: string; limitPrice: number };
 
 function describe(req: BrokerAttempt): string {
-  return 'replaceStopOrderId' in req
-    ? `stop move on order ${req.replaceStopOrderId} to ${req.stopPrice}`
-    : `${req.side} ${req.qty} ${req.symbol}`;
+  if ('replaceStopOrderId' in req) {
+    return `stop move on order ${req.replaceStopOrderId} to ${req.stopPrice}`;
+  }
+  if ('replaceTakeProfitOrderId' in req) {
+    return `take-profit move on order ${req.replaceTakeProfitOrderId} to ${req.limitPrice}`;
+  }
+  if ('stopPrice' in req && 'takeProfitPrice' in req) {
+    return `OCO sell ${req.qty} ${req.symbol} (stop $${req.stopPrice} / target $${req.takeProfitPrice})`;
+  }
+  return `${req.side} ${req.qty} ${req.symbol}`;
 }
 
 export class BrokerRejection extends Error {

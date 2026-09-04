@@ -61,6 +61,17 @@ export interface PositionSnapshot {
    * than leaving it to be trusted, because a stale id reads as protection that is not there.
    */
   stopOrderId?: string;
+
+  /**
+   * The venue's id for the take-profit leg resting at `takeProfitLevel`, when one is resting.
+   *
+   * Same rule as `stopOrderId`, one leg over: written when the OCO pair is armed, rewritten on
+   * every tighten (Alpaca mints a new id on replace, IBKR keeps the old one), cleared when the
+   * order leaves the venue. `undefined` means no take-profit leg is resting — no
+   * `takeProfitLevel` recorded, a crypto/short position that can't hold one, an entry not yet
+   * armed, or a leg that already filled or was cancelled. Never "unknown".
+   */
+  takeProfitOrderId?: string;
 }
 
 export interface SystemState {
@@ -188,6 +199,7 @@ const SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
   'openedAt',
   'entryDecisionId',
   'stopOrderId',
+  'takeProfitOrderId',
 ]);
 
 function keepDeclaredFields(snap: PositionSnapshot): PositionSnapshot {

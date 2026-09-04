@@ -112,6 +112,20 @@ export interface Fill {
   at: string;
 }
 
+/**
+ * A linked stop + take-profit pair for the same shares.
+ *
+ * The two legs can't be placed as independent sell orders: the venue reserves qty against the
+ * first sell order it sees for a symbol, so a second full-qty sell for the same shares is
+ * rejected. This is one placement call so the venue links them instead.
+ */
+export interface OcoRequest {
+  symbol: string;
+  qty: number;
+  stopPrice: number;
+  takeProfitPrice: number;
+}
+
 export interface IBroker {
   getPositions(): Promise<Position[]>;
   getAccountInfo(): Promise<AccountInfo>;
@@ -131,6 +145,19 @@ export interface IBroker {
    * no protection resting anywhere, which is the exact thing a venue stop is for.
    */
   replaceStopOrder(id: string, stopPrice: number): Promise<{ id: string }>;
+  /**
+   * Place a linked stop + take-profit pair for the same shares. See {@link OcoRequest}.
+   *
+   * Both ids are returned for the same reason `replaceStopOrder` returns one: whichever leg is
+   * later tightened needs an id the caller can hand back to `replaceStopOrder` or
+   * `replaceTakeProfitOrder`.
+   */
+  placeOco(req: OcoRequest): Promise<{ stopOrderId: string; takeProfitOrderId: string }>;
+  /**
+   * Move a resting take-profit's limit price, and return THE ID THE LEG NOW LIVES UNDER — same
+   * identity caveat as `replaceStopOrder` (Alpaca mints a new id, IBKR keeps the old one).
+   */
+  replaceTakeProfitOrder(id: string, limitPrice: number): Promise<{ id: string }>;
   isMarketOpen(): Promise<boolean>;
   /**
    * Recent executions, newest-last.

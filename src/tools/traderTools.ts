@@ -32,7 +32,15 @@ import {
   removePositionSnapshot,
 } from '../state/state';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
-import { canTighten, moveStopTo, type ArmResult } from '../strategy/stopOrders';
+import {
+  armOco,
+  canLowerTakeProfit,
+  canTighten,
+  moveOcoTo,
+  moveStopTo,
+  type ArmResult,
+  type OcoArmResult,
+} from '../strategy/stopOrders';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
@@ -941,6 +949,28 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     });
   }
 
+  // Mirror check for the take-profit side: it may only move toward the market, never further
+  // away. Only checked when the caller actually supplied one — omitting takeProfit leaves the
+  // recorded level, if any, untouched.
+  if (takeProfit != null && !canLowerTakeProfit(snap?.takeProfitLevel, takeProfit)) {
+    recordDecision(decision('veto', 'guard', {
+      symbol,
+      rationale: thesis,
+      vetoRule: 'take_profit_loosened',
+      intendedTarget: takeProfit,
+      price: currentPrice,
+    }));
+    return JSON.stringify({
+      error: `takeProfit $${takeProfit} is above the take-profit already recorded for ${symbol} ($${snap!.takeProfitLevel}). `
+        + `Take-profits are tighten-only: they can be lowered toward the market or restated, never raised `
+        + `further away. If the thesis has changed enough that the old target is wrong, exit the position `
+        + `rather than pushing the target further out.`,
+      rejectedBy: 'guard',
+      rule: 'take_profit_loosened',
+      recordedTakeProfit: snap!.takeProfitLevel,
+    });
+  }
+
   // Record a hold decision: this becomes the entryDecisionId the portfolio context resolves
   // as the thesis, so "rationale not recorded" is replaced by the supplied text next cycle.
   const record = recordDecision(decision('hold', 'trader', {
@@ -975,10 +1005,41 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
   // Now make the venue agree. `moveStopTo` replaces a resting stop rather than cancelling and
   // re-placing it — cancel-then-place would leave a window with no protection at all — and arms
   // one if none rests, which covers an inherited position being annotated for the first time.
-  const venueStop = isCryptoSymbol(symbol)
-    ? { ok: false as const, reason: `${symbol} is a crypto pair and the venue rejects a plain stop on a coin, so no stop can rest there.` }
-    : await moveStopTo(symbol, held.qty, stopLoss);
+  if (isCryptoSymbol(symbol)) {
+    return JSON.stringify({
+      ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
+      entryPrice: effectiveEntry, entryDecisionId: record.id,
+      venueStop: {
+        orderId: null,
+        note: `${symbol} is a crypto pair and the venue rejects a plain stop on a coin, so no stop `
+          + `can rest there. The level is recorded and the breach detector is watching it, but only `
+          + `while this process runs.`,
+      },
+    });
+  }
 
+  const effectiveTakeProfit = written?.takeProfitLevel;
+  if (effectiveTakeProfit != null && effectiveTakeProfit > 0) {
+    const venueOco = await moveOcoTo(symbol, held.qty, stopLoss, effectiveTakeProfit);
+    return JSON.stringify({
+      ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
+      entryPrice: effectiveEntry, entryDecisionId: record.id,
+      venueOco: venueOco.ok
+        ? {
+            stopOrderId: venueOco.stopOrderId, takeProfitOrderId: venueOco.takeProfitOrderId,
+            note: `The stop/take-profit pair resting at the venue is now $${stopLoss} / $${effectiveTakeProfit}, `
+              + `so these levels hold while this process is not running.`,
+          }
+        : {
+            stopOrderId: null, takeProfitOrderId: null,
+            note: `The levels are recorded and the breach detector is watching them, but the venue pair `
+              + `was NOT moved: ${venueOco.reason} Until the sweep succeeds, these levels only hold while `
+              + `this process runs.`,
+          },
+    });
+  }
+
+  const venueStop = await moveStopTo(symbol, held.qty, stopLoss);
   return JSON.stringify({
     ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
     entryPrice: effectiveEntry, entryDecisionId: record.id,
@@ -1003,9 +1064,9 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
   // the number the model asked for would record a position that was never opened.
   let orderId: string;
   let filledQty: number;
-  let venueStop: ArmResult;
+  let venueOco: OcoArmResult;
   try {
-    ({ orderId, qty: filledQty, venueStop } = await enterPosition(signal, qty));
+    ({ orderId, qty: filledQty, venueOco } = await enterPosition(signal, qty));
   } catch (err) {
     const refusal = journalRefusal(err, {
       symbol,
@@ -1037,11 +1098,11 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
     // The only durable account of whether the position is actually protected at the venue. The
     // tool result below says the same thing, but the model reads that once and the cycle ends;
     // this answers "why did that position sit naked until the sweep found it" a week later.
-    venueStopId: venueStop.ok ? venueStop.orderId : null,
-    venueStopMissing: venueStop.ok ? null : venueStop.reason,
+    venueStopId: venueOco.ok ? venueOco.stopOrderId : null,
+    venueStopMissing: venueOco.ok ? null : venueOco.reason,
   }));
 
-  // The one write, which is why `enterPosition` returns the stop's id instead of recording it
+  // The one write, which is why `enterPosition` returns the pair's ids instead of recording them
   // itself: until this call runs there is no snapshot to patch.
   openPositionSnapshot({
     symbol,
@@ -1052,18 +1113,25 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
     takeProfitLevel: takeProfit,
     openedAt: record.at,
     entryDecisionId: record.id,
-    ...(venueStop.ok && { stopOrderId: venueStop.orderId }),
+    ...(venueOco.ok && { stopOrderId: venueOco.stopOrderId, takeProfitOrderId: venueOco.takeProfitOrderId }),
   });
 
   return JSON.stringify({
     ok: true, symbol, qty: filledQty, requestedQty: qty,
     price, stopLoss, takeProfit, decisionId: record.id,
-    // Whether the stop is only a level here or also an order at the venue, and WHY when it is
-    // only a level. A quiet `null` would read as "no stop", which is wrong — the level is
-    // recorded and watched either way — and an unexplained one invites a guess.
-    venueStop: venueStop.ok
-      ? { orderId: venueStop.orderId, level: stopLoss, note: 'A real sell stop rests at the venue at this level, so the position is protected while this process is not running.' }
-      : { orderId: null, level: stopLoss, note: `No stop rests at the venue: ${venueStop.reason} The recorded level is still watched by the breach detector, but only while this process runs.` },
+    // Whether the pair is only levels here or also a real order pair at the venue, and WHY when
+    // it is only levels. A quiet `null` would read as "no protection", which is wrong — the
+    // levels are recorded and watched either way — and an unexplained one invites a guess.
+    venueOco: venueOco.ok
+      ? {
+          stopOrderId: venueOco.stopOrderId, takeProfitOrderId: venueOco.takeProfitOrderId,
+          stopLevel: stopLoss, takeProfitLevel: takeProfit,
+          note: 'A real sell stop and take-profit rest at the venue as a linked pair, so the position is protected while this process is not running.',
+        }
+      : {
+          stopOrderId: null, takeProfitOrderId: null, stopLevel: stopLoss, takeProfitLevel: takeProfit,
+          note: `No stop/take-profit pair rests at the venue: ${venueOco.reason} The recorded levels are still watched by the breach detector, but only while this process runs.`,
+        },
   });
 }
 

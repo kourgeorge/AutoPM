@@ -2,7 +2,7 @@ import { IBApiNext } from '@stoqey/ib';
 import { firstValueFrom } from 'rxjs';
 import { config } from '../core/config';
 import { etNow } from '../core/time';
-import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill } from './IBroker';
+import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
 import { BrokerRejection } from './errors';
 import { logger } from '../core/logger';
 import { isCryptoSymbol } from '../core/symbols';
@@ -292,6 +292,109 @@ export class IBKRBroker implements IBroker {
     } catch (err: any) {
       const inner: Error = err?.error ?? err;
       throw new BrokerRejection(null, inner.message, null, { replaceStopOrderId: id, stopPrice });
+    }
+
+    return { id };
+  }
+
+  /**
+   * Two orders — `STP` and `LMT`, both `SELL` for the full qty — sharing a generated `ocaGroup`
+   * and `ocaType: 1`. TWS links them by the group name, not by any parent/child relationship, so
+   * unlike a bracket there is no window where one leg exists without the other having been
+   * requested; there IS a window where the stop leg is accepted and the take-profit leg's
+   * request hasn't landed yet, which is why a take-profit failure here cancels the stop leg
+   * rather than leaving the caller with an undocumented single leg.
+   *
+   * `ocaType: 1` cancels the sibling's remaining quantity when one leg fills — same semantics
+   * as Alpaca's OCO. Both legs are GTC for the same reason a lone stop is.
+   */
+  async placeOco(req: OcoRequest): Promise<{ stopOrderId: string; takeProfitOrderId: string }> {
+    const contract = {
+      symbol:   req.symbol,
+      secType:  'STK',
+      exchange: 'SMART',
+      currency: 'USD',
+    };
+    const ocaGroup = `oco-${req.symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+
+    const stopOrder = {
+      action:        'SELL',
+      totalQuantity: req.qty,
+      orderType:     'STP',
+      auxPrice:      req.stopPrice,
+      tif:           'GTC',
+      ocaGroup,
+      ocaType:       1,
+    };
+    const takeProfitOrder = {
+      action:        'SELL',
+      totalQuantity: req.qty,
+      orderType:     'LMT',
+      lmtPrice:      req.takeProfitPrice,
+      tif:           'GTC',
+      ocaGroup,
+      ocaType:       1,
+    };
+
+    let stopOrderId: number;
+    try {
+      stopOrderId = await withTimeout(
+        this.api.placeNewOrder(contract as any, stopOrder as any),
+        'placeOco(stop)',
+      );
+    } catch (err: any) {
+      const inner: Error = err?.error ?? err;
+      throw new BrokerRejection(null, inner.message, null, req);
+    }
+
+    let takeProfitOrderId: number;
+    try {
+      takeProfitOrderId = await withTimeout(
+        this.api.placeNewOrder(contract as any, takeProfitOrder as any),
+        'placeOco(takeProfit)',
+      );
+    } catch (err: any) {
+      // The stop leg landed and the take-profit leg didn't. Cancel the lone leg rather than
+      // hand the caller a half-armed pair it doesn't know about — the same "never leave a
+      // partial state undocumented" rule the repair pass in `stopOrders.ts` relies on.
+      try {
+        this.api.cancelOrder(stopOrderId);
+      } catch {
+        // Best-effort; the sweep's repair pass will find and clear the orphaned leg either way.
+      }
+      const inner: Error = err?.error ?? err;
+      throw new BrokerRejection(null, inner.message, null, req);
+    }
+
+    return { stopOrderId: String(stopOrderId), takeProfitOrderId: String(takeProfitOrderId) };
+  }
+
+  /**
+   * Same read-back-then-`modifyOrder` pattern as `replaceStopOrder`, changing `lmtPrice`
+   * instead of `auxPrice`. Same fire-and-forget caveat applies.
+   */
+  async replaceTakeProfitOrder(id: string, limitPrice: number): Promise<{ id: string }> {
+    const orderId = parseInt(id, 10);
+    const open = await withTimeout(this.api.getAllOpenOrders(), 'getAllOpenOrders');
+    const existing = open.find(o => o.orderId === orderId);
+
+    if (!existing) {
+      throw new BrokerRejection(
+        null,
+        `order ${id} is not resting at the venue — it filled, was cancelled, or belongs to another client id`,
+        null,
+        { replaceTakeProfitOrderId: id, limitPrice },
+      );
+    }
+
+    try {
+      this.api.modifyOrder(orderId, existing.contract, {
+        ...existing.order,
+        lmtPrice: limitPrice,
+      } as any);
+    } catch (err: any) {
+      const inner: Error = err?.error ?? err;
+      throw new BrokerRejection(null, inner.message, null, { replaceTakeProfitOrderId: id, limitPrice });
     }
 
     return { id };
