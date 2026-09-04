@@ -36,14 +36,20 @@ import { requestApproval } from '../core/approvals';
  * did the model try to open an unstopped position" months later.
  */
 export class GuardRejection extends Error {
-  constructor(readonly rule: string, message: string) {
+  constructor(
+    readonly rule: string,
+    message: string,
+    /** The venue's own words, when this guard rejection was caused by a broker refusal rather
+     * than a policy decision — e.g. `resting_order_not_cancelled`. Null for the rest. */
+    readonly venueMessage: string | null = null,
+  ) {
     super(message);
     this.name = 'GuardRejection';
   }
 }
 
-function reject(rule: string, message: string): never {
-  throw new GuardRejection(rule, message);
+function reject(rule: string, message: string, venueMessage: string | null = null): never {
+  throw new GuardRejection(rule, message, venueMessage);
 }
 
 /**
@@ -697,10 +703,12 @@ export async function exitPosition(
         // come back from `getOpenOrders`, so the only way here is a genuine venue failure or
         // the narrow race between the list and the cancel; the retry after that race succeeds
         // because the order is no longer listed.
+        const venueMessage = err?.response?.data?.message ?? err?.message ?? String(err);
         reject(
           'resting_order_not_cancelled',
           `Cannot exit ${symbol}: ${describe(order)} reserves the shares and the venue refused `
-          + `to cancel it — ${err?.response?.data?.message ?? err?.message ?? String(err)}`,
+          + `to cancel it — ${venueMessage}`,
+          venueMessage,
         );
       }
       if (order.id === ourStopId) cancelledOurStop = true;
