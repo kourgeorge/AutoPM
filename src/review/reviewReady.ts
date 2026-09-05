@@ -22,6 +22,7 @@
 
 import { logger } from '../core/logger';
 import { publishDiscrete, type EvidenceValue, type TriggerEvent } from '../features/eventBus';
+import { decision, recordDecision } from '../journal/journal';
 import type { Policy } from '../policy/types';
 import { getState, updateState } from '../state/state';
 import { computeOutcomes, type TradeOutcome } from './ledger';
@@ -59,6 +60,39 @@ function describe(o: TradeOutcome): EvidenceValue {
 }
 
 /**
+ * A round trip can close without `execute_exit` ever being called — a resting stop or
+ * take-profit fills at the venue on its own. `computeOutcomes` still finds it from the fills
+ * ledger, but the journal — the only place rationale lives — never got a record, so
+ * `exitDecisionId` comes back null and the "why" of that close is gone the moment it happens.
+ *
+ * Backfilled here, actor `'broker'`, only for outcomes newly seen this tick — mirroring the
+ * first-run watermark below, this does not reach back through the whole existing ledger.
+ */
+function backfillMissingExits(fresh: TradeOutcome[]): void {
+  for (const o of fresh) {
+    if (o.exitDecisionId != null) continue;
+    const stopNote = o.intendedStop != null ? `$${o.intendedStop}` : 'not recorded';
+    const targetNote = o.intendedTarget != null ? `$${o.intendedTarget}` : 'not recorded';
+    const rationale =
+      `Closed at the venue with no execute_exit call from this system — reconciled from ` +
+      `fills. Exit $${o.exitPrice.toFixed(2)} vs entry's recorded stop ${stopNote} / ` +
+      `target ${targetNote}.`;
+    const record = recordDecision(decision('exit', 'broker', {
+      symbol: o.symbol,
+      executed: true,
+      qty: o.qty,
+      price: o.exitPrice,
+      orderId: o.exitOrderIds[0] ?? null,
+      pnl: o.grossPnL,
+      rationale,
+    }));
+    // So the event this same tick describes it too, not just the record durably on disk.
+    o.exitDecisionId = record.id;
+    o.exitRationale = rationale;
+  }
+}
+
+/**
  * Fire once for the round trips that closed since the last announcement, and advance the
  * watermark. Returns the events to route — none when nothing closed.
  *
@@ -90,6 +124,8 @@ export function publishReviewReady(policy: Policy): TriggerEvent[] {
 
     const fresh = outcomes.filter((o) => o.exitAt > watermark);
     if (fresh.length === 0) return [];
+
+    backfillMissingExits(fresh);
 
     const net = fresh.reduce((sum, o) => sum + o.grossPnL, 0);
     const symbols = [...new Set(fresh.map((o) => o.symbol))];
