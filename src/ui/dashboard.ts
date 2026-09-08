@@ -1031,16 +1031,10 @@ export function renderEventsPanel(m: DashboardModel, width: number, height: numb
 
 // ── Strip ─────────────────────────────────────────────────────────────────────
 
-/**
- * The narrow-terminal form: always exactly three lines, dropping fields right-to-left as the
- * terminal narrows. Same facts as the sidebar, no rows — a 60-column terminal cannot hold a
- * table and a log at once, and the log is what the operator came for.
- */
-export function renderStrip(m: DashboardModel, width: number): string[] {
-  const f = makeFormat(m.glyphs);
+/** The strip's top two lines: clock/session/env, then equity/pnl/lane/account. */
+function stripHead(m: DashboardModel, f: Fmt, width: number): [string, string] {
   const g = m.glyphs;
   const t = m.tick;
-  if (width <= 0) return ['', '', ''];
 
   const l1 = joinChunks(f, width, ` ${g.sep} `, [
     { text: `${f.etClock(m.now)} ET`, color: 'bold' },
@@ -1066,36 +1060,55 @@ export function renderStrip(m: DashboardModel, width: number): string[] {
     { text: m.cycle.n > 0 ? `cyc ${m.cycle.n}` : '', color: 'gray-fg' },
   ]);
 
-  const l3 = t ? stripBook(m, f, width) : ' '.repeat(width);
-  return [l1, l2, l3];
+  return [l1, l2];
 }
 
-/** One line of book: held symbols with P&L, or — when flat — what is being watched. */
-function stripBook(m: DashboardModel, f: Fmt, width: number): string {
-  const g = m.glyphs;
-  const t = m.tick!;
-  const positions = sortedPositions(t);
-
-  if (positions.length > 0) {
-    return joinChunks(
-      f,
-      width,
-      ` ${g.sep} `,
-      positions.map((p) => ({
-        text: `${p.symbol} ${f.signedPct(p.pnlPct, 1)}`,
-        color: f.pnlColor(p.pnlPct),
-      })),
-    );
-  }
-
-  const watch = sortedWatchlist(t);
-  return joinChunks(f, width, ' ', [
-    { text: 'flat', color: 'gray-fg' },
-    ...watch.map((e) => ({
+/** One line of the watchlist's composite scores — what to watch, not what is held. */
+function stripIndicators(m: DashboardModel, f: Fmt, width: number): string {
+  const watch = sortedWatchlist(m.tick!);
+  return joinChunks(
+    f,
+    width,
+    ' ',
+    watch.map((e) => ({
       text: `${e.row.symbol}${e.composite === null ? '' : ` ${e.composite >= 0 ? '+' : ''}${e.composite.toFixed(2)}`}`,
       color: e.total > 0 && e.bullish * 2 > e.total ? 'green-fg' : 'gray-fg',
     })),
-  ]);
+  );
+}
+
+/**
+ * `renderStrip`'s head, a genuine POSITIONS list in up to `extraRows` rows, then one line of
+ * top indicators below it — the rows a slightly taller terminal can spare, spent on the list
+ * a single packed line could only summarize. Unlike `renderSidebar`, there is no account-header
+ * block ahead of the list competing for `extraRows`: every one of them goes to positions.
+ */
+export function renderStripExpanded(m: DashboardModel, width: number, extraRows: number): string[] {
+  if (width <= 0) return ['', '', ''];
+  const f = makeFormat(m.glyphs);
+  const t = m.tick;
+  const lines: string[] = [...stripHead(m, f, width)];
+  if (extraRows > 0 && t) {
+    const positions = sortedPositions(t);
+    lines.push(
+      sectionHeader(f, width, 'POSITIONS', positions.length, POS_LEGEND),
+      ...listBody(f, width, extraRows - 1, positions, (p, w) => positionRow(m, f, p, w), 'flat'),
+    );
+  }
+  lines.push(t ? stripIndicators(m, f, width) : ' '.repeat(width));
+  return lines;
+}
+
+/**
+ * The narrow-terminal form: always exactly three lines, dropping fields right-to-left as the
+ * terminal narrows. Same facts as the sidebar, no rows — a 60-column terminal cannot hold a
+ * table and a log at once, and the log is what the operator came for. Equivalent to
+ * `renderStripExpanded(m, width, 0)`, kept separate as the contractually-3-line form other code
+ * can measure against.
+ */
+export function renderStrip(m: DashboardModel, width: number): string[] {
+  if (width <= 0) return ['', '', ''];
+  return renderStripExpanded(m, width, 0);
 }
 
 // ── Status line ───────────────────────────────────────────────────────────────

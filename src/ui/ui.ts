@@ -20,7 +20,7 @@ import {
   renderEventsPanel,
   renderSidebar,
   renderStatus,
-  renderStrip,
+  renderStripExpanded,
   type Cycle,
   type DashboardModel,
   type Environment,
@@ -131,8 +131,33 @@ const SIDEBAR_MIN_COLS = 34;
  */
 const SIDEBAR_MAX_COLS = POS_ROW_COLS + 2;
 
-/** 3 rendered lines + 2 border rows. `renderStrip` is contractually exactly 3 lines. */
+/** 3 rendered lines + 2 border rows. `renderStrip`'s own compact form is exactly 3 lines. */
 const STRIP_ROWS = 5;
+
+/**
+ * Rows the strip may grow beyond `STRIP_ROWS`, all spent on a POSITIONS list underneath its
+ * fixed 3-line form (`renderStripExpanded`). Capped here rather than left to consume the log
+ * outright — 10 extra rows is enough to make positions actually visible without the log losing
+ * everything on a merely medium-sized window.
+ */
+const STRIP_GROWTH_ROWS = 10;
+
+/**
+ * Floor for entering strip mode at all: the strip's own rows, full chrome, and one spare row for
+ * whatever sits below it. Lower than the strip used to require — the positions strip is worth
+ * keeping even when that leftover row is the only room the log or the events inbox gets, because
+ * the alternative (`off`) shows the operator nothing about positions instead of one cramped row
+ * of something.
+ */
+const STRIP_MIN_ROWS = STRIP_ROWS + CHROME_ROWS + 1;
+
+/**
+ * Content rows the box under the strip needs before switching into the events inbox is worth it.
+ * `renderEventsPanel` spends rows on OPEN/RECENT ACTIVITY section headers that the log never
+ * needs, so below this floor F3 is refused and an inbox already open falls back to the log —
+ * positions keep the strip's rows; the inbox, not the log, gives them up.
+ */
+const MIN_EVENTS_CONTENT_ROWS = 4;
 
 /**
  * Log stamp: LOCAL wall-clock HH:MM:SS.mmm. Deliberately not `toISOString()`, which is always
@@ -192,6 +217,10 @@ class TerminalUI {
   private glyphs: Glyphs;
   private mode: PanelMode = 'off';
   private panelEnabled = true;
+  /** Current height of `strip`, border included. `STRIP_ROWS` unless `layout()` grew it. */
+  private stripRows = STRIP_ROWS;
+  /** Rows of `stripRows` beyond `STRIP_ROWS`, spent on a POSITIONS list — see `STRIP_GROWTH_ROWS`. */
+  private stripGrowth = 0;
   /**
    * Orthogonal to `mode`: `mode` is decided by terminal size in `layout()` and answers how much
    * room the auto-sized live panel gets; `mainView` is a manual F3 toggle and answers what
@@ -199,6 +228,8 @@ class TerminalUI {
    * up while the inbox is open.
    */
   private mainView: 'log' | 'events' = 'log';
+  /** Recomputed every `layout()`; see `MIN_EVENTS_CONTENT_ROWS`. */
+  private eventsAvailable = true;
   private events: EventRow[] = [];
   private eventLog: EventRow[] = [];
   private proposals: ProposalRow[] = [];
@@ -358,6 +389,7 @@ class TerminalUI {
     });
 
     this.screen.key('f3', () => {
+      if (this.mainView === 'log' && !this.eventsAvailable) return;
       this.mainView = this.mainView === 'events' ? 'log' : 'events';
       this.layout();
       this.paint();
@@ -680,7 +712,7 @@ class TerminalUI {
     let mode: PanelMode = 'off';
     if (this.panelEnabled) {
       if (w >= 100 && h >= 18) mode = 'sidebar';
-      else if (w >= 60 && h >= 15) mode = 'strip';
+      else if (w >= MIN_LOG_COLS && h >= STRIP_MIN_ROWS) mode = 'strip';
     }
 
     let sidebarCols = 0;
@@ -699,10 +731,26 @@ class TerminalUI {
       // strip, which says less but says it legibly.
       if (sidebarCols < SIDEBAR_MIN_COLS) mode = 'strip';
     }
-    // The strip needs its own rows AND a log worth reading underneath it.
-    if (mode === 'strip' && h < STRIP_ROWS + CHROME_ROWS + 3) mode = 'off';
-
     this.mode = mode;
+
+    // Rows left once the compact strip and the chrome have theirs are split with the log below,
+    // half going to a POSITIONS list under the strip's fixed three lines — capped at
+    // `STRIP_GROWTH_ROWS` so a tall window still leaves the log something. This is on top of the
+    // compact form, not instead of it: `renderStripExpanded` keeps `renderStrip`'s three lines
+    // untouched and spends only the growth on positions.
+    if (mode === 'strip') {
+      const spare = h - chromeRows - STRIP_ROWS;
+      this.stripGrowth = Math.max(0, Math.min(STRIP_GROWTH_ROWS, Math.floor(spare / 2)));
+    } else {
+      this.stripGrowth = 0;
+    }
+    this.stripRows = STRIP_ROWS + this.stripGrowth;
+
+    // Whatever is left beneath the strip goes to the log or the events inbox, whichever
+    // `mainView` currently shows — see `MIN_EVENTS_CONTENT_ROWS`. Sidebar and off modes never
+    // starve this badly, so only strip mode can make the inbox unavailable.
+    this.eventsAvailable = mode !== 'strip' || h - this.stripRows - chromeRows >= MIN_EVENTS_CONTENT_ROWS;
+    if (!this.eventsAvailable && this.mainView === 'events') this.mainView = 'log';
 
     // The prompt sits at the bottom; the status bar rides directly above it, or takes the bottom
     // row itself once the prompt has been dropped.
@@ -726,10 +774,10 @@ class TerminalUI {
       this.logBox.bottom = chromeRows;
     } else if (mode === 'strip') {
       this.strip.top = 0;
-      this.strip.height = STRIP_ROWS;
+      this.strip.height = this.stripRows;
       this.strip.show();
       this.sidebar.hide();
-      this.logBox.top = STRIP_ROWS;
+      this.logBox.top = this.stripRows;
       this.logBox.right = 0;
       this.logBox.bottom = chromeRows;
     } else {
@@ -784,7 +832,8 @@ class TerminalUI {
         const height = this.innerHeight(this.sidebar);
         this.sidebar.setContent(renderSidebar(m, width, height).join('\n'));
       } else if (this.mode === 'strip') {
-        this.strip.setContent(renderStrip(m, this.innerWidth(this.strip)).join('\n'));
+        const width = this.innerWidth(this.strip);
+        this.strip.setContent(renderStripExpanded(m, width, this.stripGrowth).join('\n'));
       }
 
       if (this.mainView === 'events') {
@@ -839,7 +888,9 @@ class TerminalUI {
     // move, so it is the more urgent reason to open the inbox.
     const openProposals = this.proposals.filter(isOpenProposal).length;
     const unacked = openProposals + this.events.filter(needsAttention).length;
-    const f3 = this.mainView === 'events' ? 'F3 log' : unacked > 0 ? `F3 inbox (${unacked}!)` : 'F3 inbox';
+    const f3 = !this.eventsAvailable
+      ? 'F3 inbox (needs a taller window)'
+      : this.mainView === 'events' ? 'F3 log' : unacked > 0 ? `F3 inbox (${unacked}!)` : 'F3 inbox';
     return `${f2} ${this.glyphs.sep} ${f3}`;
   }
 
