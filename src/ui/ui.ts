@@ -203,6 +203,7 @@ class TerminalUI {
   private eventLog: EventRow[] = [];
   private proposals: ProposalRow[] = [];
   private tick: TickSnapshot | null = null;
+  private venueOpen: boolean | null = null;
   private env: Environment = { broker: '', venue: '', provider: '', model: '' };
   private traderLane: Lane = { state: 'starting' };
   private conciergeLane: Lane = { state: 'idle' };
@@ -527,6 +528,12 @@ class TerminalUI {
     this.paint();
   }
 
+  /** Pushed from `daemon.ts`'s independent venue-clock poll. `null` = unknown/last check failed. */
+  setVenueOpen(open: boolean | null): void {
+    this.venueOpen = open;
+    this.paint();
+  }
+
   setTraderActivity(lane: Lane): void {
     this.traderLane = lane;
     this.paint();
@@ -811,6 +818,7 @@ class TerminalUI {
     return {
       env: this.env,
       tick: this.tick,
+      venueOpen: this.venueOpen,
       trader: this.traderLane,
       concierge: this.conciergeLane,
       cycle: this.cycleInfo,
