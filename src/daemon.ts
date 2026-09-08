@@ -15,6 +15,7 @@ import { config } from './core/config';
 import { automationLevel, automationSummary } from './core/automation';
 import { getOpenProposals } from './core/proposals';
 import type { EventRow } from './ui/dashboard';
+import { getMarketStatusSnapshot } from './tools/traderTools';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -126,6 +127,25 @@ const scheduler = new FeatureScheduler({
 
 scheduler.start();
 
+// Independent of the scheduler's tick cadence on purpose — `marketSession()` (the tick's
+// clock-only session guess) deliberately never calls the broker, so this is the one place
+// that does, at a slow cadence that can't add load to the detector loop. Corrects the
+// dashboard badge only; never touches TickData or anything the replay harness pins.
+const VENUE_CLOCK_POLL_MS = 3 * 60_000;
+
+async function pollVenueClock(): Promise<void> {
+  try {
+    const status = await getMarketStatusSnapshot();
+    ui.setVenueOpen(status.isOpen);
+  } catch (err: any) {
+    logger.warn(`[Boot] venue clock check failed: ${err.message}`);
+    ui.setVenueOpen(null);
+  }
+}
+
+void pollVenueClock();
+const venueClockTimer = setInterval(() => void pollVenueClock(), VENUE_CLOCK_POLL_MS);
+
 // Not awaited, and deliberately not blocking the scheduler: this reaches back a month to
 // catch fills that landed while the daemon was down, and a slow or unreachable broker at
 // boot must delay reviewing yesterday, not trading today.
@@ -139,6 +159,7 @@ trader.start().catch((err) => {
 function shutdown(signal: string): void {
   logger.info(`Shutting down (${signal})...`);
   scheduler.stop();
+  clearInterval(venueClockTimer);
   trader.stop();
   process.exit(0);
 }

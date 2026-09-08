@@ -149,6 +149,14 @@ export interface Cycle {
 export interface DashboardModel {
   env: Environment;
   tick: TickSnapshot | null;
+  /**
+   * The real broker clock, polled independently of the tick loop — see `daemon.ts`'s
+   * `pollVenueClock`. `null` means "not checked yet, or the last check failed": fall back to
+   * `tick.session`'s clock-only guess exactly as before. Exists because `marketSession()` is
+   * deliberately clock-only (see its doc comment in `core/time.ts`) and therefore reports a
+   * holiday as `open` — fine for detectors, misleading on a badge a human reads.
+   */
+  venueOpen: boolean | null;
   trader: Lane;
   concierge: Lane;
   cycle: Cycle;
@@ -232,6 +240,19 @@ function sessionColor(session: string): string {
   if (session === 'open') return 'green-fg';
   if (session === 'premarket' || session === 'afterhours') return 'yellow-fg';
   return 'gray-fg';
+}
+
+/**
+ * `tick.session` alone, corrected for the one way it misleads an operator: a holiday or
+ * half-day that `marketSession()`'s clock-only math reports as `open`/`premarket`/`afterhours`.
+ * Only ever downgrades toward `closed` — never invents an `open` the clock-only guess didn't
+ * already suggest, which is the same "false open is the safe bias" reasoning `marketSession()`
+ * documents, just corrected in the one direction that actually misleads a human reader.
+ */
+function displaySession(m: DashboardModel): string {
+  const clockGuess = m.tick?.session;
+  if (m.venueOpen === false && clockGuess !== 'closed') return 'closed';
+  return clockGuess ?? 'unknown';
 }
 
 /** Compact token count: `840`, `18k`, `1.2M`. */
@@ -570,8 +591,8 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
       {
         // The blink is the cheapest possible "this process is alive" signal: it costs one
         // character per second and it is the one thing on screen that cannot be a stale render.
-        text: `${g.live} ${t?.session ?? 'unknown'}`,
-        color: m.frame % 2 === 0 ? sessionColor(t?.session ?? '') : 'gray-fg',
+        text: `${g.live} ${displaySession(m)}`,
+        color: m.frame % 2 === 0 ? sessionColor(displaySession(m)) : 'gray-fg',
       },
     ]),
   );
@@ -1024,8 +1045,8 @@ export function renderStrip(m: DashboardModel, width: number): string[] {
   const l1 = joinChunks(f, width, ` ${g.sep} `, [
     { text: `${f.etClock(m.now)} ET`, color: 'bold' },
     {
-      text: `${g.live} ${t?.session ?? 'unknown'}`,
-      color: m.frame % 2 === 0 ? sessionColor(t?.session ?? '') : 'gray-fg',
+      text: `${g.live} ${displaySession(m)}`,
+      color: m.frame % 2 === 0 ? sessionColor(displaySession(m)) : 'gray-fg',
     },
     { text: m.env.model || 'model?', color: 'cyan-fg' },
     { text: `${m.env.broker} ${m.env.venue}`, color: m.env.venue === 'live' ? 'red-fg' : 'gray-fg' },
