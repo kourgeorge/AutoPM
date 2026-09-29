@@ -12,6 +12,7 @@
     "verify:policy": "ts-node src/scripts/verifyPolicyPrompt.ts",
     "backtest": "ts-node src/scripts/backtest.ts",
     "backtest:sweep": "ts-node src/scripts/backtestSweep.ts",
+    "backtest:signals": "ts-node src/scripts/backtestSignalFamilies.ts",
     "backtest:ai": "ts-node src/scripts/backtestAi.ts"
   },
   "dependencies": {

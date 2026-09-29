@@ -38,6 +38,25 @@ const THIN_SESSIONS = 30;
 /** Fewer daily returns than this and a standard deviation is not worth printing at all. */
 const MIN_RETURNS_FOR_SHARPE = 5;
 
+/** Total return over a level series, percentage points. Null below two points. */
+function totalReturnPct(levels: number[]): number | null {
+  return levels.length >= 2 && levels[0] > 0 ? (levels[levels.length - 1] / levels[0] - 1) * 100 : null;
+}
+
+export interface SymbolStats {
+  symbol: string;
+  window: { from: string | null; to: string | null; days: number; sessions: number };
+  /** First aligned session to last, percentage points. */
+  totalReturnPct: number | null;
+  /** Annualised mean daily return over its standard deviation. Same convention as `Benchmark.portfolioSharpe`: zero risk-free rate. */
+  sharpe: number | null;
+  /** Annualised standard deviation of daily returns, percentage points. */
+  volPct: number | null;
+  /** Peak-to-trough decline of the price series, percentage points, ≥ 0. */
+  maxDrawdownPct: number | null;
+  caveats: string[];
+}
+
 export interface Benchmark {
   /**
    * The window ACTUALLY compared, after aligning the two series by date: `sessions` is the
@@ -196,11 +215,11 @@ async function fetchEquityCurve(days: number): Promise<Leg> {
   }
 }
 
-/** SPY daily closes. Over-fetched on purpose: the intersection below does the trimming. */
-async function fetchSpyCurve(days: number): Promise<Leg & { stale: boolean }> {
-  const bars = await collectBars('SPY', days + 10, '1Day');
+/** Daily closes for any symbol. Over-fetched on purpose: the intersection below does the trimming. */
+async function fetchSymbolCurve(symbol: string, days: number): Promise<Leg & { stale: boolean }> {
+  const bars = await collectBars(symbol, days + 10, '1Day');
   if (!isPresent(bars)) {
-    return { series: new Map(), error: `SPY bars unavailable — ${bars.error}`, stale: true };
+    return { series: new Map(), error: `${symbol} bars unavailable — ${bars.error}`, stale: true };
   }
 
   const series = new Map<string, number>();
@@ -211,7 +230,7 @@ async function fetchSpyCurve(days: number): Promise<Leg & { stale: boolean }> {
 
   return {
     series,
-    error: series.size === 0 ? 'SPY bars carried no usable closes' : null,
+    error: series.size === 0 ? `${symbol} bars carried no usable closes` : null,
     stale: bars.stale,
   };
 }
@@ -260,7 +279,7 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
   const days = opts.days ?? 30;
   const caveats: string[] = [];
 
-  const [equityLeg, spyLeg] = await Promise.all([fetchEquityCurve(days), fetchSpyCurve(days)]);
+  const [equityLeg, spyLeg] = await Promise.all([fetchEquityCurve(days), fetchSymbolCurve('SPY', days)]);
   if (equityLeg.error) caveats.push(equityLeg.error);
   if (spyLeg.error) caveats.push(spyLeg.error);
   if (!spyLeg.error && spyLeg.stale) {
@@ -281,9 +300,6 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
 
   const equityLevels = equityDates.map(d => equityLeg.series.get(d)!).filter(Number.isFinite);
   const spyLevels = spyDates.map(d => spyLeg.series.get(d)!).filter(Number.isFinite);
-
-  const totalReturnPct = (levels: number[]): number | null =>
-    levels.length >= 2 && levels[0] > 0 ? (levels[levels.length - 1] / levels[0] - 1) * 100 : null;
 
   const portfolioReturnPct = totalReturnPct(equityLevels);
   const spyReturnPct = totalReturnPct(spyLevels);
@@ -336,6 +352,52 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
     maxDrawdownPct: r(maxDrawdownPct(equityLevels)),
     spyMaxDrawdownPct: r(maxDrawdownPct(spyLevels)),
 
+    caveats,
+  };
+}
+
+/**
+ * Sharpe, annualised volatility, max drawdown and total return for ONE symbol's own price
+ * series — no account leg, no comparison. Same conventions as `benchmark()` (simple daily
+ * returns, zero risk-free rate, annualised by `TRADING_DAYS_PER_YEAR`), so the two are
+ * directly comparable, but this exists for the question `benchmark()` cannot answer: "what
+ * is <TICKER>'s own Sharpe", for a symbol that is not the account and not necessarily SPY.
+ */
+export async function symbolStats(symbol: string, opts: { days?: number } = {}): Promise<SymbolStats> {
+  const days = opts.days ?? 30;
+  const caveats: string[] = [];
+
+  const leg = await fetchSymbolCurve(symbol, days);
+  if (leg.error) caveats.push(leg.error);
+  if (!leg.error && leg.stale) {
+    caveats.push(`the last ${symbol} bar is stale, so the window may end a session short of what was requested`);
+  }
+
+  const dates = [...leg.series.keys()].sort();
+  const levels = dates.map(d => leg.series.get(d)!).filter(Number.isFinite);
+  const returns = dailyReturns(levels);
+
+  const sessions = dates.length;
+  const from = dates[0] ?? null;
+  const to = dates[dates.length - 1] ?? null;
+
+  if (sessions > 0 && sessions < THIN_SESSIONS) {
+    caveats.push(`window is ${sessions} session(s) — too short for a meaningful figure, and one good or bad day moves every number here`);
+  }
+  if (returns.length > 0 && returns.length < MIN_RETURNS_FOR_SHARPE) {
+    caveats.push(`only ${returns.length} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so sharpe and volPct are null rather than noisy`);
+  }
+  if (returns.length >= MIN_RETURNS_FOR_SHARPE) {
+    caveats.push('sharpe uses a zero risk-free rate — read it as return per unit of volatility, not as excess over cash');
+  }
+
+  return {
+    symbol,
+    window: { from, to, days, sessions },
+    totalReturnPct: r(totalReturnPct(levels)),
+    sharpe: r(annualisedSharpe(returns)),
+    volPct: r(annualisedVolPct(returns)),
+    maxDrawdownPct: r(maxDrawdownPct(levels)),
     caveats,
   };
 }

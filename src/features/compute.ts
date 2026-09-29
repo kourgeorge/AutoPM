@@ -23,11 +23,12 @@ import { collectAll, DEFAULT_COLLECT_REQUEST, type RawBundle } from '../collect'
 import { isPresent, isUsable, missing, type Maybe } from '../collect/types';
 import type { AccountInfo, Position } from '../broker/IBroker';
 import type { Bar } from '../core/types';
-import { marketSession, type MarketSession } from '../core/time';
+import { etDate, marketSession, type MarketSession } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { atr, crossedAbove, ema, rsi } from '../strategy/indicators';
 import { computeSignals, signalSummary, type SignalScore } from '../strategy/signals';
+import { computeMeanReversionSignals } from '../strategy/meanReversion';
 import { reversalFilter, type ReversalFilter } from '../strategy/reversal';
 import { getCachedFundamentals } from '../collect/fundamentals';
 import { getCachedSectors } from '../collect/sectorCache';
@@ -82,9 +83,21 @@ export interface WatchlistData {
   emaCrossedUp: boolean | null;
   rsi: number | null;
   atr: number | null;
+  /**
+   * Percentage change from the last completed session's close to the current price. Null
+   * when the price is stale/missing or fewer than two daily bars are available to find a
+   * prior close.
+   */
+  dayChangePct: number | null;
   /** Multi-signal scores for judge-style synthesis by the trader LLM. */
   signals: SignalScore[];
   signalSummary: string;
+  /**
+   * Mean-reversion family (see strategy/meanReversion.ts) — a second, decorrelated read, kept
+   * beside `signals` and out of its composite, same treatment as `reversal` below.
+   */
+  meanReversionSignals: SignalScore[];
+  meanReversionSummary: string;
   /**
    * The contrarian entry filter, kept beside the five trend signals and out of their
    * composite. Present even when the row was not scored — it needs 22 bars where the signals
@@ -298,12 +311,31 @@ function buildPositionData(
   };
 }
 
+/**
+ * Percentage change from the last completed session's close to `price`.
+ *
+ * `bars` is daily and ASCENDING; during market hours Alpaca's latest daily bar is today's
+ * session in progress, not a completed close (measured: AAPL's bar dated 2026-09-23 already
+ * held a partial close on that same day). So the prior close is the second-to-last bar when
+ * the last bar's date is today in ET, and the last bar itself otherwise — e.g. premarket,
+ * before today's bar exists yet.
+ */
+function dayChangePct(price: number | null, bars: Bar[], computedAt: string): number | null {
+  if (price === null || bars.length === 0) return null;
+  const last = bars[bars.length - 1];
+  const priorClose = last.t.slice(0, 10) === etDate(new Date(computedAt))
+    ? bars[bars.length - 2]?.c ?? null
+    : last.c;
+  return priorClose === null ? null : pct(price - priorClose, priorClose);
+}
+
 function buildWatchlistData(
   symbol: string,
   price: Maybe<number>,
   rawBars: Maybe<Bar[]>,
   p: Policy,
   marketCap: number | null,
+  computedAt: string,
 ): WatchlistData {
   const ind = indicatorsFor(rawBars, p);
   const { value, stale, reason: staleReason } = resolve(price);
@@ -313,6 +345,11 @@ function buildWatchlistData(
   const barsArray = isUsable(rawBars) ? rawBars.value : [];
   const signals = barsArray.length >= p.strategy.minBars ? computeSignals(barsArray, p) : [];
   const summary = signals.length > 0 ? signalSummary(signals) : 'insufficient data';
+
+  const meanReversionSignals = barsArray.length >= p.strategy.minBars
+    ? computeMeanReversionSignals(barsArray, p) : [];
+  const meanReversionSummary = meanReversionSignals.length > 0
+    ? signalSummary(meanReversionSignals) : 'insufficient data';
 
   // Not gated on `minBars`: the reversal window is 22 bars, and refusing it at 50 would make a
   // shorter series look like a name that has not run when nobody has looked.
@@ -328,8 +365,11 @@ function buildWatchlistData(
     emaCrossedUp: haveSeries ? crossedAbove(ind.emaFastSeries, ind.emaSlowSeries) : null,
     rsi: ind.rsi,
     atr: ind.atr,
+    dayChangePct: dayChangePct(value, barsArray, computedAt),
     signals,
     signalSummary: summary,
+    meanReversionSignals,
+    meanReversionSummary,
     reversal,
   };
 }
@@ -424,6 +464,7 @@ export function computeTick(
       bars(symbol),
       p,
       marketCaps[symbol] ?? null,
+      computedAt,
     );
   }
 
