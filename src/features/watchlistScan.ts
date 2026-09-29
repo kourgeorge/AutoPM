@@ -54,6 +54,14 @@ export interface ScanRow {
    * other way round to a signal score: negative means the name has already run.
    */
   reversal: ReversalFilter;
+  /**
+   * A second, decorrelated family (see `strategy/meanReversion.ts`), kept out of `tally`
+   * on purpose — same treatment as `reversal` above, for the same reason: it answers a
+   * different question than the five trend signals do.
+   */
+  meanReversionSignals: SignalScore[];
+  meanReversionTally: SignalTally;
+  meanReversionSummary: string;
   atr: number | null;
   rsi: number | null;
   emaFast: number | null;
@@ -115,6 +123,9 @@ export function watchlistScan(
       tally: signalTally(w.signals),
       summary: w.signalSummary,
       reversal: w.reversal,
+      meanReversionSignals: w.meanReversionSignals.map((s) => ({ ...s, score: round(s.score, 3) as number })),
+      meanReversionTally: signalTally(w.meanReversionSignals),
+      meanReversionSummary: w.meanReversionSummary,
       atr: round(w.atr, 2),
       rsi: round(w.rsi, 1),
       emaFast: round(w.emaFast, 2),
@@ -165,6 +176,13 @@ export function watchlistScan(
   if (rows.some((r) => r.tally.total > 0)) {
     caveats.push(
       'The five signals are one trend family (EMA spread, ADX, breakout, MACD, volume-on-up-day) and are highly correlated, so a 5/5 tally is closer to one confirmation counted five times than to five independent ones. composite is their mean; reversal is the only reading here that can disagree with them.',
+    );
+  }
+
+  // Same reasoning as the trend caveat above, for the family that answers a different question.
+  if (rows.some((r) => r.meanReversionTally.total > 0)) {
+    caveats.push(
+      'meanReversionTally is a second, decorrelated family (Z-score reversion, Bollinger %B, contrarian RSI, monthly reversal) — it answers whether this has run too far from its own recent history, not whether it is trending. Do not average meanReversionTally.composite into tally.composite; read the two separately.',
     );
   }
 

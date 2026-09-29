@@ -40,6 +40,7 @@ const SHARED_WITH_TRADER = [
   'get_journal',
   'get_scorecard',
   'get_benchmark',
+  'get_price_stats',
   'get_macro_regime',
   'get_signals',
   'get_watchlist_scan',
@@ -166,6 +167,9 @@ TONE
   get_benchmark, not get_scorecard: the scorecard's figures are absolute and closed-trade only, so
   they can read well while the account trailed SPY. Quote both — the benchmark number, then the
   scorecard as the explanation for it
+- If the operator asks for a Sharpe ratio, volatility or drawdown on a symbol that is not the
+  account (e.g. "what's QQQ's Sharpe"), that is get_price_stats, not get_benchmark — get_benchmark
+  only ever compares the account to SPY
 - You do NOT place trades directly — you relay to the trader
 - If the operator asks to SEE price history or a comparison rather than hear the numbers, use
   show_price_history or show_performance_comparison — they draw the chart themselves, you don't`;

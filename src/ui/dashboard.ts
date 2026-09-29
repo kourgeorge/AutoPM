@@ -54,8 +54,11 @@ export interface WatchRow {
   price: number | null;
   stale: boolean;
   rsi: number | null;
+  dayChangePct: number | null;
   signals: SignalScore[];
   signalSummary: string;
+  meanReversionSignals: SignalScore[];
+  meanReversionSummary: string;
 }
 
 /** Structural subset of `compute.ts`'s `TickData`. */
@@ -344,14 +347,20 @@ function sortedPositions(tick: TickSnapshot): PositionRow[] {
   });
 }
 
-/** One watchlist symbol with its signal lean already tallied. */
+/** One watchlist symbol with its signal lean already tallied, for each of its two families. */
 interface WatchEntry {
   row: WatchRow;
   bullish: number;
   bearish: number;
   total: number;
-  /** Mean of the scores, null when unscored. What the `sig` column renders. */
+  /** Mean of the trend scores, null when unscored. What the `trd` column renders. */
   composite: number | null;
+  /** Same tally, for the mean-reversion family (see strategy/meanReversion.ts). */
+  mrBullish: number;
+  mrBearish: number;
+  mrTotal: number;
+  /** Mean of the mean-reversion scores, null when unscored. What the `mr` column renders. */
+  mrComposite: number | null;
 }
 
 /**
@@ -366,7 +375,12 @@ function sortedWatchlist(tick: TickSnapshot): WatchEntry[] {
   return Object.values(tick.watchlist)
     .map((row) => {
       const t = signalTally(row.signals);
-      return { row, bullish: t.bullish, bearish: t.bearish, total: t.total, composite: t.composite };
+      const mr = signalTally(row.meanReversionSignals);
+      return {
+        row,
+        bullish: t.bullish, bearish: t.bearish, total: t.total, composite: t.composite,
+        mrBullish: mr.bullish, mrBearish: mr.bearish, mrTotal: mr.total, mrComposite: mr.composite,
+      };
     })
     .sort(
       (a, b) =>
@@ -419,7 +433,7 @@ export function sortedEvents(events: EventRow[]): EventRow[] {
  * left, so the labels named columns of empty space.
  */
 const POS_GRID = { sym: 5, px: 7, cost: 7, pnl: 7, stop: 6, tgt: 6, val: 8, qty: 5, rsi: 3, held: 6 } as const;
-const WATCH_GRID = { sym: 5, px: 7, sig: 5, rsi: 3 } as const;
+const WATCH_GRID = { sym: 5, px: 7, chg: 7, trd: 5, mr: 5, rsi: 3 } as const;
 
 /**
  * Columns a complete position row needs: every field plus one space between each.
@@ -453,7 +467,9 @@ const POS_LEGEND: Col[] = [
 const WATCH_LEGEND: Col[] = [
   { text: '', w: WATCH_GRID.sym },
   { text: 'px', w: WATCH_GRID.px, right: true },
-  { text: 'sig', w: WATCH_GRID.sig, right: true },
+  { text: 'chg', w: WATCH_GRID.chg, right: true },
+  { text: 'trd', w: WATCH_GRID.trd, right: true },
+  { text: 'mr', w: WATCH_GRID.mr, right: true },
   { text: 'rsi', w: WATCH_GRID.rsi, right: true },
 ];
 
@@ -530,7 +546,7 @@ function positionRow(m: DashboardModel, f: Fmt, p: PositionRow, width: number): 
 
 function watchRow(m: DashboardModel, f: Fmt, entry: WatchEntry, width: number): string {
   const g = m.glyphs;
-  const { row, bullish, bearish, total, composite } = entry;
+  const { row, bullish, bearish, total, composite, mrBullish, mrBearish, mrTotal, mrComposite } = entry;
   const dim = row.stale || row.price === null;
 
   // The composite itself, not a count and not an arrow. `+0.42` fits the same five columns
@@ -546,6 +562,11 @@ function watchRow(m: DashboardModel, f: Fmt, entry: WatchEntry, width: number): 
   const lean = total === 0 ? 0 : bullish * 2 > total ? 1 : bearish * 2 > total ? -1 : 0;
   const leanColor = lean > 0 ? 'green-fg' : lean < 0 ? 'red-fg' : 'gray-fg';
 
+  // Same reasoning, applied to the mean-reversion family's own counts — never trend's `lean`,
+  // which would color this cell with the other family's vote.
+  const mrLean = mrTotal === 0 ? 0 : mrBullish * 2 > mrTotal ? 1 : mrBearish * 2 > mrTotal ? -1 : 0;
+  const mrLeanColor = mrLean > 0 ? 'green-fg' : mrLean < 0 ? 'red-fg' : 'gray-fg';
+
   const cols: Col[] = [
     { text: row.symbol, w: WATCH_GRID.sym, color: dim ? 'gray-fg' : undefined },
     {
@@ -555,12 +576,26 @@ function watchRow(m: DashboardModel, f: Fmt, entry: WatchEntry, width: number): 
       color: dim ? 'gray-fg' : undefined,
     },
     {
+      text: dim ? g.dash : f.signedPct(row.dayChangePct, 1),
+      w: WATCH_GRID.chg,
+      right: true,
+      color: dim ? 'gray-fg' : f.pnlColor(row.dayChangePct),
+    },
+    {
       text: composite === null
         ? g.dash
         : `${composite >= 0 ? '+' : ''}${composite.toFixed(2)}`,
-      w: WATCH_GRID.sig,
+      w: WATCH_GRID.trd,
       right: true,
       color: leanColor,
+    },
+    {
+      text: mrComposite === null
+        ? g.dash
+        : `${mrComposite >= 0 ? '+' : ''}${mrComposite.toFixed(2)}`,
+      w: WATCH_GRID.mr,
+      right: true,
+      color: mrLeanColor,
     },
     { text: f.fixed(row.rsi, 0), w: WATCH_GRID.rsi, right: true, color: 'gray-fg' },
   ];

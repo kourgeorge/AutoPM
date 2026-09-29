@@ -25,6 +25,8 @@ import type { Policy } from '../policy/types';
 import type { ModelProvider } from '../core/modelProvider';
 import { atr } from '../strategy/indicators';
 import { computeSignals, signalTally } from '../strategy/signals';
+import { computeMeanReversionSignals } from '../strategy/meanReversion';
+import { crossSectionalComposite, type CrossSectionalEntry } from '../strategy/crossSectional';
 import { entrySignalVeto, positionSizeVeto, exposureVeto } from '../strategy/orderManager';
 import { dailyLossStatus } from '../strategy/riskManager';
 import { canTighten } from '../strategy/stopOrders';
@@ -33,6 +35,16 @@ import { buildDailyDossier, type OpenPositionInput, type CandidateInput } from '
 import { decideDay, type Decision } from './aiDecision';
 
 export type ExitMode = 'stop_only' | 'stop_trailing' | 'stop_takeprofit';
+
+/**
+ * Which signal family scores entry candidates. `undefined`/`'trend'` is the original,
+ * unchanged path (`computeSignals` from `signals.ts`). The other three are additions for
+ * comparing signal families under the same walk-forward harness — see `strategy/meanReversion.ts`
+ * and `strategy/crossSectional.ts`. `'blend'` averages the trend and mean-reversion composites
+ * (one vote per family, not a signal concatenation that would let trend's 5 signals outvote
+ * mean-reversion's 4 by count).
+ */
+export type SignalSet = 'trend' | 'meanReversion' | 'crossSectional' | 'blend';
 
 /**
  * L1.5 — when present, the AI (not `policy.strategy.compositeMin`) decides which candidates to
@@ -54,6 +66,8 @@ export interface BacktestConfig {
   initialEquity: number;
   /** Only used by `stop_takeprofit` — the target as a multiple of the initial per-share risk. */
   takeProfitRMult: number;
+  /** Which signal family scores entry candidates. Defaults to `'trend'` — see `SignalSet`. */
+  signalSet?: SignalSet;
   ai?: AiBacktestOptions;
 }
 
@@ -343,7 +357,7 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
           aiTakeProfit: decision.takeProfit,
         });
       }
-    } else {
+    } else if (!config.signalSet || config.signalSet === 'trend') {
       for (const symbol of symbols) {
         if (open.has(symbol)) continue;
         const idxMap = dateIndexBySymbol.get(symbol);
@@ -366,6 +380,56 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
           price: window[window.length - 1].c,
           atrVal: atrSeries[atrSeries.length - 1],
         });
+      }
+      candidates.sort((a, b) => b.composite - a.composite);
+    } else {
+      // meanReversion / crossSectional / blend: build today's eligible list with the same
+      // sufficiency-only veto the AI branch above uses (-Infinity — data checks only, no
+      // trend-composite gate, since gating an alternate family on the trend threshold would
+      // just be testing "trend AND <family>").
+      const eligible: Array<{ symbol: string; window: Bar[]; price: number; atrVal: number }> = [];
+      for (const symbol of symbols) {
+        if (open.has(symbol)) continue;
+        const idxMap = dateIndexBySymbol.get(symbol);
+        const bars = barsBySymbol.get(symbol);
+        if (!idxMap || !bars) continue;
+        const tIdx = idxMap.get(t);
+        const t1Idx = idxMap.get(t1);
+        if (tIdx == null || t1Idx == null) continue;
+
+        const window = bars.slice(0, tIdx + 1);
+        const veto = entrySignalVeto(symbol, fresh(window, t), policy, -Infinity);
+        if (veto) continue;
+
+        const atrSeries = atr(window, policy.strategy.atrPeriod);
+        if (atrSeries.length === 0) continue;
+        eligible.push({ symbol, window, price: window[window.length - 1].c, atrVal: atrSeries[atrSeries.length - 1] });
+      }
+
+      const compositesBySymbol = new Map<string, number>();
+      if (config.signalSet === 'meanReversion') {
+        for (const e of eligible) {
+          const { composite } = signalTally(computeMeanReversionSignals(e.window, policy));
+          if (composite != null) compositesBySymbol.set(e.symbol, composite);
+        }
+      } else if (config.signalSet === 'crossSectional') {
+        const entries: CrossSectionalEntry[] = eligible.map(e => ({ symbol: e.symbol, bars: e.window }));
+        for (const [symbol, score] of crossSectionalComposite(entries)) compositesBySymbol.set(symbol, score.score);
+      } else {
+        // blend: one vote per family — average the two composites, not a signal concatenation.
+        for (const e of eligible) {
+          const { composite: trendComposite } = signalTally(computeSignals(e.window, policy));
+          const { composite: mrComposite } = signalTally(computeMeanReversionSignals(e.window, policy));
+          if (trendComposite != null && mrComposite != null) {
+            compositesBySymbol.set(e.symbol, (trendComposite + mrComposite) / 2);
+          }
+        }
+      }
+
+      for (const e of eligible) {
+        const composite = compositesBySymbol.get(e.symbol);
+        if (composite == null || composite < policy.strategy.compositeMin) continue;
+        candidates.push({ symbol: e.symbol, composite, price: e.price, atrVal: e.atrVal });
       }
       candidates.sort((a, b) => b.composite - a.composite);
     }

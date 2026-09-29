@@ -30,6 +30,7 @@ import { collectBars, DEFAULT_COLLECT_REQUEST } from '../collect';
 import { isPresent } from '../collect/types';
 import { atr } from '../strategy/indicators';
 import { computeSignals, signalSummary, signalTally } from '../strategy/signals';
+import { computeMeanReversionSignals } from '../strategy/meanReversion';
 import { reversalFilter } from '../strategy/reversal';
 import { getLastTick } from '../features/lastTick';
 import { watchlistScan } from '../features/watchlistScan';
@@ -53,7 +54,7 @@ import {
 import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
-import { benchmark } from '../review/benchmark';
+import { benchmark, symbolStats } from '../review/benchmark';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
 import { logger } from '../core/logger';
@@ -200,6 +201,18 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_price_stats',
+    description: 'Sharpe ratio, annualized volatility, max drawdown and total return for ONE symbol\'s own price series — not compared to your account or to SPY (that is get_benchmark). Same methodology as get_benchmark: simple daily returns, zero risk-free rate, annualized by sqrt(252) trading sessions. Use this for "what is <TICKER>\'s Sharpe/volatility/drawdown" for any symbol, including ones you do not hold. Read `caveats` first — windows under 5 sessions return null instead of a number, and short windows make every figure noisy. Never compute a Sharpe by hand from bars; this is the only validated source for one.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker symbol.' },
+        days: { type: 'integer', description: 'Calendar lookback (default 30).', minimum: 2, maximum: 3650 },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'write_lesson',
     description: 'Record ONE changed rule of thumb, in prose, for every future cycle to read. This is the only thing you can say that outlives this cycle — the context you are given is rebuilt from scratch next time, so a conclusion you do not write here is lost. Write one only when something actually taught you a rule: "XLE gapped on an OPEC headline nobody checked, so energy entries need a scheduled-events check" is a lesson; "the tape was choppy" is noise, and restating a rule already in your policy is noise. Most cycles must add nothing, and that is the correct outcome. Name the evidence inside the text — a scorecard number, a round trip, a veto you hit.',
     input_schema: {
@@ -326,6 +339,7 @@ export async function executeTraderTool(
       case 'get_journal':         return toolGetJournal(input);
       case 'get_scorecard':       return toolGetScorecard(input);
       case 'get_benchmark':       return await toolGetBenchmark(input);
+      case 'get_price_stats':     return await toolGetPriceStats(input);
       case 'write_lesson':        return toolWriteLesson(input);
       // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
       // delay, which only the agent loop can do), and it is not a concierge tool.
@@ -462,6 +476,7 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
   }
 
   const signals = computeSignals(bars.value, policy);
+  const meanReversionSignals = computeMeanReversionSignals(bars.value, policy);
   const atrSeries = atr(bars.value, policy.strategy.atrPeriod);
   const lastBar = bars.value[bars.value.length - 1];
 
@@ -486,11 +501,17 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
     atr: atrSeries.length > 0 ? parseFloat(atrSeries[atrSeries.length - 1].toFixed(2)) : null,
     signals,
     tally: signalTally(signals),
+    meanReversion: {
+      signals: meanReversionSignals,
+      tally: signalTally(meanReversionSignals),
+      summary: signalSummary(meanReversionSignals),
+    },
     reversal: reversalFilter(bars.value, marketCap),
     summary: signalSummary(signals),
     caveats: [
       'The five signals all measure trend and are highly correlated, so their counts inflate: a 5/5 tally is closer to one confirmation counted five times. tally.composite is their mean and is the number to threshold on.',
       'reversal is NOT in the composite. Its score reads the opposite way to a signal score — negative means the name has already run — and it answers "is this too late to chase" over about a month, not "is this a good entry today".',
+      'meanReversion is a second, decorrelated signal family — it answers a different question (has this run too far from its own recent history) than the trend family does (is this trending). Do not average it into tally.composite; read the two composites separately.',
     ],
   });
 }
@@ -1473,6 +1494,11 @@ function toolGetScorecard(input: Record<string, unknown>): string {
  */
 async function toolGetBenchmark(input: Record<string, unknown>): Promise<string> {
   return JSON.stringify(await benchmark({ days: input.days as number | undefined }));
+}
+
+/** `get_benchmark`'s single-symbol sibling — one price series, no account leg. */
+async function toolGetPriceStats(input: Record<string, unknown>): Promise<string> {
+  return JSON.stringify(await symbolStats(String(input.symbol ?? ''), { days: input.days as number | undefined }));
 }
 
 /**

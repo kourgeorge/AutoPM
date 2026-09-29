@@ -254,7 +254,9 @@ class TerminalUI {
       smartCSR: true,
       title: 'AutoTrade',
       fullUnicode: true,
-      // Mouse disabled so the terminal retains native text selection / copy-paste
+      // No top-level `mouse` option here — blessed's Screen never reads one. Mouse
+      // reporting turns on as a side effect of `logBox`'s own `mouse: true` below; see the
+      // comment there.
     });
 
     // Which characters this terminal may be shown. Blessed has already resolved unicode
@@ -284,6 +286,16 @@ class TerminalUI {
       },
       keys: true,
       vi: true,
+      // Without real mouse reporting, terminals fall back to sending the wheel as synthetic
+      // Up/Down keypresses — indistinguishable from real arrow keys, so every scroll landed on
+      // the focused input's history recall instead of the log. `ScrollableBox` (this widget's
+      // base class) reads `mouse` itself: it registers wheelup/wheeldown handlers that scroll,
+      // and registering them switches the whole screen into real mouse-reporting mode as a
+      // side effect (blessed's `newListener` hook → `screen._listenMouse()`), so genuine wheel
+      // events reach here instead of being re-encoded as arrows. Trade-off: native click-drag
+      // text selection is captured by the app now too — most terminals still offer a
+      // Shift-drag bypass for that.
+      mouse: true,
       padding: { left: 1, right: 1 },
     });
 

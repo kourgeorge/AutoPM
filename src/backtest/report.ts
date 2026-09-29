@@ -4,7 +4,7 @@
  * fact about the data or the method, never a grade, a "winner", or advice.
  */
 
-import type { BacktestConfig, ExitMode } from './engine';
+import type { BacktestConfig, ExitMode, SignalSet } from './engine';
 import type { Scorecard } from './metrics';
 import type { BenchmarkStats } from './benchmarkStats';
 
@@ -202,6 +202,55 @@ export function renderSweepReport(points: SweepPoint[]): string {
   if (spikes.length > 0) {
     lines.push(`${spikes.length} of ${points.length} grid point(s) are flagged "spike": their train expectancy diverges sharply from adjacent grid points, which is more consistent with noise than with a real effect.`);
   }
+  if (thinHoldouts.length > 0) {
+    lines.push(`${thinHoldouts.length} of ${points.length} grid point(s) have fewer than 20 holdout trades — too few to distinguish skill from variance in the holdout column.`);
+  }
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+// ── Signal family comparison ────────────────────────────────────────────────────
+
+export interface SignalFamilyPoint {
+  signalSet: SignalSet;
+  compositeMin: number;
+  train: { scorecard: Scorecard; benchmark: BenchmarkStats };
+  holdout: { scorecard: Scorecard; benchmark: BenchmarkStats };
+}
+
+export function renderSignalFamilyReport(points: SignalFamilyPoint[]): string {
+  const lines: string[] = [];
+  lines.push('# Backtest signal family comparison');
+  lines.push('');
+  lines.push(
+    'Level 1 (mechanical only). Train = all but the last 2 years; holdout = the last 2 years. '
+    + 'exitMode is fixed at `stop_only` (the sweep report\'s own reference mode) so this compares '
+    + 'signal families, not exit mechanics. `trend` is `signals.ts`\'s existing 5-signal family; '
+    + '`meanReversion` and `crossSectional` are new (see `strategy/meanReversion.ts`, '
+    + '`strategy/crossSectional.ts`); `blend` averages the trend and mean-reversion composites.',
+  );
+  lines.push('');
+
+  lines.push('| Signal set | compositeMin | Train trades | Train exp% | Holdout trades | Holdout exp% | Holdout excess vs SPY |');
+  lines.push('|---|---|---|---|---|---|---|');
+  for (const p of points) {
+    lines.push(
+      `| ${p.signalSet} | ${p.compositeMin} `
+      + `| ${p.train.scorecard.trades} | ${fmtPct(p.train.scorecard.expectancyPct)} `
+      + `| ${p.holdout.scorecard.trades} | ${fmtPct(p.holdout.scorecard.expectancyPct)} `
+      + `| ${fmtPct(p.holdout.benchmark.excessPct)} |`,
+    );
+  }
+  lines.push('');
+
+  const thinHoldouts = points.filter(p => p.holdout.scorecard.trades < 20);
+  lines.push('## Caveats');
+  lines.push('');
+  lines.push('Fees are estimated as 0.05% slippage and $0 commission — no other cost is modelled.');
+  lines.push('`compositeMin` is reused verbatim across all four families even though it was only ever chosen for the trend family — a modeling choice for this comparison, not each family\'s own optimum, which is why the grid still varies it.');
+  lines.push('`crossSectional`\'s eligible-universe size varies day to day (fewer symbols pass data-sufficiency checks early in the range), which changes what a given rank position means over time.');
+  lines.push('`meanReversion` and `blend` score every eligible symbol\'s reversal leg with market cap unknown — no fundamentals fetch exists at this level, so the size-adjusted chase threshold always falls back to the `unknown` bucket.');
   if (thinHoldouts.length > 0) {
     lines.push(`${thinHoldouts.length} of ${points.length} grid point(s) have fewer than 20 holdout trades — too few to distinguish skill from variance in the holdout column.`);
   }
