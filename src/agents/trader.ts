@@ -26,6 +26,8 @@ import type { OpenOrder } from '../broker/IBroker';
 const MAX_ROUNDS = 30;
 const DEFAULT_SLEEP_MS = 10 * 60_000;
 const ERROR_RECOVERY_SLEEP_MS = 60_000;
+/** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
+const PAUSED_RECHECK_MS = 60 * 60_000;
 
 /**
  * The L3 system prompt: policy/PLAYBOOK.md rendered against the active policy.
@@ -65,6 +67,12 @@ export class Trader {
   private wakePending = false;
   /** Cycles since this process started — a counter, not a persisted statistic. */
   private cycleCount = 0;
+  /**
+   * Operator `/pause`. Stops NEW cycles only: a cycle already running finishes (same reason
+   * `wakePending` never aborts one), and stops resting at the broker keep protecting positions.
+   * Instructions that arrive while paused stay queued for the first cycle after `/resume`.
+   */
+  private paused = false;
 
   async start(): Promise<void> {
     this.running = true;
@@ -79,6 +87,20 @@ export class Trader {
     this.wakeUp?.();
   }
 
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.wakeUp?.();
+  }
+
+  get status(): { paused: boolean; cycles: number } {
+    return { paused: this.paused, cycles: this.cycleCount };
+  }
+
   /**
    * Wake the trader from sleep. Optionally inject an instruction that
    * will appear in the next cycle context (sent by the concierge on behalf
@@ -88,6 +110,10 @@ export class Trader {
     if (message) {
       this.pendingMessages.push(message);
       logger.info(`[Trader] Instruction queued: "${message}"`);
+    }
+    if (this.paused) {
+      logger.info('[Trader] Paused — wake ignored until /resume');
+      return;
     }
     if (this.wakeUp) {
       logger.info('[Trader] Waking for next cycle');
@@ -102,6 +128,12 @@ export class Trader {
 
   private async loop(): Promise<void> {
     while (this.running) {
+      // A wake while paused ends this sleep too; the loop just re-checks and goes back under.
+      if (this.paused) {
+        ui.setTraderActivity({ state: 'idle', detail: 'paused — /resume to continue' });
+        await this.interruptibleSleep(PAUSED_RECHECK_MS);
+        continue;
+      }
       try {
         this.cycleCount++;
         const startedAt = Date.now();
