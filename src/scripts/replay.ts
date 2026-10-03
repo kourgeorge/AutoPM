@@ -31,6 +31,7 @@ import {
   ackEvent,
   getPendingEvents,
   publishTick,
+  releaseAllLatches,
   resetEventRegistry,
   type EventKind,
   type TriggerEvent,
@@ -687,6 +688,36 @@ function closedSession(): void {
   const stale = down.filter((e) => e.kind === 'data_stale');
   check('account staleness still reports overnight', stale.length === 1, `got ${stale.length}`);
   check('and it is the account one, not a price one', stale[0]?.symbol === null, `got ${stale[0]?.symbol}`);
+}
+
+/**
+ * 33. Position alerts wait for the open. The daily reset releases every latch at 00:00 ET,
+ *     and `entryPrice`/`sessionHigh` are multi-day baselines — so before this gate, every
+ *     position still below them re-fired `urgent` at midnight about yesterday's close (125
+ *     of 259 position alerts in one month fired with the market shut). Overnight the reading
+ *     must be skipped entirely, and the still-true condition must then report exactly once
+ *     on the open's own confirmed readings. `stop_breach` is not part of this gate.
+ */
+function positionAlertsWaitForOpen(): void {
+  const hold = [position('AAPL', 10, 100)];
+  const down = { positions: hold, prices: { AAPL: 95 } }; // -5%: past both drop thresholds
+
+  const night = [...tick(down, atNight(0)), ...tick(down, atNight(1)), ...tick(down, atNight(2))];
+  checkCount(night, 'position_drop', 0);
+  checkCount(night, 'trailing_drawdown', 0);
+
+  releaseAllLatches(); // what the 00:00 ET daily reset does
+
+  // NIGHT is 03:00 ET; +390 minutes is 09:30 ET, the first minute of the regular session.
+  const open = [...tick(down, atNight(390)), ...tick(down, atNight(391))];
+  checkCount(open, 'position_drop', 1);
+  checkCount(open, 'trailing_drawdown', 1);
+  const drop = open.find((e) => e.kind === 'position_drop');
+  check('it fires on the open\'s second reading, not on a night one', drop?.firedAt === atNight(391).toISOString(),
+    `got ${drop?.firedAt}`);
+
+  const later = tick(down, atNight(392));
+  checkCount(later, 'position_drop', 0);
 }
 
 /**
@@ -2363,6 +2394,7 @@ async function main(): Promise<void> {
     {},
     proposalTimeout,
   );
+  await scenario('33. Position alerts wait for the open — nothing fires at midnight', plain, positionAlertsWaitForOpen);
 
   console.log(`\n${'─'.repeat(72)}`);
   if (failures.length === 0) {
