@@ -13,13 +13,33 @@
  * every reading, so a slow bleed accumulates instead of resetting.
  */
 
+import type { TickData } from '../compute';
 import type { Detector, DetectorHit } from '../eventBus';
 import { pctText } from './util';
+
+/**
+ * All three detectors here read only while the regular session is open — the same gate the
+ * heartbeat uses, for the same reason: outside it nothing this system does can act on the
+ * reading (its orders are market orders that wait for the open), and the reading itself is at
+ * its least trustworthy (empty or one-sided books, a handful of extended-hours prints).
+ *
+ * Measured over 2026-09-04..10-03: 143 of 259 position alerts fired with the market shut, 125
+ * of them `urgent` — one full LLM cycle each. Most landed at 00:00-00:01 ET, the minute the
+ * daily reset releases every latch: `sessionHigh` and `entryPrice` are multi-day baselines,
+ * so every position still below them re-fired at once about yesterday's close. Skipping the
+ * reading (rather than downgrading its severity) leaves the released latch armed, so a
+ * condition that still holds reports ONCE, at the open, on live trading — which is what the
+ * reset's own comment always said the cost would be. `stop_breach` stays around the clock.
+ */
+function regularSession(data: TickData): boolean {
+  return data.session === 'open';
+}
 
 export const trailingDrawdownDetector: Detector = {
   kind: 'trailing_drawdown',
   evaluate(data, policy) {
     const hits: DetectorHit[] = [];
+    if (!regularSession(data)) return hits;
 
     for (const f of Object.values(data.positions)) {
       if (f.drawdownFromHighPct === null) continue;
@@ -55,6 +75,7 @@ export const positionDropDetector: Detector = {
   kind: 'position_drop',
   evaluate(data, policy) {
     const hits: DetectorHit[] = [];
+    if (!regularSession(data)) return hits;
 
     for (const f of Object.values(data.positions)) {
       if (f.pnlPct === null) continue;
@@ -93,6 +114,7 @@ export const positionSurgeDetector: Detector = {
   kind: 'position_surge',
   evaluate(data, policy) {
     const hits: DetectorHit[] = [];
+    if (!regularSession(data)) return hits;
 
     for (const f of Object.values(data.positions)) {
       if (f.pnlPct === null) continue;

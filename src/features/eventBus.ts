@@ -663,5 +663,8 @@ export function releaseAllLatches(): number {
   const state = getState();
   const held = Object.keys(state.eventCooldowns).length + state.armedTriggers.length;
   if (held > 0) updateState({ eventCooldowns: {}, armedTriggers: [] });
+  // The confirmation counts go too: a reading from yesterday's close must not be the first of
+  // the `confirmTicks` that confirm a breach on the open's first, least settled print.
+  breachStreak.clear();
   return held;
 }
