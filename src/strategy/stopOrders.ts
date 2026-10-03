@@ -429,6 +429,16 @@ export async function moveStopTo(
         logger.trade(`Stop for ${symbol} moved to $${nextLevel} (order ${id})`);
         return { ok: true as const, orderId: id };
       } catch (err: any) {
+        // Restating a stop at the level it already rests at is how a thesis or an earnings
+        // date gets recorded, and Alpaca refuses that no-op replace with "order parameters are
+        // not changed". The refusal SAYS the stop rests at `nextLevel` already, so it is the
+        // success case — reporting it as a failed move told the model a protected position
+        // had lost its stop (an observed false alarm on ADBE, 2026-08-29).
+        const venueText = String(err?.venueMessage ?? err?.message ?? '');
+        if (/parameters are not changed/i.test(venueText)) {
+          logger.info(`[Stops] ${symbol}: stop already rests at $${nextLevel} (order ${existingId}) — nothing to move`);
+          return { ok: true as const, orderId: existingId };
+        }
         // The venue refused the move. The old stop may still be resting at the OLD level, so the
         // id is left alone rather than cleared — the sweep verifies it against the venue and
         // clears it there if it is genuinely gone. Guessing here would either discard a live
