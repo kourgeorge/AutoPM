@@ -88,6 +88,7 @@ import {
   type SystemState,
 } from '../state/state';
 import { publishPortfolioReview } from '../review/scheduledReview';
+import { useEphemeralSectors } from '../collect/sectorCache';
 
 const VERBOSE = process.argv.includes('-v') || process.argv.includes('--verbose');
 const SOURCE: SourceId = 'alpaca';
@@ -284,6 +285,9 @@ async function scenario(
   currentScenario = name;
   console.log(`\n${name}`);
   useEphemeralState({ startOfDayEquity: ACCOUNT.equity, ...seed });
+  // Empty, so no scenario reads the operator's real data/sectors.json (scenario 29 used to
+  // fail on a real DATA_DIR because that file put AAPL and MSFT in one sector).
+  useEphemeralSectors();
   resetEventRegistry();
   resetLastTick();
   try {
@@ -1447,10 +1451,9 @@ function watchlistScanProjection(): void {
  * that it happens, and that nothing makes it happen twice. Everything else here exists to
  * stop a future "fix" from quietly breaking one of those.
  *
- * Sector fields are deliberately NOT asserted. `getCachedSectors` reads `data/sectors.json`,
- * so `bySector` depends on what the operator's cache happens to hold; the weights, the HHI and
- * the firing do not. Asserting a sector here would make the suite pass or fail on a file
- * nothing in the harness controls.
+ * Sector fields are deliberately NOT asserted. Every scenario starts with an empty sector cache
+ * (`useEphemeralSectors` in `scenario()`), so `bySector` here would only ever assert "unknown";
+ * the weights, the HHI and the firing are what this scenario is about.
  */
 function portfolioReviewLoop(): void {
   const p = getPolicy();
@@ -2200,13 +2203,10 @@ function concentrationFlutter(): void {
 
 /**
  * 29. Concentration — a single name alone breaching the 15% limit, next to a second
- *     position that stays under it. Only the single-name breach is asserted: a sector
- *     breach would need `maxSectorName`/`maxSectorWeightPct` from `getCachedSectors`,
- *     which reads the real, harness-uncontrolled `data/sectors.json` — the same reason
- *     scenario 19 (portfolioReviewLoop) never asserts sector fields. What this DOES prove,
- *     portably: the sector crossing is evaluated independently (its own `cooldownKey`) and
- *     never fires on data this harness cannot see, so it cannot mask, or be masked by, the
- *     single-name event.
+ *     position that stays under it. Only the single-name breach is asserted: the sector cache
+ *     starts empty in every scenario (`useEphemeralSectors`), so no sector is known and the
+ *     sector crossing — evaluated independently, under its own `cooldownKey` — has nothing to
+ *     fire on. That is what this proves: it cannot mask, or be masked by, the single-name event.
  */
 function concentrationSingleBreach(): void {
   const hold = [position('AAPL', 250, 100), position('MSFT', 120, 100)];
