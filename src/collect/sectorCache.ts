@@ -26,6 +26,19 @@ const SECTORS_FILE = path.join(DATA_DIR, 'sectors.json');
 
 /** Loaded once on first read, then authoritative in memory. */
 let _cache: Record<string, string> | null = null;
+/** Set by `useEphemeralSectors`: the cache is whatever the harness seeded, and never saved. */
+let _ephemeral = false;
+
+/**
+ * Test seam, same contract as `state.ts`'s `useEphemeralState`: replace the cache with `seed`
+ * and stop writing it to disk. Without it the replay harness read the operator's real
+ * `data/sectors.json`, so a sector breach fired or not depending on what that file held — the
+ * suite passed on an empty DATA_DIR and failed on a real one.
+ */
+export function useEphemeralSectors(seed: Record<string, string> = {}): void {
+  _ephemeral = true;
+  _cache = { ...seed };
+}
 
 function load(): Record<string, string> {
   if (_cache) return _cache;
@@ -47,6 +60,7 @@ function load(): Record<string, string> {
  * A write failure logs and continues — this must never take down a trading cycle.
  */
 function save(): void {
+  if (_ephemeral) return;
   try {
     ensureDataDir();
     writeFileAtomic(SECTORS_FILE, JSON.stringify(_cache, null, 2));
