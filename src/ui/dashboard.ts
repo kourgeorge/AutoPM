@@ -45,7 +45,7 @@ export interface PositionRow {
   takeProfitLevel: number | null;
   distanceToTargetPct: number | null;
   rsi: number | null;
-  heldForMs: number;
+  heldForMs: number | null;
 }
 
 /** Structural subset of `compute.ts`'s `WatchlistData`. */

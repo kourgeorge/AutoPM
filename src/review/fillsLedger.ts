@@ -156,3 +156,26 @@ export function recordFills(fills: Fill[]): number {
 
   return fresh.length;
 }
+
+/**
+ * When the currently open position in `symbol` was opened, from the fills ledger — or null
+ * when the ledger shows no open position (none of its fills, or it ends flat).
+ *
+ * For a snapshot missing `openedAt`: positions this system did not open have none, and neither
+ * does a snapshot `annotate_position` creates for a position whose record was lost. Walked
+ * flat-to-flat from the venue's own fills, the same way `review/ledger.ts` matches round trips:
+ * the answer wanted is the LAST time the book went from flat to holding, because everything
+ * before that belongs to a trade already closed.
+ */
+export function openedAtFromFills(symbol: string): string | null {
+  const fills = readFills({ symbol }).sort((a, b) => a.at.localeCompare(b.at));
+  let qty = 0;
+  let openedAt: string | null = null;
+  for (const f of fills) {
+    const before = qty;
+    qty += f.side === 'buy' ? f.qty : -f.qty;
+    if (before <= 0 && qty > 0) openedAt = f.at;
+    if (qty <= 0) openedAt = null;
+  }
+  return openedAt;
+}

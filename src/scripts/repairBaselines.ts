@@ -34,7 +34,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import { fetchTradedRange } from '../collect/priceSource';
 import { canonicalSymbol } from '../core/symbols';
-import { readFills } from '../review/fillsLedger';
+import { openedAtFromFills } from '../review/fillsLedger';
 import { getPositionSnapshot, getState, patchPositionSnapshot, type PositionSnapshot } from '../state/state';
 
 const WRITE = process.argv.includes('--write');
@@ -65,27 +65,6 @@ const END_SLACK_MS = 26 * 60 * 60_000;
 /** Crypto trades 24/7 on a different endpoint; the stocks bars API answers 400 for a pair. */
 const CRYPTO = /[/-](USD|USDT|USDC)$|^(BTC|ETH|LTC|BCH|SOL|DOGE)USD$/i;
 
-/**
- * When the position was opened, from the fills ledger, for a snapshot missing `openedAt`.
- *
- * Positions this system did not open have no `openedAt` — and CRM, the reason this script
- * exists, is one of them. Walked flat-to-flat from the venue's own fills, the same way
- * `review/ledger.ts` matches round trips: the answer wanted is the LAST time the book went
- * from flat to holding, because everything before that belongs to a trade already closed.
- */
-function openedFromFills(symbol: string): string | null {
-  const fills = readFills({ symbol }).sort((a, b) => a.at.localeCompare(b.at));
-  let qty = 0;
-  let openedAt: string | null = null;
-  for (const f of fills) {
-    const before = qty;
-    qty += f.side === 'buy' ? f.qty : -f.qty;
-    if (before <= 0 && qty > 0) openedAt = f.at;
-    if (qty <= 0) openedAt = null;
-  }
-  return openedAt;
-}
-
 /** Is the live daemon holding this state in memory? Then the file is not the truth. */
 function daemonPid(): string | null {
   try {
@@ -104,7 +83,7 @@ interface Verdict {
 
 async function judge(snap: PositionSnapshot): Promise<Verdict> {
   const symbol = snap.symbol;
-  const openedAt = snap.openedAt ?? openedFromFills(symbol);
+  const openedAt = snap.openedAt ?? openedAtFromFills(symbol);
   if (!openedAt) {
     return { symbol, detail: 'SKIP  no openedAt and no open position in the fills ledger — no window to measure' };
   }

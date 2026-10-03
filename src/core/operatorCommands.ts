@@ -35,7 +35,8 @@ function num(n: number | null | undefined, digits = 2): string {
   return n == null ? '—' : n.toFixed(digits);
 }
 
-function holdFor(ms: number): string {
+function holdFor(ms: number | null): string {
+  if (ms == null) return '?';
   const h = ms / 3_600_000;
   return h >= 48 ? `${(h / 24).toFixed(1)}d` : `${h.toFixed(1)}h`;
 }

@@ -55,6 +55,7 @@ import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
+import { openedAtFromFills } from '../review/fillsLedger';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
 import { logger } from '../core/logger';
@@ -1091,10 +1092,15 @@ export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true 
 
   // Write baselines. entryPrice only if it was missing — the ownership invariant from
   // openPositionSnapshot: entry baselines are written once and never overwritten.
+  // Same rule for `openedAt`: filled only when missing, from the fills ledger — a snapshot
+  // created here for a position whose record was lost would otherwise have no holding time.
+  const openedAtMissing = getPositionSnapshot(symbol)?.openedAt == null;
+  const openedAt = openedAtMissing ? openedAtFromFills(symbol) : null;
   upsertPositionSnapshot(symbol, {
     stopLevel: stopLoss,
     ...(takeProfit != null && { takeProfitLevel: takeProfit }),
     ...(snapEntryPriceMissing && { entryPrice: effectiveEntry }),
+    ...(openedAt && { openedAt }),
     entryDecisionId: record.id,
   });
 

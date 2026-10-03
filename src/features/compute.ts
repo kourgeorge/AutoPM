@@ -69,7 +69,8 @@ export interface PositionData {
   emaSlow: number | null;
   rsi: number | null;
   atr: number | null;
-  heldForMs: number;
+  /** Null when no `openedAt` is recorded: unknown, which is not the same as "just opened". */
+  heldForMs: number | null;
 }
 
 export interface WatchlistData {
@@ -307,7 +308,7 @@ function buildPositionData(
     atr: ind.atr,
     heldForMs: snap?.openedAt
       ? Math.max(0, Date.parse(computedAt) - Date.parse(snap.openedAt))
-      : 0,
+      : null,
   };
 }
 

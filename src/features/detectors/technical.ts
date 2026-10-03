@@ -42,7 +42,7 @@ export const emaCrossDownDetector: Detector = {
           emaSlow: f.emaSlow,
           spread,
           pnlPct: f.pnlPct ?? 'n/a',
-          heldForMs: f.heldForMs,
+          heldForMs: f.heldForMs ?? 'n/a',
         },
         suggestedAction: 'review',
         crossing: {
@@ -75,7 +75,7 @@ export const rsiExitZoneDetector: Detector = {
           rsi: f.rsi,
           rsiExitMax: policy.strategy.rsiExitMax,
           pnlPct: f.pnlPct ?? 'n/a',
-          heldForMs: f.heldForMs,
+          heldForMs: f.heldForMs ?? 'n/a',
         },
         suggestedAction: 'review',
         crossing: {

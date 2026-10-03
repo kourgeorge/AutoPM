@@ -13,7 +13,8 @@
 
 import { broker } from '../broker';
 import { logger } from '../core/logger';
-import { readFills, recordFills } from './fillsLedger';
+import { openedAtFromFills, readFills, recordFills } from './fillsLedger';
+import { getState, patchPositionSnapshot } from '../state/state';
 
 /**
  * How far back to ask.
@@ -66,6 +67,9 @@ export async function reconcileOnStartup(): Promise<void> {
 
   await reconcileFills(COLD_LOOKBACK_MS);
 
+  // After the catch-up, so a fill that landed while the daemon was down can date its position.
+  backfillOpenedAt();
+
   if (!last) return;
 
   const after = readFills();
@@ -81,4 +85,23 @@ export async function reconcileOnStartup(): Promise<void> {
         `longer than one session may be unrecoverable — treat this window as incomplete.`,
     );
   }
+}
+
+/**
+ * Give every snapshot without an `openedAt` the one the fills ledger implies. Without it the
+ * position's holding time is unknown, and it used to read as 0 — MRK, held since 2026-08-28,
+ * reached the trader for weeks as "held for 0" on every alert. Only fills a GAP: a recorded
+ * `openedAt` is an entry baseline, written once and never overwritten.
+ */
+export function backfillOpenedAt(): number {
+  let filled = 0;
+  for (const snap of Object.values(getState().positionSnapshots)) {
+    if (snap.openedAt) continue;
+    const openedAt = openedAtFromFills(snap.symbol);
+    if (!openedAt) continue;
+    patchPositionSnapshot(snap.symbol, { openedAt });
+    logger.info(`[Reconcile] ${snap.symbol}: no openedAt recorded — set to ${openedAt} from the fills ledger`);
+    filled += 1;
+  }
+  return filled;
 }
