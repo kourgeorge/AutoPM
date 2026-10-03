@@ -1423,17 +1423,59 @@ function toolGetPendingEvents(): string {
   });
 }
 
+/**
+ * How far a given id's timestamp may sit from a pending event's before it is NOT treated as
+ * a mis-copy of it. Ids are `kind:symbol:firedAt` with millisecond timestamps, and a model
+ * copying 24 characters of digits does get one wrong (an observed `.842Z` for `.814Z`). Kept
+ * well under the shortest gap at which the same kind+symbol can fire again — one tick, never
+ * below `immutable.minTickIntervalMs` (30s) — so the near-match can only ever be the event
+ * the caller was looking at, never a newer one of the same kind it has not seen yet.
+ */
+const ACK_ID_TOLERANCE_MS = 10_000;
+
+/**
+ * The pending event an ack id refers to: an exact match, or else the ONE pending event with
+ * the same kind and symbol whose timestamp is within `ACK_ID_TOLERANCE_MS`. Anything looser
+ * would let a stale id from an earlier cycle silently answer a fresh event.
+ */
+function resolveAckId(id: string): { id: string; symbol: string | null; corrected: boolean } | { candidates: string[] } {
+  const pending = getPendingEvents();
+  const exact = pending.find((e) => e.id === id);
+  if (exact) return { id: exact.id, symbol: exact.symbol, corrected: false };
+
+  // `kind:symbol:` — the timestamp after it has colons of its own, so split off two fields only.
+  const m = /^([^:]+):([^:]+):(.+)$/.exec(id);
+  const sameKey = m ? pending.filter((e) => e.kind === m[1] && (e.symbol ?? '-') === m[2]) : [];
+  const givenAt = m ? Date.parse(m[3]) : NaN;
+  const near = Number.isFinite(givenAt)
+    ? sameKey.filter((e) => Math.abs(Date.parse(e.firedAt) - givenAt) <= ACK_ID_TOLERANCE_MS)
+    : [];
+  if (near.length === 1) return { id: near[0].id, symbol: near[0].symbol, corrected: true };
+  return { candidates: sameKey.map((e) => e.id) };
+}
+
 function toolAckEvent(input: Record<string, unknown>): string {
-  const { id, disposition, note } = input as {
+  const { id: givenId, disposition, note } = input as {
     id: string; disposition: AckDisposition; note?: string;
   };
-  // Read before the ack: `ackEvent` deletes from `pending`, so afterwards there is no
+  // Resolved before the ack: `ackEvent` deletes from `pending`, so afterwards there is no
   // event left to ask which symbol it was about.
-  const symbol = getPendingEvents().find(e => e.id === id)?.symbol ?? null;
+  const resolved = resolveAckId(givenId);
+  if ('candidates' in resolved) {
+    // Reported rather than swallowed: a hallucinated id must not read as a handled event,
+    // or the escalation ladder keeps climbing while the model believes it answered. The
+    // pending ids of the same kind+symbol go back with it so a retry needs no extra call.
+    return JSON.stringify({
+      ok: false,
+      error: 'unknown or already-acked event id',
+      ...(resolved.candidates.length
+        ? { pendingIdsForThisKindAndSymbol: resolved.candidates }
+        : { hint: 'no pending event of this kind and symbol — it may already be acked; get_pending_events lists what is still open' }),
+    });
+  }
+  const { id, symbol, corrected } = resolved;
 
   if (!ackEvent(id, disposition, note)) {
-    // Reported rather than swallowed: a hallucinated id must not read as a handled event,
-    // or the escalation ladder keeps climbing while the model believes it answered.
     return JSON.stringify({ ok: false, error: 'unknown or already-acked event id' });
   }
 
@@ -1463,8 +1505,12 @@ function toolAckEvent(input: Record<string, unknown>): string {
     }));
   }
 
-  logger.info(`[TraderTool] ack ${id} — ${disposition}${note ? `: ${note}` : ''}`);
-  return JSON.stringify({ ok: true, id, disposition });
+  logger.info(`[TraderTool] ack ${id}${corrected ? ` (given as ${givenId})` : ''} — ${disposition}${note ? `: ${note}` : ''}`);
+  // Said back when corrected, so the model copies the real id next time instead of
+  // learning that its mis-copy was the right one.
+  return JSON.stringify(corrected
+    ? { ok: true, id, disposition, correctedFrom: givenId }
+    : { ok: true, id, disposition });
 }
 
 function toolGetJournal(input: Record<string, unknown>): string {
