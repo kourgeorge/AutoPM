@@ -32,6 +32,8 @@ import {
 import { decideProposal } from '../core/proposals';
 import { escapeTags, plainWidth, wrapPlain } from './format';
 import { makeGlyphs, type Glyphs } from './glyphs';
+import { DECIDE_COMMAND, HEADLESS, type OperatorUI, type SlashCommand } from './surface';
+import { HeadlessUI } from './headless';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 
@@ -192,31 +194,11 @@ function clipPlain(s: string, width: number): string {
 
 // ── UI singleton ─────────────────────────────────────────────────────────────
 
-/**
- * `approve <id>` / `reject <id> [reason...]`, case-insensitive. Matched against the raw input
- * line BEFORE anything reaches the concierge — same layer the old bare y/n used to intercept at
- * — so a decision never passes through a language model. Explicit ids rather than a bare y/n:
- * multiple proposals can be open at once, and a bare y/n has nothing to disambiguate against.
- */
-const DECIDE_COMMAND = /^(approve|reject)\s+(\S+)(?:\s+([\s\S]*))?$/i;
+// `DECIDE_COMMAND` (`approve <id>` / `reject <id> [reason]`) and `SlashCommand` live in
+// `surface.ts`, shared with the headless UI so both accept exactly the same input.
+export type { SlashCommand } from './surface';
 
-/**
- * One `/name args` operator command. Handled entirely outside the concierge, like
- * `DECIDE_COMMAND`: a slash command is an instruction to the program, not to a model.
- *
- * Commands that need broker, journal or policy data are registered from `daemon.ts` (see
- * `core/operatorCommands.ts`) — this module must stay importable without config.
- */
-export interface SlashCommand {
-  name: string;
-  aliases?: string[];
-  /** Shown after the name in `/help`, e.g. `[days]`. */
-  args?: string;
-  help: string;
-  run: (args: string) => void | Promise<void>;
-}
-
-class TerminalUI {
+class TerminalUI implements OperatorUI {
   private screen: blessed.Widgets.Screen;
   private logBox: blessed.Widgets.Log;
   private input: InputEditor;
@@ -1092,4 +1074,10 @@ class TerminalUI {
   }
 }
 
-export const ui = new TerminalUI();
+/**
+ * The one UI every module talks to. `HEADLESS=1` swaps the blessed screen for `HeadlessUI`
+ * (plain stdout logs + state for the HTTP API) — chosen here, once, so no caller has to know.
+ * The blessed screen is never constructed in headless mode, which is what lets the process run
+ * with no terminal attached at all.
+ */
+export const ui: OperatorUI = HEADLESS ? new HeadlessUI() : new TerminalUI();
