@@ -16,6 +16,7 @@ import { automationLevel, automationSummary } from './core/automation';
 import { getOpenProposals } from './core/proposals';
 import type { EventRow } from './ui/dashboard';
 import { getMarketStatusSnapshot } from './tools/traderTools';
+import { registerOperatorCommands } from './core/operatorCommands';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -100,8 +101,9 @@ function decisionToActivityRow(r: DecisionRecord): EventRow {
 const trader = new Trader();
 const concierge = new ConciergeAgent(msg => trader.wake(msg));
 
-// All user input goes to the concierge
+// All user input goes to the concierge — except `/` commands, which the UI handles itself
 ui.onMessage((msg) => concierge.handleMessage(msg));
+registerOperatorCommands(trader);
 
 // L2 — the deterministic tick loop, and the ONLY path that wakes anyone. Machine wakes
 // carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a
@@ -164,5 +166,6 @@ function shutdown(signal: string): void {
   process.exit(0);
 }
 
+ui.onQuit(() => shutdown('operator quit'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -200,6 +200,22 @@ function clipPlain(s: string, width: number): string {
  */
 const DECIDE_COMMAND = /^(approve|reject)\s+(\S+)(?:\s+([\s\S]*))?$/i;
 
+/**
+ * One `/name args` operator command. Handled entirely outside the concierge, like
+ * `DECIDE_COMMAND`: a slash command is an instruction to the program, not to a model.
+ *
+ * Commands that need broker, journal or policy data are registered from `daemon.ts` (see
+ * `core/operatorCommands.ts`) — this module must stay importable without config.
+ */
+export interface SlashCommand {
+  name: string;
+  aliases?: string[];
+  /** Shown after the name in `/help`, e.g. `[days]`. */
+  args?: string;
+  help: string;
+  run: (args: string) => void | Promise<void>;
+}
+
 class TerminalUI {
   private screen: blessed.Widgets.Screen;
   private logBox: blessed.Widgets.Log;
@@ -209,6 +225,10 @@ class TerminalUI {
   private strip: blessed.Widgets.BoxElement;
   private eventsBox: blessed.Widgets.BoxElement;
   private onSubmit?: (line: string) => void;
+  /** Keyed by name AND every alias; `/help` lists `commandOrder` so each shows once. */
+  private commands = new Map<string, SlashCommand>();
+  private commandOrder: SlashCommand[] = [];
+  private quitHandler: () => void = () => process.exit(0);
 
   // ── Dashboard state ──
   // Everything the panel draws is PUSHED here by whoever already knows it, and nothing in this
@@ -310,7 +330,7 @@ class TerminalUI {
       tags: true,
       // One row high: a wrap here would not spill, it would silently CUT the line short.
       wrap: false,
-      content: ' {bold}AutoTrade{/}  |  Enter send  |  ←/→ ⌥←/→ edit  |  ↑/↓ history  |  Esc clear  |  F3 inbox  |  PgUp/PgDn scroll  |  Ctrl+C quit',
+      content: ' {bold}AutoTrade{/}  |  Enter send  |  /help commands  |  ←/→ ⌥←/→ edit  |  ↑/↓ history  |  Esc clear  |  F3 inbox  |  PgUp/PgDn scroll  |  Ctrl+C quit',
       padding: { left: 1 },
     });
 
@@ -387,25 +407,15 @@ class TerminalUI {
     });
 
     // ── Key bindings ─────────────────────────────────────────────────────────
-    this.screen.key(['C-c'], () => process.exit(0));
+    this.screen.key(['C-c'], () => this.quitHandler());
 
     // Tab returns focus to the prompt from anywhere (e.g. after log scrolling)
     this.screen.key('tab', () => this.input.focus());
 
     // F2 is safe next to the editor: blessed only sets `ch` for single-character keys
     // (keys.js:313), so a function key cannot be typed into the prompt as a stray glyph.
-    this.screen.key('f2', () => {
-      this.panelEnabled = !this.panelEnabled;
-      this.layout();
-      this.paint();
-    });
-
-    this.screen.key('f3', () => {
-      if (this.mainView === 'log' && !this.eventsAvailable) return;
-      this.mainView = this.mainView === 'events' ? 'log' : 'events';
-      this.layout();
-      this.paint();
-    });
+    this.screen.key('f2', () => this.togglePanel());
+    this.screen.key('f3', () => this.toggleInbox());
 
     // Blessed renders once with the old geometry before emitting this, so the relayout costs
     // at most one stale frame — and never a wrong-sized panel that persists.
@@ -420,10 +430,14 @@ class TerminalUI {
       // must not pass through a language model, and the concierge has no decide tool precisely
       // so it cannot answer on the operator's behalf. Anything that doesn't match the command
       // syntax falls through to the conversation exactly as it always did.
-      const match = DECIDE_COMMAND.exec(line.trim());
+      const trimmed = line.trim();
+      if (trimmed.startsWith('/')) return this.runCommand(trimmed);
+      const match = DECIDE_COMMAND.exec(trimmed);
       if (match) return this.decide(match[1].toLowerCase() as 'approve' | 'reject', match[2], match[3]);
       this.onSubmit?.(line);
     });
+
+    this.registerBuiltinCommands();
 
     // Scroll log with Page Up/Down even when input is focused
     this.input.el.key('pageup',   () => { this.logBox.scroll(-this.logBox.height as number); this.screen.render(); });
@@ -448,6 +462,21 @@ class TerminalUI {
 
   onMessage(handler: (line: string) => void): void {
     this.onSubmit = handler;
+  }
+
+  /** Used by `/quit` and Ctrl+C. Defaults to a bare exit so a probe script needs no wiring. */
+  onQuit(handler: () => void): void {
+    this.quitHandler = handler;
+  }
+
+  /** A later registration under the same name or alias replaces the earlier one. */
+  registerCommand(cmd: SlashCommand): void {
+    for (const key of [cmd.name, ...(cmd.aliases ?? [])]) {
+      const prev = this.commands.get(key);
+      if (prev) this.commandOrder = this.commandOrder.filter((c) => c !== prev);
+      this.commands.set(key, cmd);
+    }
+    this.commandOrder.push(cmd);
   }
 
   /**
@@ -606,6 +635,119 @@ class TerminalUI {
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
+
+  private togglePanel(): void {
+    this.panelEnabled = !this.panelEnabled;
+    this.layout();
+    this.paint();
+  }
+
+  private toggleInbox(): void {
+    if (this.mainView === 'log' && !this.eventsAvailable) return;
+    this.mainView = this.mainView === 'events' ? 'log' : 'events';
+    this.layout();
+    this.paint();
+  }
+
+  /**
+   * Never falls through to the concierge, even for an unknown name: a mistyped `/pasue` sent on
+   * as chat would be answered by a model that cannot pause anything, which reads as if it had.
+   */
+  private runCommand(line: string): void {
+    const [head, ...rest] = line.slice(1).split(/\s+/);
+    const name = head.toLowerCase();
+    const args = rest.join(' ').trim();
+    const cmd = this.commands.get(name);
+    if (!cmd) {
+      this.log('WARN', `Unknown command /${name} — type /help for the list.`);
+      return;
+    }
+    const fail = (err: any): void =>
+      this.log('WARN', `/${cmd.name} failed: ${err?.message ?? String(err)}`);
+    try {
+      const result = cmd.run(args);
+      if (result instanceof Promise) result.catch(fail);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  /** Only what this class can do on its own; data commands come from `daemon.ts`. */
+  private registerBuiltinCommands(): void {
+    this.registerCommand({
+      name: 'help',
+      aliases: ['?', 'commands'],
+      help: 'List every command.',
+      run: () => {
+        const rows = this.commandOrder.map((c) => {
+          const usage = `/${c.name}${c.args ? ` ${c.args}` : ''}`;
+          const aka = c.aliases?.length ? ` (also ${c.aliases.map((a) => `/${a}`).join(', ')})` : '';
+          return { usage, text: `${c.help}${aka}` };
+        });
+        const width = Math.max(...rows.map((r) => r.usage.length)) + 2;
+        this.reply([
+          'Commands (anything not starting with / goes to the concierge):',
+          '',
+          ...rows.map((r) => `${r.usage.padEnd(width)}${r.text}`),
+          '',
+          'approve <id> / reject <id> [reason] also work without the slash.',
+        ].join('\n'));
+      },
+    });
+    this.registerCommand({
+      name: 'quit',
+      aliases: ['exit', 'q'],
+      help: 'Shut down cleanly (same as Ctrl+C).',
+      run: () => this.quitHandler(),
+    });
+    this.registerCommand({
+      name: 'clear',
+      aliases: ['cls'],
+      help: 'Clear the log pane. Nothing on disk is touched.',
+      run: () => {
+        this.logBox.setContent('');
+        this.lastBlank = true;
+        this.screen.render();
+      },
+    });
+    this.registerCommand({
+      name: 'inbox',
+      help: 'Show or hide the events inbox (same as F3).',
+      run: () => {
+        if (this.mainView === 'log' && !this.eventsAvailable) {
+          this.log('WARN', 'The terminal is too small to show the inbox.');
+          return;
+        }
+        this.toggleInbox();
+      },
+    });
+    this.registerCommand({
+      name: 'panel',
+      help: 'Show or hide the live panel (same as F2).',
+      run: () => this.togglePanel(),
+    });
+    this.registerCommand({
+      name: 'approve',
+      args: '<id>',
+      help: 'Approve a pending proposal.',
+      run: (args) => this.decideFromCommand('approve', args),
+    });
+    this.registerCommand({
+      name: 'reject',
+      args: '<id> [reason]',
+      help: 'Reject a pending proposal.',
+      run: (args) => this.decideFromCommand('reject', args),
+    });
+  }
+
+  private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
+    const [id, ...reason] = args.split(/\s+/).filter(Boolean);
+    if (!id) {
+      this.log('WARN', `Usage: /${decision} <id>${decision === 'reject' ? ' [reason]' : ''}`);
+      return;
+    }
+    this.decide(decision, id, reason.join(' '));
+  }
 
   /**
    * Resolve one `approve <id>` / `reject <id> [reason]` command against the live proposal
