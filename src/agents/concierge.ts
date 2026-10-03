@@ -12,6 +12,7 @@ import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
 import { updateTradingSettings } from '../policy/mutate';
+import { renderPolicy } from '../policy/render';
 import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState } from '../state/state';
@@ -86,6 +87,11 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
       },
       required: ['message'],
     },
+  },
+  {
+    name: 'get_policy_playbook',
+    description: 'Read the full trading policy prose (PLAYBOOK.md) as currently rendered, with live policy values substituted for every placeholder. This is word-for-word what governs the trader\'s decisions each cycle. Use this whenever the operator asks what a rule actually says or why a limit is what it is — quoting a rule from memory instead of reading it here is a fabricated one.',
+    input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'update_trading_settings',
@@ -268,6 +274,14 @@ export class ConciergeAgent {
         watchlist: getPolicy().strategy.watchlist,
         positionSnapshots: state.positionSnapshots,
       });
+    }
+
+    if (name === 'get_policy_playbook') {
+      try {
+        return JSON.stringify({ playbook: renderPolicy() });
+      } catch (err: any) {
+        return JSON.stringify({ error: `PLAYBOOK.md failed to render: ${err.message}` });
+      }
     }
 
     if (name === 'send_to_trader') {
