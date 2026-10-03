@@ -17,6 +17,8 @@ import { getOpenProposals } from './core/proposals';
 import type { EventRow } from './ui/dashboard';
 import { getMarketStatusSnapshot } from './tools/traderTools';
 import { registerOperatorCommands } from './core/operatorCommands';
+import { HeadlessUI } from './ui/headless';
+import { startApiServer } from './server/api';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -105,6 +107,11 @@ const concierge = new ConciergeAgent(msg => trader.wake(msg));
 ui.onMessage((msg) => concierge.handleMessage(msg));
 registerOperatorCommands(trader);
 
+// Headless (`HEADLESS=1`) means a server with no keyboard: the HTTP API is how an operator
+// reaches the same commands, approvals and chat. Started after the commands are registered so
+// `/api/commands` lists them all from the first request.
+const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader }) : null;
+
 // L2 — the deterministic tick loop, and the ONLY path that wakes anyone. Machine wakes
 // carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a
 // machine event is not an operator instruction. The events themselves travel via the
@@ -163,6 +170,11 @@ function shutdown(signal: string): void {
   scheduler.stop();
   clearInterval(venueClockTimer);
   trader.stop();
+  // Bounded: a stuck client must not keep a SIGTERM'd container alive until it is SIGKILLed.
+  if (api) {
+    void Promise.race([api.close(), new Promise((r) => setTimeout(r, 2000))]).then(() => process.exit(0));
+    return;
+  }
   process.exit(0);
 }
 

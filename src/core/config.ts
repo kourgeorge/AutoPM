@@ -93,4 +93,20 @@ export const config = {
     maxTokensPerTurn: parseInt(process.env.AI_MAX_TOKENS ?? '4096'),
     maxToolRounds: parseInt(process.env.AI_MAX_TOOL_ROUNDS ?? '10'),
   },
+
+  /**
+   * The operator HTTP API (`server/api.ts`). Started only under `HEADLESS=1`, and only when a
+   * token is set — an API that can approve trades is never opened without one.
+   *
+   * Binds to localhost by default: put a TLS-terminating reverse proxy (Caddy, nginx, the
+   * platform's load balancer) in front rather than exposing plain HTTP. Set `API_HOST=0.0.0.0`
+   * only inside a container whose port is published to that proxy alone.
+   */
+  api: {
+    token: process.env.API_TOKEN?.trim() ?? '',
+    host: process.env.API_HOST?.trim() || '127.0.0.1',
+    port: parseInt(process.env.API_PORT ?? '8787'),
+    /** Exact origin allowed to call from a browser, e.g. `https://app.example.com`. Unset = none. */
+    corsOrigin: process.env.API_CORS_ORIGIN?.trim() || null,
+  },
 } as const;

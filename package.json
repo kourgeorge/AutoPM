@@ -13,7 +13,9 @@
     "backtest": "ts-node src/scripts/backtest.ts",
     "backtest:sweep": "ts-node src/scripts/backtestSweep.ts",
     "backtest:signals": "ts-node src/scripts/backtestSignalFamilies.ts",
-    "backtest:ai": "ts-node src/scripts/backtestAi.ts"
+    "backtest:ai": "ts-node src/scripts/backtestAi.ts",
+    "dev:headless": "HEADLESS=1 ts-node src/daemon.ts",
+    "start:headless": "HEADLESS=1 node dist/daemon.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

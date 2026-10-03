@@ -1,0 +1,298 @@
+/**
+ * The UI with no screen — for running the bot on a server.
+ *
+ * Selected by `HEADLESS=1` (see `surface.ts`). It takes the same calls as the blessed
+ * `TerminalUI`, but instead of painting it:
+ *
+ *   - prints every log line to stdout as plain text, so `docker logs` / journald hold it;
+ *   - keeps the latest dashboard state (tick, proposals, lanes, ...) for the API to read;
+ *   - keeps a bounded FEED of everything a terminal operator would have seen in the log box —
+ *     log lines, replies, charts, alerts, and the operator's own messages — numbered, so a
+ *     web client can ask for "everything after #N" or stream it live.
+ *
+ * Input arrives through `submit()` (a typed line, same grammar as the terminal) or
+ * `runCommand()` (one slash command, with its replies handed back to the caller), both called
+ * from `server/api.ts`.
+ *
+ * Holds no timers and no open handles, so a script that imports `ui` under `HEADLESS=1`
+ * still exits on its own.
+ */
+import { AsyncLocalStorage } from 'async_hooks';
+import { decideProposal } from '../core/proposals';
+import type { Cycle, Environment, EventRow, Lane, ProposalRow, TickSnapshot } from './dashboard';
+import { DECIDE_COMMAND, type LogLevel, type OperatorUI, type SlashCommand } from './surface';
+
+/** Enough for a few hours of a busy session; older entries are dropped from the front. */
+const FEED_CAPACITY = 2000;
+
+/** Charts are sized to this many columns — there is no box to measure, so pick a sensible web width. */
+const CHART_COLS = 100;
+
+export type FeedKind = 'log' | 'reply' | 'chart' | 'alert' | 'operator';
+
+export interface FeedEntry {
+  /** Strictly increasing, never reused — clients resume with `after=<seq>`. */
+  seq: number;
+  at: string;
+  kind: FeedKind;
+  /** Set for `kind: 'log'` only. */
+  level?: LogLevel;
+  text: string;
+}
+
+export interface HeadlessSnapshot {
+  env: Environment;
+  venueOpen: boolean | null;
+  traderLane: Lane;
+  conciergeLane: Lane;
+  cycle: Cycle;
+  tick: TickSnapshot | null;
+  events: EventRow[];
+  activity: EventRow[];
+  proposals: ProposalRow[];
+}
+
+export interface CommandResult {
+  ok: boolean;
+  /** What the command said — every `reply`/`replyChart`/`log` it made while it ran. */
+  output: FeedEntry[];
+  error?: string;
+}
+
+export class HeadlessUI implements OperatorUI {
+  private onSubmit?: (line: string) => void;
+  private commands = new Map<string, SlashCommand>();
+  private commandOrder: SlashCommand[] = [];
+
+  private feed: FeedEntry[] = [];
+  private nextSeq = 1;
+  private listeners = new Set<(entry: FeedEntry) => void>();
+  private tickListeners = new Set<() => void>();
+  /**
+   * Which command run (if any) the current async call chain belongs to. A command like
+   * `/status` awaits the broker, and other log lines land meanwhile; tagging by async context
+   * rather than by "everything between start and end" keeps those out of its result.
+   */
+  private capture = new AsyncLocalStorage<FeedEntry[]>();
+
+  private state: HeadlessSnapshot = {
+    env: { broker: '', venue: '', provider: '', model: '' },
+    venueOpen: null,
+    traderLane: { state: 'starting' },
+    conciergeLane: { state: 'idle' },
+    cycle: { n: 0 },
+    tick: null,
+    events: [],
+    activity: [],
+    proposals: [],
+  };
+
+  constructor() {
+    this.registerCommand({
+      name: 'help',
+      aliases: ['?', 'commands'],
+      help: 'List every command.',
+      run: () => this.reply(this.listCommands()
+        .map((c) => `/${c.name}${c.args ? ` ${c.args}` : ''} — ${c.help}`)
+        .join('\n')),
+    });
+  }
+
+  // ── OperatorUI ───────────────────────────────────────────────────────────
+
+  onMessage(handler: (line: string) => void): void {
+    this.onSubmit = handler;
+  }
+
+  /**
+   * A no-op: there is no keyboard to quit from, and deliberately no API route that stops the
+   * process — a server's lifecycle belongs to its supervisor (SIGTERM), not to a web client.
+   */
+  onQuit(_handler: () => void): void {}
+
+  registerCommand(cmd: SlashCommand): void {
+    for (const key of [cmd.name, ...(cmd.aliases ?? [])]) {
+      const prev = this.commands.get(key);
+      if (prev) this.commandOrder = this.commandOrder.filter((c) => c !== prev);
+      this.commands.set(key, cmd);
+    }
+    this.commandOrder.push(cmd);
+  }
+
+  log(level: LogLevel, msg: string): void {
+    const entry = this.push('log', msg, level);
+    const out = `[${entry.at}] ${level.padEnd(5)} ${msg}\n`;
+    (level === 'ERROR' ? process.stderr : process.stdout).write(out);
+  }
+
+  reply(msg: string): void {
+    this.push('reply', msg);
+    process.stdout.write(`[${new Date().toISOString()}] REPLY ${msg}\n`);
+  }
+
+  replyChart(lines: string[]): void {
+    this.reply(lines.join('\n'));
+    // `reply` filed it as prose; a chart must keep its columns, so re-label the entry it made.
+    this.feed[this.feed.length - 1].kind = 'chart';
+  }
+
+  chartWidth(): number {
+    return CHART_COLS;
+  }
+
+  alert(msg: string): void {
+    this.push('alert', msg);
+    process.stdout.write(`[${new Date().toISOString()}] ALERT ${msg}\n`);
+  }
+
+  setTick(tick: TickSnapshot): void {
+    this.state.tick = tick;
+    for (const l of this.tickListeners) l();
+  }
+
+  setEvents(events: EventRow[], eventLog: EventRow[]): void {
+    this.state.events = events;
+    this.state.activity = eventLog;
+  }
+
+  setProposals(proposals: ProposalRow[]): void {
+    this.state.proposals = proposals;
+  }
+
+  setEnvironment(env: Environment): void {
+    this.state.env = env;
+  }
+
+  setVenueOpen(open: boolean | null): void {
+    this.state.venueOpen = open;
+  }
+
+  setTraderActivity(lane: Lane): void {
+    this.state.traderLane = lane;
+  }
+
+  setConciergeActivity(lane: Lane): void {
+    this.state.conciergeLane = lane;
+  }
+
+  setCycle(cycle: Cycle): void {
+    this.state.cycle = cycle;
+  }
+
+  setStatus(text: string): void {
+    this.state.traderLane = { state: 'idle', detail: text };
+  }
+
+  /** Nothing to protect: with no screen, stray stdout writes are just more log output. */
+  captureStreams(): void {}
+
+  // ── For the API ──────────────────────────────────────────────────────────
+
+  snapshot(): HeadlessSnapshot {
+    return this.state;
+  }
+
+  listCommands(): SlashCommand[] {
+    return [...this.commandOrder];
+  }
+
+  /** Entries with `seq > after`, oldest first, at most `limit` of them. */
+  feedAfter(after: number, limit: number): FeedEntry[] {
+    const out: FeedEntry[] = [];
+    for (const e of this.feed) {
+      if (e.seq <= after) continue;
+      out.push(e);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /** Called for every new feed entry. Returns an unsubscribe function. */
+  subscribe(listener: (entry: FeedEntry) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Called after every scheduler tick. Returns an unsubscribe function. */
+  subscribeTicks(listener: () => void): () => void {
+    this.tickListeners.add(listener);
+    return () => this.tickListeners.delete(listener);
+  }
+
+  /**
+   * One typed line, exactly as the terminal would take it: `/command`, `approve <id>`,
+   * `reject <id> [reason]`, or else a chat message for the concierge.
+   */
+  submit(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    this.push('operator', trimmed);
+    if (trimmed.startsWith('/')) {
+      const [head, ...rest] = trimmed.slice(1).split(/\s+/);
+      void this.runCommand(head, rest.join(' '));
+      return;
+    }
+    const match = DECIDE_COMMAND.exec(trimmed);
+    if (match) {
+      try {
+        this.decide(match[1].toLowerCase() as 'approve' | 'reject', match[2], match[3]);
+      } catch {
+        // Already logged by `decide`; a chat line has no caller to hand the error to.
+      }
+      return;
+    }
+    this.onSubmit?.(trimmed);
+  }
+
+  /** Run one slash command and hand back what it said. Unknown names never reach the concierge. */
+  async runCommand(name: string, args: string): Promise<CommandResult> {
+    const output: FeedEntry[] = [];
+    const cmd = this.commands.get(name.toLowerCase());
+    if (!cmd) {
+      return { ok: false, output, error: `Unknown command /${name} — GET /api/commands for the list.` };
+    }
+    return this.capture.run(output, async () => {
+      try {
+        await cmd.run(args.trim());
+        return { ok: true, output };
+      } catch (err: any) {
+        const error = `/${cmd.name} failed: ${err?.message ?? String(err)}`;
+        this.log('WARN', error);
+        return { ok: false, output, error };
+      }
+    });
+  }
+
+  /**
+   * Same as the terminal's `approve`/`reject`: a synchronous state change on the proposal store.
+   * `strategy/proposalExecutor.ts` picks an approved proposal up on its own next tick.
+   * Throws on an unknown id or an illegal transition so the API can answer with an error.
+   */
+  decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
+    try {
+      const p = decideProposal(id, decision, 'human', reason?.trim() || undefined);
+      this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
+    } catch (err: any) {
+      this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
+      throw err;
+    }
+  }
+
+  // ── Private ──────────────────────────────────────────────────────────────
+
+  private push(kind: FeedKind, text: string, level?: LogLevel): FeedEntry {
+    const entry: FeedEntry = { seq: this.nextSeq++, at: new Date().toISOString(), kind, text };
+    if (level) entry.level = level;
+    this.feed.push(entry);
+    if (this.feed.length > FEED_CAPACITY) this.feed.splice(0, this.feed.length - FEED_CAPACITY);
+    this.capture.getStore()?.push(entry);
+    for (const l of this.listeners) {
+      try {
+        l(entry);
+      } catch {
+        // A broken stream client must never break logging.
+      }
+    }
+    return entry;
+  }
+}
