@@ -74,7 +74,11 @@ async function refresh() {
       if(session.user.role==='admin') for(const [label,active] of [['Save',lesson.active],[lesson.active?'Retire':'Activate',!lesson.active]]){const button=text('button',label);button.onclick=attempt(async()=>{await api(`lessons/${encodeURIComponent(lesson.id)}`,{text:editor.value,active});document.activeElement.blur();await refresh();});card.append(button);}
       return card;
     }));
-    for(const entry of f.entries){const row=text('div',entry.text);row.prepend(text('time',`${new Date(entry.at).toLocaleString()} · ${entry.kind}`));$('feed').append(row);cursor=entry.seq;}
+    for(const entry of f.entries){
+      // Older stored replies include a request label; keep it out of the conversation too.
+      const answer=entry.kind==='reply'?entry.text.replace(/^(?:concierge|trader) request [A-Za-z0-9:_-]+: /,''):entry.text;
+      const row=text('div',answer);row.prepend(text('time',`${new Date(entry.at).toLocaleString()} · ${entry.kind}`));$('feed').append(row);cursor=entry.seq;
+    }
     while($('feed').children.length>400)$('feed').firstChild.remove();
   } finally { refreshing=false; }
 }

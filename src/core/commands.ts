@@ -39,7 +39,7 @@ export function updateCommand(id: string, patch: Partial<Pick<AgentCommand, 'sta
     if (!current) throw new Error('Unknown command');
     const next = { ...current, ...patch };
     saveRecord('command', id, next);
-    if (patch.result && patch.result !== current.result) appendFeed({ at: new Date().toISOString(), kind: 'reply', text: `${next.role} request ${id}: ${patch.result}` });
+    if (patch.result && patch.result !== current.result) appendFeed({ at: new Date().toISOString(), kind: 'reply', text: patch.result });
     return next;
   });
 }
