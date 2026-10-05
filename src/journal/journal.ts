@@ -1,115 +1,62 @@
-/**
- * L5 — the decision journal.
- *
- * One JSON object per line in `data/journal.jsonl`, appended synchronously.
- *
- * The synchronous write is the point. `state.ts` debounces 5s and `knowledge.json`
- * debounced 3s, and for those that is right: they hold CURRENT STATE, where coalescing
- * repeated writes is a feature. This holds WHAT HAPPENED. A record still sitting in a
- * timer when the process dies is worthless precisely in the case it was written for, so
- * the order and its record land together or the log says why they did not.
- *
- * No rotation: one line is ~500 bytes and a busy day is a few dozen decisions — about a
- * megabyte a year. Rotation would be the more complex answer to a problem that does not
- * exist yet.
- */
-
-import fs from 'fs';
+import crypto from 'crypto';
 import path from 'path';
-import { logger } from '../core/logger';
-import { getPolicy } from '../policy/load';
+import { getPolicy, getPolicyHash } from '../policy/load';
+import { getState } from '../state/state';
 import type { DecisionInput, DecisionRecord } from './types';
 import { canonicalSymbol } from '../core/symbols';
-import { DATA_DIR, ensureDataDir } from '../core/paths';
+import { DATA_DIR } from '../core/paths';
+import { appendRecord, importJsonLines, readRecords, readRecord, database, transaction } from '../core/storage';
+import { agentContext, assertAgentActive } from '../core/agentContext';
 
 export const JOURNAL_FILE = path.join(DATA_DIR, 'journal.jsonl');
+let ephemeral = false;
+export function useEphemeralJournal(): void { ephemeral = true; }
 
-let _ephemeral = false;
-
-/**
- * Stop writing to disk, permanently for this process. Replay seam, mirroring
- * `useEphemeralState`.
- *
- * Not optional in the harness: a replay run exercises the real write sites, so without
- * this it appends synthetic entries and vetoes to the operator's real history — which is
- * exactly the trap `useEphemeralState` exists to close, one file over.
- */
-export function useEphemeralJournal(): void {
-  _ephemeral = true;
-}
-
-/**
- * Append one decision. Returns the stamped record so the caller can store its `id` —
- * `openPositionSnapshot({ entryDecisionId })` is the reason this returns rather than voids.
- *
- * A write failure is logged and swallowed. The journal is a witness, not a participant:
- * a full disk must not turn a filled order into a thrown exception the model reads as a
- * failed one.
- */
-export function recordDecision(input: DecisionInput): DecisionRecord {
-  const at = new Date().toISOString();
-  const record: DecisionRecord = {
-    ...input,
-    id: `${input.kind}:${input.symbol ?? 'system'}:${at}`,
-    at,
-  };
-
-  if (!_ephemeral) {
-    try {
-      ensureDataDir();
-      fs.appendFileSync(JOURNAL_FILE, JSON.stringify(record) + '\n', 'utf8');
-    } catch (err: any) {
-      logger.error(`[Journal] write failed for ${record.id}: ${err.message}`);
-    }
+export function recordDecision(input: DecisionInput, id: string = crypto.randomUUID()): DecisionRecord {
+  assertAgentActive();
+  const context = agentContext.getStore();
+  const record = { commandId: context?.commandId, actorId: context?.actorId, ...input, id, at: new Date().toISOString() };
+  if (!ephemeral) {
+    importJsonLines('decision', JOURNAL_FILE);
+    appendRecord('decision', record.id, record.at, record);
+    appendRecord('decisionIntent', record.id, record.at, record);
   }
-
-  logger.info(`[Journal] ${record.kind} ${record.symbol ?? ''} — ${record.rationale}`.trim());
   return record;
 }
 
-/**
- * Read decisions back, oldest first.
- *
- * An unparseable line is SKIPPED rather than thrown on: a process killed mid-append
- * leaves a torn final line, and that must cost the last record, not the file.
- */
-export function readDecisions(
-  opts: { symbol?: string; limit?: number; filter?: (r: DecisionRecord) => boolean } = {},
-): DecisionRecord[] {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(JOURNAL_FILE, 'utf8');
-  } catch {
-    return [];
-  }
+export function readDecision(id: string): DecisionRecord | undefined { return ephemeral ? undefined : readRecord('decision', id); }
 
-  const records: DecisionRecord[] = [];
-  for (const line of raw.split('\n')) {
-    if (line.trim() === '') continue;
-    try {
-      records.push(JSON.parse(line) as DecisionRecord);
-    } catch {
-      // torn or hand-edited line — skip it
-    }
-  }
-
-  // Canonical, so a `BTC/USD` decision is found by a caller holding the venue's `BTCUSD`.
-  const wanted = opts.symbol ? canonicalSymbol(opts.symbol) : null;
-  const bySymbol = wanted
-    ? records.filter((r) => r.symbol != null && canonicalSymbol(r.symbol) === wanted)
-    : records;
-
-  // Applied before the slice so the limit bounds matching records, not the last N raw lines.
-  const filtered = opts.filter ? bySymbol.filter(opts.filter) : bySymbol;
-
-  return opts.limit != null ? filtered.slice(-opts.limit) : filtered;
+/** Update the journal's current outcome; the proposal audit retains every prior transition. */
+export function recordDecisionOutcome(id: string, patch: Partial<DecisionRecord>): void {
+  if (ephemeral) return;
+  transaction(() => {
+    const row = database().prepare('SELECT value FROM records WHERE kind=? AND id=?').get('decision', id);
+    if (!row) throw new Error('Missing decision for broker outcome: ' + id);
+    const current = JSON.parse(row.value);
+    database().prepare('UPDATE records SET value=? WHERE kind=? AND id=?')
+      .run(JSON.stringify({ ...current, ...patch, id: current.id, at: current.at }), 'decision', id);
+  });
 }
 
-/**
- * A `DecisionInput` with every optional field nulled, so a call site names only what it
- * knows. Without this each of the six write sites would spell out twelve `null`s, and a
- * field added later would be a six-file edit.
- */
+export function readDecisions(opts: { symbol?: string; limit?: number; filter?: (r: DecisionRecord) => boolean } = {}): DecisionRecord[] {
+  if (ephemeral) return [];
+  importJsonLines('decision', JOURNAL_FILE);
+  const matches = (r: DecisionRecord) => (!opts.symbol || (r.symbol != null && canonicalSymbol(r.symbol) === canonicalSymbol(opts.symbol))) && (!opts.filter || opts.filter(r));
+  if (opts.limit !== undefined && (opts.symbol || opts.filter)) {
+    const found: DecisionRecord[] = [];
+    let before = Number.MAX_SAFE_INTEGER;
+    while (found.length < opts.limit) {
+      const rows = database().prepare('SELECT seq,value FROM records WHERE kind=? AND seq<? ORDER BY seq DESC LIMIT 200').all('decision', before);
+      if (!rows.length) break;
+      for (const row of rows) { const record = JSON.parse(row.value); if (matches(record)) found.push(record); }
+      before = Number(rows.at(-1).seq);
+    }
+    return found.slice(0, opts.limit).reverse();
+  }
+  return readRecords<DecisionRecord>('decision', opts.limit).filter(matches);
+
+}
+
 export function decision(
   kind: DecisionRecord['kind'],
   actor: DecisionRecord['actor'],
@@ -133,6 +80,8 @@ export function decision(
     venueStopMissing: null,
     pnl: null,
     policyVersion: getPolicy().version,
+    policyHash: getPolicyHash(),
+    accountId: getState().accountId,
     ...fields,
   };
 }

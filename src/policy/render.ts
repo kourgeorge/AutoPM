@@ -10,8 +10,7 @@
  * at load because nothing would ever notice.
  */
 
-import fs from 'fs';
-import { getPolicy, TEMPLATE_FILE } from './load';
+import { getPolicy, readPlaybook } from './load';
 import type { Policy } from './types';
 
 const PLACEHOLDER = /\{\{([^}|]+)(?:\|([^}]+))?\}\}/g;
@@ -92,5 +91,17 @@ export function renderTemplate(template: string, policy: Policy): string {
 
 /** The L3 system prompt: policy/PLAYBOOK.md rendered against the active policy. */
 export function renderPolicy(policy: Policy = getPolicy()): string {
-  return renderTemplate(fs.readFileSync(TEMPLATE_FILE, 'utf8'), policy);
+  const r = policy.risk;
+  const configured = (value: number | null, suffix: string) => value == null ? 'not configured' : `${value}${suffix}`;
+  return renderTemplate(readPlaybook(), policy) + `\n\nACTIVE RISK PROFILE (generated from saved settings)\n` +
+    `Risk per trade: ${configured(r.riskPerTradePct, '% of equity at the planned stop')}. ` +
+    `Annualized portfolio volatility target: ${configured(r.targetVolatilityPct, '%')}. ` +
+    `Minimum planned reward:risk: ${configured(r.minRewardRisk, ':1')}.\n` +
+    `These sizing instructions supersede older sizing prose in this account's playbook. positionSizePct is only a capital cap. ` +
+    `Use get_watchlist_scan to compare portfolio risk fit, then get_entry_plan with a supported stop and target before execute_entry; request no more than maxQty. ` +
+    `A sizing preview without a target does not clear reward:risk. Never invent a target or tighten a stop merely to qualify. ` +
+    `When configured, volatility uses up to 60 completed daily return intervals, at least 30 aligned observations, annualized with 252 sessions. ` +
+    `Missing required risk data blocks new entries. Unclassified holdings count conservatively toward sector overlap. ` +
+    `A volatility target and a stop budget are estimates, not guaranteed outcomes; reward:risk does not establish positive expectancy. ` +
+    `Leave cash uncommitted when no supported setup fits. Only the user changes the risk profile.\n`;
 }

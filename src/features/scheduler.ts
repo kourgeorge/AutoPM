@@ -219,30 +219,6 @@ export class FeatureScheduler {
     // errors, so this cannot cost the tick either.
     await this.maybeReconcile(data);
 
-    // AFTER reconciliation, on purpose: a stop that just filled has to land in the ledger before
-    // the sweep is allowed to conclude the order is missing. Otherwise the fill and the sweep read
-    // the same disappearance two different ways.
-    //
-    // Every tick rather than on the 5-minute reconcile cadence. A position that should have a
-    // resting stop and does not is worth two API calls a minute — that gap is the whole thing the
-    // venue stop exists to close, and leaving it open for five minutes to save a request is the
-    // wrong trade. `sweepStops` swallows its own venue errors; this `try` is for the rest, because
-    // A TICK NEVER THROWS OUT.
-    try {
-      await sweepStops();
-    } catch (err: any) {
-      logger.warn(`[Scheduler] Stop sweep failed: ${err?.message ?? err}`);
-    }
-
-    // Same reasoning as the stop sweep above: a human's `approve <id>` waits at most one tick
-    // to actually execute, not until the trader's next cycle. `sweepProposals` catches its own
-    // per-proposal failures; this `try` is for the rest — A TICK NEVER THROWS OUT.
-    try {
-      await sweepProposals();
-    } catch (err: any) {
-      logger.warn(`[Scheduler] Proposal sweep failed: ${err?.message ?? err}`);
-    }
-
     return events;
   }
 

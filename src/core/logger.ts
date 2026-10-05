@@ -73,6 +73,8 @@ function summarizeResult(tool: string, raw: string): string {
     if (r.error) return `ERROR: ${r.error}`;
 
     switch (tool) {
+      case 'get_strategy_settings':
+        return `saved ${r.profile} strategy (revision ${r.version})`;
       case 'get_market_status':
         return `market ${r.isOpen ? 'OPEN' : 'CLOSED'}, ET ${r.etTime}${r.minutesUntilChange != null ? `, ${r.minutesUntilChange}min to ${r.changeLabel}` : ''}`;
       case 'get_account':
@@ -96,9 +98,9 @@ function summarizeResult(tool: string, raw: string): string {
       case 'get_macro_indicators':
         return `SPY ${r.spy?.change1dPct > 0 ? '+' : ''}${r.spy?.change1dPct?.toFixed(2)}%, VIX ${r.vix?.level?.toFixed(1)}`;
       case 'execute_entry':
-        return r.ok ? `entered ${r.symbol} ${r.qty}sh @ $${r.price}` : `BLOCKED: ${r.error}`;
+        return r.pending ? `queued ${r.symbol} (${r.proposalId}) — ${r.automatic ? 'automatic execution' : 'awaiting approval'}` : r.ok ? `submitted ${r.symbol}` : `BLOCKED: ${r.error}`;
       case 'execute_exit':
-        return r.ok ? `exited ${r.symbol}` : `FAILED: ${r.error}`;
+        return r.pending ? `exit queued for ${r.symbol} (${r.proposalId})` : r.ok ? `exit submitted for ${r.symbol}` : `FAILED: ${r.error}`;
       case 'run_monitor_agent':
         return `${r.symbol}: ${r.action?.toUpperCase()} — ${r.reason}`;
       case 'run_research_agent':

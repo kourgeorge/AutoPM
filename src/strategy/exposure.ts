@@ -1,3 +1,4 @@
+import { readAccount, readPositions, readOrders } from '../core/accountRead';
 /**
  * Portfolio exposure as measured fact — weights, sectors, concentration, held-vs-held
  * correlation.
@@ -197,8 +198,8 @@ export function concentration(
  */
 export async function exposure(): Promise<Exposure> {
   const [account, positions] = await Promise.all([
-    broker.getAccountInfo(),
-    broker.getPositions(),
+    readAccount(),
+    readPositions(),
   ]);
 
   const symbols = positions.map(p => p.symbol);

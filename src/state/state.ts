@@ -1,38 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { logger } from '../core/logger';
-import { writeFileAtomic } from '../core/fsAtomic';
 import { canonicalSymbol } from '../core/symbols';
-import { DATA_DIR, ensureDataDir } from '../core/paths';
+import { DATA_DIR } from '../core/paths';
+import { readValue, saveValue, transaction, useEphemeralStorage } from '../core/storage';
 
-// ── Interfaces ────────────────────────────────────────────────────────────────
-
-/**
- * Durable per-position baselines.
- *
- * Each field has exactly one job. `lastPrice` used to serve as entry price, last
- * observed price AND alert baseline at once, which is why drop alerts measured
- * from a baseline that ratcheted down with every observation and slow bleeds
- * never fired.
- *
- * Ownership invariant:
- *  - entry baselines (`entryPrice`, `stopLevel`, `takeProfitLevel`, `openedAt`,
- *    `entryDecisionId`) are written ONCE at fill and never again;
- *  - `sessionHigh` / `sessionLow` are advanced only by the L2 feature computation;
- *  - `lastPrice` is purely informational — nothing measures from it;
- *  - `stopOrderId` follows a DIFFERENT rule from the baselines above, spelled out on the
- *    field itself: it is rewritten every time the stop moves.
- *
- * `sessionHigh` / `sessionLow` widen and never narrow, so they have NO PATH BACK: a bad
- * price is permanent for the life of the position. Do not add a startup pass that narrows
- * them against daily bars — one existed (`state/repair.ts`, removed) and it could not work,
- * because the vendor's daily series carries no bar for the current day until well after the
- * close. Any position touched today is therefore judged against yesterday's range, and a
- * genuine intraday extreme reads as impossible; on a live book it wanted to erase UBER's
- * real low on the day the position opened. Bars bound these figures, they do not measure
- * them. Fix bad prices at the source (`collect/priceSource.ts`), or derive MFE/MAE from
- * minute bars since `openedAt` and stop storing them at all.
- */
 export interface PositionSnapshot {
   symbol: string;
 
@@ -42,59 +13,32 @@ export interface PositionSnapshot {
   stopLevel?: number;         // absolute price
   takeProfitLevel?: number;   // absolute price
   openedAt?: string;          // ISO
-  /** Links to the L5 DecisionRecord that opened it — where `atrAtEntry` now lives. */
   entryDecisionId?: string;
+  managementDecisionId?: string;
 
-  /**
-   * The venue's id for the sell stop resting at `stopLevel`, when one is resting.
-   *
-   * NOT a write-once baseline like the fields above, and the exception is deliberate: Alpaca's
-   * replace mints a NEW id, so every tighten changes this. The rule is
-   *  - written when the stop is armed (`strategy/stopOrders.ts`),
-   *  - rewritten on every tighten, to whatever id the venue now uses,
-   *  - cleared when the order leaves the venue, or on exit.
-   * Its write path is `patchPositionSnapshot`, the in-life path — never `openPositionSnapshot`.
-   *
-   * `undefined` means NO STOP IS RESTING, which is a real and common state: crypto cannot have
-   * one, an entry whose fill was not confirmed in time has not been armed yet, and a stop that
-   * already triggered is gone. It never means "unknown" — the sweep clears a stale id rather
-   * than leaving it to be trusted, because a stale id reads as protection that is not there.
-   */
   stopOrderId?: string;
 
-  /**
-   * The venue's id for the take-profit leg resting at `takeProfitLevel`, when one is resting.
-   *
-   * Same rule as `stopOrderId`, one leg over: written when the OCO pair is armed, rewritten on
-   * every tighten (Alpaca mints a new id on replace, IBKR keeps the old one), cleared when the
-   * order leaves the venue. `undefined` means no take-profit leg is resting — no
-   * `takeProfitLevel` recorded, a crypto/short position that can't hold one, an entry not yet
-   * armed, or a leg that already filled or was cancelled. Never "unknown".
-   */
   takeProfitOrderId?: string;
 }
 
-/** One per action kind the automation gate covers — see `policy/types.ts`'s `AutomationLevels`. */
 export type ProposalKind = 'entry' | 'exit' | 'stop_adjust' | 'target_adjust';
 
-export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'executed' | 'failed';
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'executing' | 'submitted' | 'partial' | 'unknown' | 'executed' | 'failed';
 
-/**
- * A trade action the automation gate held back for a human to decide, instead of the AI
- * acting directly. Created ONLY when `automationLevel(kind)` is `'manual'` — see
- * `core/automation.ts`. Lives in `state.json` for current status; every transition is also
- * appended to `data/proposals.jsonl` (`core/proposalLog.ts`) for history.
- *
- * `params` is intentionally untyped: its shape differs per `kind` (an entry proposal carries
- * qty/price/stopLoss/takeProfit; a stop_adjust carries just the new stop level), and the
- * executor (`strategy/proposalExecutor.ts`) re-derives fresh venue state at execution time
- * rather than trusting these as anything but a human-readable record of what was asked.
- */
 export interface Proposal {
   id: string;
   kind: ProposalKind;
   symbol: string;
   venue: 'paper' | 'live';
+  accountId?: string;
+  policyHash?: string;
+  clientOrderId?: string;
+  automatic?: boolean;
+  actorId?: string;
+  commandId?: string;
+  requestedBy?: string;
+  attemptId?: string;
+  decisionId?: string;
   params: Record<string, unknown>;
   reason: string;
   eventId: string | null;
@@ -104,10 +48,14 @@ export interface Proposal {
   decidedBy: 'human' | 'timeout' | null;
   decidedAt: number | null;
   rejectReason: string | null;
-  result: { orderId?: string; qty?: number; error?: string } | null;
+  result: { orderId?: string; qty?: number; filledQty?: number; filledPrice?: number; error?: string } | null;
 }
 
 export interface SystemState {
+  schemaVersion: number;
+  accountId: string | null;
+  paused: boolean;
+  dailyLossHalted: boolean;
   startOfDayEquity: number;
   lastResetDate: string;           // YYYY-MM-DD
   positionSnapshots: Record<string, PositionSnapshot>;
@@ -115,302 +63,90 @@ export interface SystemState {
   eventCooldowns: Record<string, string>;  // cooldownKey -> ISO lastFiredAt
   armedTriggers: string[];                 // cooldownKeys currently armed
 
-  /**
-   * `exitAt` of the newest round trip the trader has already been told about.
-   *
-   * The watermark that makes `review_ready` fire once per closed trade rather than once per
-   * reconcile: round trips are recomputed from the whole fills ledger every time, so without
-   * this each run would re-announce all of history. Empty means never watched, and the first
-   * run adopts the newest existing exit instead of firing — a backlog nobody has context for
-   * is noise, not a lesson.
-   */
   lastReviewedExitAt: string;
 
-  /**
-   * When the trader was last shown the shape of the whole book, ISO.
-   *
-   * Compared by ET DATE, not by value: there is one `portfolio_review` per session close, and
-   * the close is an event on the exchange's calendar. Slicing the ISO string would put a
-   * 20:00 ET close on the following UTC day for half the year, so `etDate` does the comparing.
-   *
-   * Empty means never reviewed, and unlike `lastReviewedExitAt` the first run ANNOUNCES rather
-   * than adopts. There is no backlog to suppress — the event describes the book as it stands
-   * right now — so adopting would skip the first close and gain nothing for it.
-   *
-   * `resetDailyState` must never clear this. The watermark outlives the day it describes.
-   */
   lastPortfolioReviewAt: string;
 
-  /**
-   * Highest equity ever observed, dollars. Monotonic — advanced only by `computeTick`
-   * (mirrors the `sessionHigh`/`sessionLow` pattern), never narrowed, and NOT touched by
-   * `resetDailyState`: a daily reset re-baselines `startOfDayEquity` only, and the peak
-   * that portfolio-level drawdown is measured against must survive it.
-   */
   equityPeak: number;
 
-  /** Every proposal not yet pruned. See `Proposal` above and `core/proposals.ts`. */
   proposals: Record<string, Proposal>;
 }
 
-// ── Persistence ───────────────────────────────────────────────────────────────
 
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
-const DEBOUNCE_MS = 5_000;
+const defaults = (): SystemState => ({
+  schemaVersion: 1, accountId: null, paused: false, dailyLossHalted: false,
+  startOfDayEquity: 0, lastResetDate: '', positionSnapshots: {}, eventCooldowns: {},
+  armedTriggers: [], lastReviewedExitAt: '', lastPortfolioReviewAt: '', equityPeak: 0, proposals: {},
+});
+let ephemeral: SystemState | null = null;
 
-const DEFAULT_STATE: SystemState = {
-  startOfDayEquity: 0,
-  lastResetDate: '',
-  positionSnapshots: {},
-  eventCooldowns: {},
-  armedTriggers: [],
-  lastReviewedExitAt: '',
-  lastPortfolioReviewAt: '',
-  equityPeak: 0,
-  proposals: {},
-};
-
-/**
- * Every field `SystemState` declares, as data — the top-level load-time whitelist.
- *
- * `SNAPSHOT_FIELDS` below guards the inside of each snapshot; this guards the object that holds
- * them, and it was missing for the whole life of the file. `loadFromDisk` merged with a spread,
- * which keeps EVERY key the file happens to carry, and every debounced save writes `_state` back
- * out whole — so a field this code has never heard of is re-committed on each write, forever.
- * Four were riding along that way (`ideaCandidates`, `recentAlerts`, `watchlistExtension`,
- * `shadowWatch`); they appear in no commit of `src/` ever made, and an architecture note had
- * already begun treating their presence as a feature to build on.
- *
- * Derived from `DEFAULT_STATE` rather than hand-listed, which makes it self-maintaining: the
- * literal is typed `SystemState`, so a new required field that is not added there fails to
- * compile, and the whitelist grows with it. That is the one thing `SNAPSHOT_FIELDS` cannot do —
- * every snapshot field is optional, so its list has to be maintained by hand.
- *
- * Dropping is SILENT, like its sibling. A load-time log is written before `attachUI`, and the
- * blessed screen clears the terminal as it is built, so on the daemon the message would be
- * erased before anyone could read it. The file's own contents are the report.
- */
-const STATE_FIELDS: ReadonlySet<string> = new Set(Object.keys(DEFAULT_STATE));
-
-function keepDeclaredStateFields(raw: unknown): Partial<SystemState> {
-  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  return Object.fromEntries(
-    Object.entries(raw).filter(([k]) => STATE_FIELDS.has(k)),
-  ) as Partial<SystemState>;
-}
-
-let _state: SystemState = { ...DEFAULT_STATE };
-let _writeTimer: ReturnType<typeof setTimeout> | null = null;
-let _ephemeral = false;
-
-/**
- * Re-key the snapshot map to canonical symbols.
- *
- * Needed because the map was written with whatever string the caller held: an order placed
- * as `BTC/USD` stored `BTC/USD`, and every lookup against the venue's `BTCUSD` missed. The
- * spread in `loadFromDisk` merges the TOP level only, so nothing has ever normalised the
- * individual entries.
- *
- * On a collision the later entry wins field by field and the earlier one fills the gaps, so
- * a stop level recorded under one spelling is never dropped in favour of an entry that has
- * none.
- */
-/**
- * Every field `PositionSnapshot` declares, as data — the load-time whitelist.
- *
- * The map has carried retired fields for weeks at a time: `qty`, `lastPrice` and `lastCheckedAt`
- * outlived the split described above, because nothing rewrites a snapshot wholesale and nothing
- * read them again to notice. Undeclared fields are dropped here, on the one pass that already
- * touches every entry, so the file cannot drift from the interface a second time.
- *
- * A field added to the interface must be added here too, or it will be silently discarded on the
- * next load — the cost of the guarantee, and the reason the list sits directly under the type.
- */
-const SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
-  'symbol',
-  'entryPrice',
-  'sessionHigh',
-  'sessionLow',
-  'stopLevel',
-  'takeProfitLevel',
-  'openedAt',
-  'entryDecisionId',
-  'stopOrderId',
-  'takeProfitOrderId',
-]);
-
-function keepDeclaredFields(snap: PositionSnapshot): PositionSnapshot {
-  return Object.fromEntries(
-    Object.entries(snap).filter(([k]) => SNAPSHOT_FIELDS.has(k)),
-  ) as unknown as PositionSnapshot;
-}
-
-function canonicaliseSnapshots(
-  raw: Record<string, PositionSnapshot> | undefined,
-): Record<string, PositionSnapshot> {
-  const out: Record<string, PositionSnapshot> = {};
-  for (const [key, snap] of Object.entries(raw ?? {})) {
-    if (!snap || typeof snap !== 'object') continue;
-    // `symbol` keeps the spelling it was written with — it is the label; the key is the join.
-    const withSymbol: PositionSnapshot = keepDeclaredFields({ ...snap, symbol: snap.symbol ?? key });
-    const canon = canonicalSymbol(withSymbol.symbol);
-    const prior = out[canon];
-    out[canon] = prior ? { ...prior, ...stripUndefined(withSymbol) } : withSymbol;
+function normalize(raw: Partial<SystemState>): SystemState {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid saved state');
+  if (raw.schemaVersion && raw.schemaVersion > 1) throw new Error('State was written by a newer version');
+  const base = defaults();
+  const known = Object.fromEntries(Object.entries(raw).filter(([key]) => key in base));
+  const state: SystemState = { ...base, ...known, schemaVersion: 1 };
+  for (const key of ['positionSnapshots', 'proposals', 'eventCooldowns'] as const) {
+    if (!state[key] || typeof state[key] !== 'object' || Array.isArray(state[key])) throw new Error('Invalid state.' + key);
   }
-  return out;
-}
-
-function stripUndefined(snap: PositionSnapshot): Partial<PositionSnapshot> {
-  return Object.fromEntries(
-    Object.entries(snap).filter(([, v]) => v !== undefined && v !== null),
-  ) as Partial<PositionSnapshot>;
-}
-
-function loadFromDisk(): void {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const raw = fs.readFileSync(STATE_FILE, 'utf8');
-      const parsed = { ...DEFAULT_STATE, ...keepDeclaredStateFields(JSON.parse(raw)) };
-      _state = { ...parsed, positionSnapshots: canonicaliseSnapshots(parsed.positionSnapshots) };
-    }
-  } catch {
-    // Corrupted file — start fresh
+  const snapshots: Record<string, PositionSnapshot> = {};
+  for (const [key, snap] of Object.entries(state.positionSnapshots)) {
+    if (!snap || typeof snap !== 'object') throw new Error('Invalid position snapshot: ' + key);
+    const symbol = snap.symbol ?? key;
+    const canonical = canonicalSymbol(symbol);
+    const fields = new Set(['symbol','entryPrice','sessionHigh','sessionLow','stopLevel','takeProfitLevel','openedAt','entryDecisionId','managementDecisionId','stopOrderId','takeProfitOrderId']);
+    const known = Object.fromEntries(Object.entries(snap).filter(([key]) => fields.has(key)));
+    snapshots[canonical] = { ...snapshots[canonical], ...known, symbol };
   }
+  return { ...state, positionSnapshots: snapshots };
 }
-
-function scheduleSave(): void {
-  if (_ephemeral) return;
-  if (_writeTimer) return;
-  _writeTimer = setTimeout(() => {
-    _writeTimer = null;
-    try {
-      ensureDataDir();
-      // Atomic: this rewrites the whole file on every debounce, and `loadFromDisk` treats an
-      // unparseable one as "start fresh" — which would silently discard every position
-      // snapshot, stop included. A truncated write is the one failure it cannot detect.
-      writeFileAtomic(STATE_FILE, JSON.stringify(_state, null, 2));
-    } catch {
-      // Non-fatal — in-memory state is always authoritative
-    }
-  }, DEBOUNCE_MS);
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
 
 export function getState(): Readonly<SystemState> {
-  return _state;
+  if (ephemeral) return ephemeral;
+  const stored = readValue<SystemState>('state');
+  if (stored) return normalize(stored);
+  return transaction(() => {
+    // Invalid legacy data is an error, never a silent reset of protection or approvals.
+    const initial = normalize(fs.existsSync(STATE_FILE) ? JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) : {});
+    saveValue('state', initial);
+    return initial;
+  });
 }
 
-/**
- * Replace the in-memory state with a seed and stop writing to disk, permanently
- * for this process. Test seam for the replay harness.
- *
- * Both halves are load-bearing. Without the seed a replay would inherit whatever
- * positions the live daemon holds; without the write suppression a run that finishes
- * inside the 5s debounce would flush its synthetic fixture over `data/state.json`
- * after the process had already reported success.
- */
 export function useEphemeralState(seed: Partial<SystemState> = {}): void {
-  _ephemeral = true;
-  if (_writeTimer) {
-    clearTimeout(_writeTimer);
-    _writeTimer = null;
-  }
-  const merged = { ...DEFAULT_STATE, ...seed };
-  _state = { ...merged, positionSnapshots: canonicaliseSnapshots(merged.positionSnapshots) };
+  useEphemeralStorage();
+  ephemeral = normalize(seed);
 }
 
 export function updateState(patch: Partial<SystemState>): void {
-  _state = { ..._state, ...patch };
-  scheduleSave();
+  const next = normalize({ ...getState(), ...patch });
+  if (ephemeral) ephemeral = next;
+  else saveValue('state', next);
 }
 
-/** The snapshot for a symbol in any spelling — `BTC/USD` and `BTCUSD` find the same record. */
 export function getPositionSnapshot(symbol: string): PositionSnapshot | undefined {
-  return _state.positionSnapshots[canonicalSymbol(symbol)];
+  return getState().positionSnapshots[canonicalSymbol(symbol)];
 }
 
-/**
- * Record a fill that OPENED a position: the new entry's baselines win.
- *
- * It used to be the reverse — `existing ?? snap` — on the theory that a second open is an
- * add to a live position whose original entry must not be reset. But `enterPosition`'s
- * `already_holding` guard runs first and refuses exactly that, so by the time this is
- * called the venue has just told us there was no position in this symbol. Any snapshot
- * still sitting here is therefore a leftover from a CLOSED trade, and leftovers are a
- * documented fact of this system — so the old branch silently gave the new position the
- * previous trade's `entryPrice`, `stopLevel` and `openedAt`, and every stop, drawdown and
- * P&L figure derived from them was wrong for as long as it was held.
- *
- * The narrower invariant still holds: baselines are written once per position and never
- * overwritten *during* it. Nothing calls this mid-position — `patchPositionSnapshot` and
- * `upsertPositionSnapshot` are the in-life write paths.
- */
 export function openPositionSnapshot(snap: PositionSnapshot): void {
-  const key = canonicalSymbol(snap.symbol);
-  const existing = _state.positionSnapshots[key];
-  if (existing) {
-    logger.warn(
-      `[State] Replacing a stale ${key} snapshot (opened ${existing.openedAt ?? 'unknown'}, ` +
-        `entry ${existing.entryPrice ?? 'unknown'}) with the baselines of the entry just filled`,
-    );
-  }
-  _state.positionSnapshots = { ..._state.positionSnapshots, [key]: snap };
-  scheduleSave();
+  updateState({ positionSnapshots: { ...getState().positionSnapshots, [canonicalSymbol(snap.symbol)]: snap } });
 }
 
-/** Merge a partial update into an existing snapshot. No-op if the symbol is unknown. */
-export function patchPositionSnapshot(
-  symbol: string,
-  patch: Partial<Omit<PositionSnapshot, 'symbol'>>,
-): void {
-  const key = canonicalSymbol(symbol);
-  const existing = _state.positionSnapshots[key];
-  if (!existing) return;
-  _state.positionSnapshots = {
-    ..._state.positionSnapshots,
-    [key]: { ...existing, ...patch },
-  };
-  scheduleSave();
+export function patchPositionSnapshot(symbol: string, patch: Partial<Omit<PositionSnapshot, 'symbol'>>): void {
+  const existing = getPositionSnapshot(symbol);
+  if (existing) openPositionSnapshot({ ...existing, ...patch });
 }
 
-/**
- * Merge a partial update in, creating the snapshot when the symbol is unknown.
- *
- * The create half is the whole point. `patchPositionSnapshot` refuses to create, and
- * `openPositionSnapshot` refuses to overwrite, so a position this system did not open had
- * no write path at all: the retrofit tool wrote through the patch, hit its early return,
- * and still reported success. Nothing recorded the stop, and the stop detector saw a
- * position with no level to watch.
- */
-export function upsertPositionSnapshot(
-  symbol: string,
-  patch: Partial<Omit<PositionSnapshot, 'symbol'>>,
-): void {
-  const key = canonicalSymbol(symbol);
-  const existing = _state.positionSnapshots[key];
-  _state.positionSnapshots = {
-    ..._state.positionSnapshots,
-    [key]: { ...(existing ?? { symbol }), ...patch, symbol: existing?.symbol ?? symbol },
-  };
-  scheduleSave();
+export function upsertPositionSnapshot(symbol: string, patch: Partial<Omit<PositionSnapshot, 'symbol'>>): void {
+  openPositionSnapshot({ ...(getPositionSnapshot(symbol) ?? { symbol }), ...patch });
 }
 
 export function removePositionSnapshot(symbol: string): void {
-  const { [canonicalSymbol(symbol)]: _, ...rest } = _state.positionSnapshots;
-  _state.positionSnapshots = rest;
-  scheduleSave();
+  const { [canonicalSymbol(symbol)]: removed, ...rest } = getState().positionSnapshots;
+  updateState({ positionSnapshots: rest });
 }
 
-/**
- * Re-baseline the trading day. `date` is an ET trading date (`core/time.etDate()`), passed
- * in rather than computed here so the state layer keeps no opinion about calendars.
- */
 export function resetDailyState(equity: number, date: string): void {
-  _state.startOfDayEquity = equity;
-  _state.lastResetDate = date;
-  scheduleSave();
+  updateState({ startOfDayEquity: equity, lastResetDate: date, dailyLossHalted: false });
 }
-
-// Load from disk on module import
-loadFromDisk();

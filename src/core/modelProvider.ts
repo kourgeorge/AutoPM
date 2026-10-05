@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { withModelBudget } from './modelBudget';
 import { AiConfig, ChatMessage, ContentBlock, ModelResponse, ToolDefinition } from './types';
 
 // ── Provider interface ────────────────────────────────────────────────────────
@@ -9,6 +10,7 @@ export interface ModelProvider {
     messages: ChatMessage[];
     tools: ToolDefinition[];
     maxTokens: number;
+    signal?: AbortSignal;
     /** Forces the model to answer via this exact tool instead of free-form text. Optional — omit for today's behavior. */
     toolChoice?: { type: 'tool'; name: string };
   }): Promise<ModelResponse>;
@@ -22,6 +24,7 @@ export class AnthropicProvider implements ModelProvider {
 
   constructor(cfg: AiConfig) {
     this.client = new Anthropic({
+      timeout: 60_000, maxRetries: 1,
       apiKey: cfg.apiKey,
       ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
     });
@@ -33,6 +36,7 @@ export class AnthropicProvider implements ModelProvider {
     messages: ChatMessage[];
     tools: ToolDefinition[];
     maxTokens: number;
+    signal?: AbortSignal;
     toolChoice?: { type: 'tool'; name: string };
   }): Promise<ModelResponse> {
     const { systemPrompt, messages, tools, maxTokens, toolChoice } = params;
@@ -68,7 +72,7 @@ export class AnthropicProvider implements ModelProvider {
       tools: tools as Anthropic.Tool[],
       max_tokens: maxTokens,
       ...(toolChoice ? { tool_choice: { type: 'tool' as const, name: toolChoice.name } } : {}),
-    });
+    }, { signal: params.signal });
 
     // Translate response back to internal format (skip thinking/redacted blocks)
     const content: ContentBlock[] = response.content.flatMap((block): ContentBlock[] => {
@@ -137,6 +141,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     messages: ChatMessage[];
     tools: ToolDefinition[];
     maxTokens: number;
+    signal?: AbortSignal;
     toolChoice?: { type: 'tool'; name: string };
   }): Promise<ModelResponse> {
     const { systemPrompt, messages, tools, maxTokens, toolChoice } = params;
@@ -263,6 +268,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Make the API request
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
+      signal: AbortSignal.any([params.signal ?? new AbortController().signal, AbortSignal.timeout(60_000)]),
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
@@ -363,6 +369,5 @@ export class OpenAICompatibleProvider implements ModelProvider {
  * be a typo and posting the API key to it.
  */
 export function createModelProvider(cfg: AiConfig): ModelProvider {
-  if (cfg.provider.toLowerCase() === 'anthropic') return new AnthropicProvider(cfg);
-  return new OpenAICompatibleProvider(cfg);
+  return withModelBudget(cfg.provider.toLowerCase() === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatibleProvider(cfg));
 }

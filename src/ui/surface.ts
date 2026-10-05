@@ -67,4 +67,5 @@ export interface OperatorUI {
   setCycle(cycle: Cycle): void;
   setStatus(text: string): void;
   captureStreams(): void;
+  close(): void;
 }

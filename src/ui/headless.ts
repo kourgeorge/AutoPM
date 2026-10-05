@@ -1,3 +1,4 @@
+import { subscribeFeed } from '../core/storage';
 /**
  * The UI with no screen — for running the bot on a server.
  *
@@ -17,6 +18,8 @@
  * Holds no timers and no open handles, so a script that imports `ui` under `HEADLESS=1`
  * still exits on its own.
  */
+import { notifyAccount } from '../core/notifications';
+import { appendFeed, readFeed } from '../core/storage';
 import { AsyncLocalStorage } from 'async_hooks';
 import { decideProposal } from '../core/proposals';
 import type { Cycle, Environment, EventRow, Lane, ProposalRow, TickSnapshot } from './dashboard';
@@ -65,7 +68,6 @@ export class HeadlessUI implements OperatorUI {
   private commandOrder: SlashCommand[] = [];
 
   private feed: FeedEntry[] = [];
-  private nextSeq = 1;
   private listeners = new Set<(entry: FeedEntry) => void>();
   private tickListeners = new Set<() => void>();
   /**
@@ -131,9 +133,8 @@ export class HeadlessUI implements OperatorUI {
   }
 
   replyChart(lines: string[]): void {
-    this.reply(lines.join('\n'));
-    // `reply` filed it as prose; a chart must keep its columns, so re-label the entry it made.
-    this.feed[this.feed.length - 1].kind = 'chart';
+    this.push('chart', lines.join('\n'));
+    process.stdout.write(lines.join('\n') + '\n');
   }
 
   chartWidth(): number {
@@ -141,6 +142,7 @@ export class HeadlessUI implements OperatorUI {
   }
 
   alert(msg: string): void {
+    notifyAccount('alert', msg);
     this.push('alert', msg);
     process.stdout.write(`[${new Date().toISOString()}] ALERT ${msg}\n`);
   }
@@ -185,6 +187,7 @@ export class HeadlessUI implements OperatorUI {
 
   /** Nothing to protect: with no screen, stray stdout writes are just more log output. */
   captureStreams(): void {}
+  close(): void {}
 
   // ── For the API ──────────────────────────────────────────────────────────
 
@@ -198,19 +201,12 @@ export class HeadlessUI implements OperatorUI {
 
   /** Entries with `seq > after`, oldest first, at most `limit` of them. */
   feedAfter(after: number, limit: number): FeedEntry[] {
-    const out: FeedEntry[] = [];
-    for (const e of this.feed) {
-      if (e.seq <= after) continue;
-      out.push(e);
-      if (out.length >= limit) break;
-    }
-    return out;
+    return limit > 0 ? readFeed<FeedEntry>(after, limit) : [];
   }
 
   /** Called for every new feed entry. Returns an unsubscribe function. */
   subscribe(listener: (entry: FeedEntry) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return subscribeFeed(listener);
   }
 
   /** Called after every scheduler tick. Returns an unsubscribe function. */
@@ -268,9 +264,9 @@ export class HeadlessUI implements OperatorUI {
    * `strategy/proposalExecutor.ts` picks an approved proposal up on its own next tick.
    * Throws on an unknown id or an illegal transition so the API can answer with an error.
    */
-  decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
+  decide(decision: 'approve' | 'reject', id: string, reason?: string, actorId = 'operator'): void {
     try {
-      const p = decideProposal(id, decision, 'human', reason?.trim() || undefined);
+      const p = decideProposal(id, decision, 'human', reason?.trim() || undefined, actorId);
       this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
     } catch (err: any) {
       this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
@@ -281,7 +277,8 @@ export class HeadlessUI implements OperatorUI {
   // ── Private ──────────────────────────────────────────────────────────────
 
   private push(kind: FeedKind, text: string, level?: LogLevel): FeedEntry {
-    const entry: FeedEntry = { seq: this.nextSeq++, at: new Date().toISOString(), kind, text };
+    const payload = { at: new Date().toISOString(), kind, text, ...(level ? { level } : {}) };
+    const entry: FeedEntry = { ...payload, seq: appendFeed(payload) };
     if (level) entry.level = level;
     this.feed.push(entry);
     if (this.feed.length > FEED_CAPACITY) this.feed.splice(0, this.feed.length - FEED_CAPACITY);

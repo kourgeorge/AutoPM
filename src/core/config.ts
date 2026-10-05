@@ -19,7 +19,7 @@ function requireEnv(key: string): string {
  * asymmetry is deliberate: mistaking live for paper is the expensive direction.
  */
 function resolveVenue(broker: string, alpacaBaseUrl: string, ibkrPort: number): 'paper' | 'live' {
-  if (broker === 'alpaca') return /paper/i.test(alpacaBaseUrl) ? 'paper' : 'live';
+  if (broker === 'alpaca') return new URL(alpacaBaseUrl).hostname === 'paper-api.alpaca.markets' ? 'paper' : 'live';
   return ibkrPort === 7497 || ibkrPort === 4002 ? 'paper' : 'live';
 }
 
@@ -37,6 +37,8 @@ const IBKR_PORT = parseInt(process.env.IBKR_PORT ?? '7497'); // 7497=paper TWS, 
  * model id, it belongs here.
  */
 export const config = {
+  expectedAccount: process.env.ACCOUNT_ID?.trim() ?? '',
+  requestTimeoutMs: 15_000,
   /**
    * Active EXECUTION venue — orders, positions, account, fills. Set BROKER=ibkr to switch;
    * defaults to alpaca.
@@ -74,7 +76,7 @@ export const config = {
     host:     process.env.IBKR_HOST     ?? 'localhost',
     port:     IBKR_PORT,
     clientId: parseInt(process.env.IBKR_CLIENT_ID ?? '1'),
-    account:  process.env.IBKR_ACCOUNT ?? '',  // leave blank for single-account setups
+    account:  process.env.IBKR_ACCOUNT ?? '',  // required: never select an account implicitly
   },
 
   ai: {
@@ -104,9 +106,20 @@ export const config = {
    */
   api: {
     token: process.env.API_TOKEN?.trim() ?? '',
+    publicOrigin: process.env.API_PUBLIC_ORIGIN?.trim() || 'http://127.0.0.1:8787',
+    viewerToken: process.env.API_VIEWER_TOKEN?.trim() ?? '',
     host: process.env.API_HOST?.trim() || '127.0.0.1',
     port: parseInt(process.env.API_PORT ?? '8787'),
     /** Exact origin allowed to call from a browser, e.g. `https://app.example.com`. Unset = none. */
     corsOrigin: process.env.API_CORS_ORIGIN?.trim() || null,
   },
 } as const;
+
+if (!['alpaca', 'ibkr'].includes(config.broker)) throw new Error('BROKER must be alpaca or ibkr');
+for (const [key, value, maximum] of [['API_PORT', config.api.port, 65535], ['IBKR_PORT', config.ibkr.port, 65535], ['AI_MAX_TOKENS', config.ai.maxTokensPerTurn, 16384], ['AI_MAX_TOOL_ROUNDS', config.ai.maxToolRounds, 20]] as const) {
+  if (!Number.isInteger(value) || value < 1 || value > maximum) throw new Error(`${key} is outside its supported range`);
+}
+const publicUrl = new URL(config.api.publicOrigin);
+if (publicUrl.origin !== config.api.publicOrigin || (!['127.0.0.1', 'localhost', '[::1]'].includes(publicUrl.hostname) && publicUrl.protocol !== 'https:')) {
+  throw new Error('API_PUBLIC_ORIGIN must be an exact HTTPS origin (HTTP is allowed for localhost)');
+}

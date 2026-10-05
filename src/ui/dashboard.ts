@@ -918,7 +918,7 @@ const PROPOSAL_HEADLINE_MIN = 10;
 
 /** Only `pending`/`approved` are still waiting on anything — everything else is history. */
 export function isOpenProposal(p: ProposalRow): boolean {
-  return p.status === 'pending' || p.status === 'approved';
+  return ['pending','approved','executing','submitted','partial','unknown'].includes(p.status);
 }
 
 /** Soonest deadline first — that is the one an operator is about to miss. */

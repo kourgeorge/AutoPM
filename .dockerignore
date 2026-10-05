@@ -1,0 +1,9 @@
+.git
+.env*
+node_modules
+data
+ibkr-data
+tmp
+dist
+backtest-results
+*.sqlite*

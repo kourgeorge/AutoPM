@@ -1,7 +1,7 @@
 /**
  * L5 — the history contract.
  *
- * One record per decision, appended once and never edited. This is what replaced
+ * Immutable decision intents with separately updated execution projections. This is what replaced
  * `knowledge.json`: the notes it held were the model's prose about what it had done,
  * which nothing could query and nothing could check. A `DecisionRecord` is structured,
  * so "what did the guard block this week" and "which entries went in without a stop"
@@ -9,9 +9,10 @@
  */
 
 export type DecisionKind =
-  /** An order was placed to open a position. */
+  | 'adjustment'
+  /** Intent to open a position; orderStatus describes its outcome. */
   | 'entry'
-  /** An order was placed to close one. */
+  /** Intent to close a position; orderStatus describes its outcome. */
   | 'exit'
   /** A deliberate decision NOT to act — including an event acked as seen or ignored. */
   | 'hold'
@@ -34,7 +35,7 @@ export interface DecisionRecord {
   triggerEventId: string | null;
   rationale: string;
 
-  /** False for `veto` and `rejected`; true when an order actually went to the venue. */
+  /** True only for confirmed fills or confirmed protection changes. Legacy records require orderStatus for interpretation. */
   executed: boolean;
   qty: number | null;
   price: number | null;
@@ -74,6 +75,18 @@ export interface DecisionRecord {
 
   /** `Policy.version` at the moment of the decision — a number, as declared. */
   policyVersion: number;
+  policyHash?: string;
+  accountId?: string | null;
+  proposalId?: string;
+  orderStatus?: string;
+  commandId?: string;
+  actorId?: string;
+  requestedQty?: number | null;
+  filledQty?: number;
+  fillPrice?: number | null;
+  protectionStatus?: 'pending' | 'confirmed' | 'unknown';
+  protectionCheckedAt?: string;
+  protectionStopLevel?: number | null;
 }
 
 /** Everything a caller must supply. `id` and `at` are stamped by `recordDecision`. */
@@ -86,7 +99,12 @@ export type DecisionInput = Omit<DecisionRecord, 'id' | 'at'>;
  * discriminator between the two.
  */
 export function isTradeAction(r: DecisionRecord): boolean {
-  if (r.kind === 'entry' || r.kind === 'exit') return r.executed;
-  if (r.kind === 'hold') return r.intendedStop != null;
-  return false;
+  return ['entry','exit','adjustment'].includes(r.kind) || (r.kind === 'hold' && r.intendedStop != null);
+}
+
+export function describeDecision(r: DecisionRecord): string {
+  const status = r.orderStatus ?? (r.executed ? 'recorded (legacy outcome)' : 'recorded');
+  const filled = r.filledQty != null ? `; filled ${r.filledQty}/${r.requestedQty ?? '?'}${r.fillPrice != null ? ` @ $${r.fillPrice}` : ''}` : '';
+  const protection = r.intendedStop != null ? `; protection ${r.protectionStatus ?? 'unverified'}${r.protectionStopLevel != null ? ` @ $${r.protectionStopLevel}` : ''}, decision stop $${r.intendedStop}` : '';
+  return `${r.kind.toUpperCase()} ${r.symbol ?? 'portfolio'} — ${status}${filled}${protection}: ${r.rationale}`;
 }

@@ -1,3 +1,4 @@
+import { newJobDirectory } from '../core/jobs';
 /**
  * Compares signal families — `trend` (existing), `meanReversion`, `crossSectional`, and
  * `blend` (new, see `strategy/meanReversion.ts` and `strategy/crossSectional.ts`) — under the
@@ -23,7 +24,7 @@ const HOLDOUT_YEARS = 2;
 const SLIPPAGE_PCT = 0.0005;
 const INITIAL_EQUITY = 100_000;
 const TAKE_PROFIT_R_MULT = 2;
-const OUT_DIR = path.join(process.cwd(), 'backtest-results');
+const OUT_DIR = newJobDirectory('backtestSignalFamilies');
 
 const SIGNAL_SETS: SignalSet[] = ['trend', 'meanReversion', 'crossSectional', 'blend'];
 const COMPOSITE_MIN_GRID = [0.1, 0.2, 0.3];

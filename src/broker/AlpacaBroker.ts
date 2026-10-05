@@ -1,4 +1,4 @@
-import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
+import type { IBroker, ExecutionOrder, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
 import { BrokerRejection } from './errors';
 import { alpacaTimeToMs, alpacaTrading as trading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
@@ -35,6 +35,7 @@ export class AlpacaBroker implements IBroker {
   async getPositions(): Promise<Position[]> {
     const res = await trading.get('/v2/positions');
     return (res.data as any[]).map((p) => ({
+      assetClass: p.asset_class === 'us_equity' ? 'equity' : 'other',
       symbol:        p.symbol,
       qty:           parseFloat(p.qty),
       avgCost:       parseFloat(p.avg_entry_price),
@@ -50,6 +51,7 @@ export class AlpacaBroker implements IBroker {
     // masquerading as a number the daily loss limit will be measured against.
     const lastEquity = parseFloat(d.last_equity);
     return {
+      accountId: typeof d.id === 'string' && d.id.trim() ? d.id : undefined,
       equity:       parseFloat(d.equity),
       cash:         parseFloat(d.cash),
       buyingPower:  parseFloat(d.buying_power),
@@ -69,9 +71,14 @@ export class AlpacaBroker implements IBroker {
    */
   async getOpenOrders(): Promise<OpenOrder[]> {
     const res = await trading.get('/v2/orders', { params: { status: 'open', nested: true } });
-    const rows = (res.data as any[]).flatMap((o) => [o, ...((o.legs ?? []) as any[])]);
+    const rows = (res.data as any[]).flatMap(o => {
+      const groupId = o.order_class === 'oco' || o.order_class === 'bracket' ? o.id : undefined;
+      return [o, ...(o.legs ?? [])].map(leg => ({ ...leg, groupId }));
+    });
     return rows.map((o) => ({
       id:           o.id,
+      clientOrderId: o.client_order_id,
+      groupId: o.groupId,
       symbol:       o.symbol,
       side:         o.side as 'buy' | 'sell',
       qty:          parseFloat(o.qty),
@@ -96,11 +103,12 @@ export class AlpacaBroker implements IBroker {
   async placeOrder(req: OrderRequest): Promise<{ id: string }> {
     try {
       const res = await trading.post('/v2/orders', {
+        client_order_id: req.clientOrderId,
         symbol:         req.symbol,
         qty:            req.qty,
         side:           req.side,
         type:           req.type,
-        time_in_force:  this.tifFor(req),
+        time_in_force:  req.timeInForce ?? this.tifFor(req),
         limit_price:    req.limitPrice,
         stop_price:     req.type === 'stop' ? req.stopPrice : undefined,
       });
@@ -144,6 +152,7 @@ export class AlpacaBroker implements IBroker {
   async placeOco(req: OcoRequest): Promise<{ stopOrderId: string; takeProfitOrderId: string }> {
     try {
       const res = await trading.post('/v2/orders', {
+        client_order_id: req.clientOrderId,
         symbol:        req.symbol,
         qty:           req.qty,
         side:          'sell',
@@ -191,8 +200,31 @@ export class AlpacaBroker implements IBroker {
     }
   }
 
+  private executionOrder(o: any): ExecutionOrder {
+    const filledQty = Number(o.filled_qty ?? 0);
+    return { id: o.id, clientOrderId: o.client_order_id, symbol: o.symbol, side: o.side,
+      qty: Number(o.qty), filledQty, filledPrice: num(o.filled_avg_price) ?? null,
+      status: o.status === 'filled' ? 'filled' : o.status === 'rejected' ? 'rejected'
+        : ['canceled','expired','replaced'].includes(o.status) ? 'cancelled' : filledQty > 0 ? 'partial' : 'open' };
+  }
+  async getOrder(id: string): Promise<ExecutionOrder | null> {
+    try { return this.executionOrder((await trading.get('/v2/orders/' + encodeURIComponent(id))).data); }
+    catch (err: any) { if (err.response?.status === 404) return null; throw err; }
+  }
+  async findOrder(clientOrderId: string): Promise<ExecutionOrder | null> {
+    try { return this.executionOrder((await trading.get('/v2/orders:by_client_order_id', { params: { client_order_id: clientOrderId } })).data); }
+    catch (err: any) { if (err.response?.status === 404) return null; throw err; }
+  }
+
   async cancelOrder(id: string): Promise<void> {
-    await trading.delete(`/v2/orders/${id}`);
+    await trading.delete('/v2/orders/' + encodeURIComponent(id));
+    for (let i = 0; i < 20; i++) {
+      const order = await this.getOrder(id);
+      if (order?.status === 'cancelled') return;
+      if (order?.status === 'filled') throw new Error('Order filled while cancellation was pending; re-read the position');
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error('Broker has not confirmed cancellation of ' + id);
   }
 
   /**

@@ -18,7 +18,7 @@
  * case it was written for.
  */
 
-import fs from 'fs';
+import { appendRecord, readRecords, importJsonLines, transaction } from '../core/storage';
 import path from 'path';
 import { logger } from '../core/logger';
 import type { Fill } from '../broker/IBroker';
@@ -64,26 +64,11 @@ function identify(execId: string): { base: string; revision: number } {
  * final line, and that must cost the last fill, not the file.
  */
 export function readFills(opts: { symbol?: string; since?: Date } = {}): Fill[] {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(FILLS_FILE, 'utf8');
-  } catch {
-    return [];
-  }
-
+  if (_ephemeral) return [];
+  importJsonLines('fill', FILLS_FILE);
   const byBase = new Map<string, { revision: number; order: number; fill: Fill }>();
   let order = 0;
-
-  for (const line of raw.split('\n')) {
-    if (line.trim() === '') continue;
-    let fill: Fill;
-    try {
-      fill = JSON.parse(line) as Fill;
-    } catch {
-      continue;
-    }
-    if (typeof fill?.execId !== 'string') continue;
-
+  for (const fill of readRecords<Fill>('fill')) {
     const { base, revision } = identify(fill.execId);
     const existing = byBase.get(base);
     // `>=` and not `>`: a re-append of the same revision is the ordinary case (two
@@ -145,13 +130,9 @@ export function recordFills(fills: Fill[]): number {
   if (fresh.length === 0) return 0;
 
   if (!_ephemeral) {
-    try {
-      ensureDataDir();
-      fs.appendFileSync(FILLS_FILE, fresh.map(f => JSON.stringify(f)).join('\n') + '\n', 'utf8');
-    } catch (err: any) {
-      logger.error(`[Fills] write failed for ${fresh.length} fill(s): ${err.message}`);
-      return 0;
-    }
+    transaction(() => {
+      for (const fill of fresh) appendRecord('fill', fill.execId, fill.at, fill);
+    });
   }
 
   return fresh.length;

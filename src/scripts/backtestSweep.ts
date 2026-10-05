@@ -1,3 +1,4 @@
+import { newJobDirectory } from '../core/jobs';
 /**
  * The Level 1 parameter sweep — every combination of exit mode, `compositeMin`,
  * `stopLossAtrMult`, and `positionSizePct` in the grid below, each split by calendar date into
@@ -29,7 +30,7 @@ const HOLDOUT_YEARS = 2;
 const SLIPPAGE_PCT = 0.0005;
 const INITIAL_EQUITY = 100_000;
 const TAKE_PROFIT_R_MULT = 2;
-const OUT_DIR = path.join(process.cwd(), 'backtest-results');
+const OUT_DIR = newJobDirectory('backtestSweep');
 
 const EXIT_MODES: ExitMode[] = ['stop_only', 'stop_trailing', 'stop_takeprofit'];
 const COMPOSITE_MIN_GRID = [0.1, 0.2, 0.3];

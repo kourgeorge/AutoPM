@@ -1,3 +1,5 @@
+import { protect, protectionIntents } from './protectionIntent';
+import { assertExecutionOwner } from '../core/runtime';
 /**
  * L4 — the stop that rests at the venue.
  *
@@ -19,6 +21,7 @@
  */
 
 import { broker } from '../broker';
+import { getOpenProposals } from '../core/proposals';
 import type { OcoRequest, OpenOrder, OrderRequest, Position } from '../broker/IBroker';
 import { logger } from '../core/logger';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
@@ -380,23 +383,18 @@ export type ArmResult =
   | { ok: true; orderId: string }
   | { ok: false; reason: string };
 
-/**
- * Place the stop and return the venue's id for it. Writes NO state.
- *
- * The two callers record the id in different places — the entry path passes it into the single
- * `openPositionSnapshot` call it already makes, the sweep patches an existing snapshot — and
- * writing it here as well would mean one of them writes it twice.
- *
- * Never throws. A venue that will not take the stop is a fact to report, not a reason to fail
- * the operation that asked: on entry the shares are already bought, and on a sweep the next tick
- * tries again. The recorded level and the breach detector are untouched either way.
- */
+/** Place a durable protective stop. Record its broker ID before confirming the intent. */
 export async function armStop(symbol: string, qty: number, stopLevel: number): Promise<ArmResult> {
   const plan = stopOrderFor(symbol, qty, stopLevel);
   if (!plan.ok) return plan;
 
   try {
-    const { id } = await broker.placeOrder(plan.request);
+    await verifyFreeHolding(symbol, qty);
+    const { id } = await protect(symbol, stopLevel, undefined, async clientOrderId => {
+      const placed = await guardedBroker().placeOrder({ ...plan.request, clientOrderId });
+      patchPositionSnapshot(symbol, { stopOrderId: placed.id });
+      return placed;
+    });
     logger.trade(`Stop armed for ${symbol}: ${qty} @ $${stopLevel} resting as ${id}`);
     return { ok: true, orderId: id };
   } catch (err: any) {
@@ -404,16 +402,7 @@ export async function armStop(symbol: string, qty: number, stopLevel: number): P
   }
 }
 
-/**
- * Move the resting stop to `nextLevel`, arming one if none rests, and record where it now lives.
- *
- * Replace rather than cancel-and-place, because cancel-and-place opens a window with no
- * protection anywhere — the one thing this whole feature exists to close. The id is taken from
- * whatever comes back, since Alpaca mints a new one on every replace and IBKR keeps the old.
- *
- * Also never throws, for the same reason as `armStop`: the caller has already written the level
- * the detector watches, and losing that write over a venue refusal would be the worse outcome.
- */
+/** Confirm the existing owned stop, then request and record its replacement. */
 export async function moveStopTo(
   symbol: string,
   qty: number,
@@ -424,7 +413,14 @@ export async function moveStopTo(
 
     if (existingId) {
       try {
-        const { id } = await broker.replaceStopOrder(existingId, nextLevel);
+        const order = (await broker.getOpenOrders()).find(o => o.id === existingId && sameSymbol(o.symbol, symbol) && o.side === 'sell' && o.type === 'stop');
+        if (!order) throw new Error('Recorded stop is not confirmed at the broker');
+        if (order.stopPrice === nextLevel) return { ok: true as const, orderId: existingId };
+        const { id } = await protect(symbol, nextLevel, undefined, async () => {
+          const placed = await guardedBroker().replaceStopOrder(existingId, nextLevel);
+          patchPositionSnapshot(symbol, { stopOrderId: placed.id });
+          return placed;
+        });
         patchPositionSnapshot(symbol, { stopOrderId: id });
         logger.trade(`Stop for ${symbol} moved to $${nextLevel} (order ${id})`);
         return { ok: true as const, orderId: id };
@@ -461,13 +457,7 @@ export type OcoArmResult =
   | { ok: true; stopOrderId: string; takeProfitOrderId: string }
   | { ok: false; reason: string };
 
-/**
- * Place the linked stop + take-profit pair and return both venue ids. Writes NO state — same
- * split as `armStop`, for the same reason: the two callers (entry, sweep) record the ids in
- * different places.
- *
- * Never throws — same contract as `armStop`.
- */
+/** Place a durable linked pair. An uncertain request pauses trading and cannot be repeated. */
 export async function armOco(
   symbol: string,
   qty: number,
@@ -478,7 +468,12 @@ export async function armOco(
   if (!plan.ok) return plan;
 
   try {
-    const { stopOrderId, takeProfitOrderId } = await broker.placeOco(plan.request);
+    await verifyFreeHolding(symbol, qty);
+    const { stopOrderId, takeProfitOrderId } = await protect(symbol, stopLevel, takeProfitLevel, async clientOrderId => {
+      const placed = await guardedBroker().placeOco({ ...plan.request, clientOrderId });
+      patchPositionSnapshot(symbol, placed);
+      return placed;
+    });
     logger.trade(
       `OCO armed for ${symbol}: ${qty} @ stop $${stopLevel} / target $${takeProfitLevel} `
         + `resting as ${stopOrderId} / ${takeProfitOrderId}`,
@@ -489,17 +484,7 @@ export async function armOco(
   }
 }
 
-/**
- * Move both legs of a resting OCO pair, arming a fresh pair if neither rests, and record where
- * they now live.
- *
- * Replaces both legs in place rather than cancel-and-place, for the same reason `moveStopTo`
- * does. The two replace calls run under `Promise.allSettled`, not `Promise.all`: if the
- * take-profit replace is refused after the stop replace already succeeded, `Promise.all` would
- * reject the whole call and the stop's new id — a real, live order at the venue — would never be
- * recorded. `allSettled` lets each leg's outcome be handled on its own, so a successfully moved
- * leg is never stranded because its sibling failed.
- */
+/** Replace confirmed owned legs in sequence, retaining each acknowledged broker ID. */
 export async function moveOcoTo(
   symbol: string,
   qty: number,
@@ -512,36 +497,23 @@ export async function moveOcoTo(
     const existingTpId = snap?.takeProfitOrderId;
 
     if (existingStopId && existingTpId) {
-      const [stopResult, tpResult] = await Promise.allSettled([
-        broker.replaceStopOrder(existingStopId, nextStop),
-        broker.replaceTakeProfitOrder(existingTpId, nextTakeProfit),
-      ]);
-
-      const patch: Partial<PositionSnapshot> = {};
-      const failures: string[] = [];
-
-      if (stopResult.status === 'fulfilled') {
-        patch.stopOrderId = stopResult.value.id;
-      } else {
-        const reason = (stopResult.reason as any)?.venueMessage ?? stopResult.reason?.message ?? String(stopResult.reason);
-        failures.push(`stop leg (order ${existingStopId}): ${reason}`);
-      }
-
-      if (tpResult.status === 'fulfilled') {
-        patch.takeProfitOrderId = tpResult.value.id;
-      } else {
-        const reason = (tpResult.reason as any)?.venueMessage ?? tpResult.reason?.message ?? String(tpResult.reason);
-        failures.push(`take-profit leg (order ${existingTpId}): ${reason}`);
-      }
-
-      if (Object.keys(patch).length > 0) patchPositionSnapshot(symbol, patch);
-
-      if (failures.length > 0) {
-        return { ok: false as const, reason: `could not move the OCO pair — ${failures.join('; ')}` };
-      }
-      logger.trade(`OCO for ${symbol} moved to stop $${nextStop} / target $${nextTakeProfit}`);
-      return { ok: true as const, stopOrderId: patch.stopOrderId!, takeProfitOrderId: patch.takeProfitOrderId! };
+      try {
+        const orders = await broker.getOpenOrders();
+        const stop = orders.find(o => o.id === existingStopId && sameSymbol(o.symbol, symbol) && o.type === 'stop');
+        const target = orders.find(o => o.id === existingTpId && sameSymbol(o.symbol, symbol) && o.type === 'limit');
+        if (!stop || !target) throw new Error('Both owned protective legs must be confirmed before adjustment');
+        if (stop.stopPrice === nextStop && target.limitPrice === nextTakeProfit) return { ok: true, stopOrderId: stop.id, takeProfitOrderId: target.id };
+        const placed = await protect(symbol, nextStop, nextTakeProfit, async () => {
+          const stopResult = stop.stopPrice === nextStop ? stop : await guardedBroker().replaceStopOrder(existingStopId, nextStop);
+          patchPositionSnapshot(symbol, { stopOrderId: stopResult.id });
+          const targetResult = target.limitPrice === nextTakeProfit ? target : await guardedBroker().replaceTakeProfitOrder(existingTpId, nextTakeProfit);
+          patchPositionSnapshot(symbol, { takeProfitOrderId: targetResult.id });
+          return { stopOrderId: stopResult.id, takeProfitOrderId: targetResult.id };
+        });
+        return { ok: true, ...placed };
+      } catch (err: any) { return { ok: false, reason: err.message }; }
     }
+    if (existingStopId || existingTpId) return { ok: false, reason: 'One protective leg is missing; inspect broker orders before replacing the pair' };
 
     const armed = await armOco(symbol, qty, nextStop, nextTakeProfit);
     if (armed.ok) {
@@ -590,29 +562,20 @@ function logFailureOnce(symbol: string, reason: string): void {
   logger.warn(`[Stops] ${symbol} is not protected at the venue — ${reason}`);
 }
 
-/**
- * Repair pass: arm what should be armed, and forget an id that no longer names a live order.
- *
- * The repair half is what makes the entry path allowed to fail. An entry whose fill did not
- * confirm inside its bounded wait, a venue that was briefly refusing, a restart between the buy
- * and the arm, a stop cancelled by hand — all of them end with a position that should have a
- * stop and does not, and all of them are fixed here on the next tick.
- *
- * Clearing a stale `stopOrderId` matters as much as arming: an id pointing at an order that has
- * filled or been cancelled reads as protection that is not there, and `brokerOrderView` would
- * report the position as covered.
- *
- * Swallows everything. It runs from `tickOnce`, and A TICK NEVER THROWS OUT.
- */
+/** Protect managed holdings independently of research. Retain unresolved reservations and never cancel an external or surviving protective leg. */
 export async function sweepStops(): Promise<void> {
   let positions: Position[];
   let orders: OpenOrder[];
   try {
     [positions, orders] = await Promise.all([broker.getPositions(), broker.getOpenOrders()]);
   } catch (err: any) {
-    logger.warn(`[Stops] Sweep skipped — could not read the venue: ${err?.message ?? err}`);
-    return;
+    throw new Error(`Protection cannot read the broker: ${err?.message ?? err}`);
   }
+
+  // An unconfirmed exit owns its reservation until reconciliation establishes the outcome.
+  const exiting = new Set(getOpenProposals().filter(p => ['executing','submitted','partial','unknown'].includes(p.status)).map(p => canonicalSymbol(p.symbol)));
+  for (const [key, intent] of Object.entries(protectionIntents())) if (intent.status !== 'confirmed') exiting.add(key);
+  positions = positions.filter(p => !exiting.has(canonicalSymbol(p.symbol)));
 
   // Forget failures for symbols no longer held, so the map cannot grow past the book.
   for (const key of [...lastFailure.keys()]) {
@@ -636,16 +599,19 @@ export async function sweepStops(): Promise<void> {
     // An exit or an entry mid-flight owns this symbol: during the fill-wait the position can be
     // live at the venue before the read that produced `positions`, and `execute_exit` removes
     // the snapshot itself the moment its sell is accepted.
-    if (isStopLocked(key)) continue;
+    if (isStopLocked(key) || exiting.has(key)) continue;
 
     const strikes = (absentFor.get(key) ?? 0) + 1;
     absentFor.set(key, strikes);
     if (strikes < needed) continue;
 
-    logger.warn(
+    logger.info(
       `[Stops] ${key} is not held at the venue on ${strikes} consecutive reads — removing its `
         + `snapshot: ${JSON.stringify(snapshots[key])}`,
     );
+    const ids = [snapshots[key].stopOrderId, snapshots[key].takeProfitOrderId].filter((id): id is string => !!id);
+    const outcomes = await Promise.all(ids.map(id => broker.getOrder(id)));
+    if (!outcomes.some(o => o?.status === 'filled')) continue;
     removePositionSnapshot(key);
     absentFor.delete(key);
   }
@@ -699,19 +665,7 @@ export async function sweepStops(): Promise<void> {
 
     const armed = await withStopLock(action.symbol, async () => {
       if (action.kind === 'repair') {
-        try {
-          await broker.cancelOrder(action.staleLegId);
-        } catch (err: any) {
-          // "Already gone" is fine — the leg may have filled or been cancelled outside this
-          // system between the read that found it and now. A genuine refusal just means the
-          // fresh pair below will be rejected too (still-reserved qty), which is reported the
-          // same way any other arm failure is.
-          logger.warn(
-            `[Stops] ${action.symbol} could not cancel stale ${action.staleLegSide} leg `
-              + `${action.staleLegId} before repairing the OCO pair: ${err?.message ?? err} `
-              + `(continuing — treated as already gone)`,
-          );
-        }
+        return { ok: false as const, reason: 'One protective leg is missing. Inspect the broker orders before replacing the pair.' };
       }
       return armOco(action.symbol, action.qty, action.stopLevel, action.takeProfitLevel);
     });
@@ -726,4 +680,13 @@ export async function sweepStops(): Promise<void> {
       logFailureOnce(action.symbol, armed.reason);
     }
   }
+}
+
+function guardedBroker() { assertExecutionOwner(); return broker; }
+
+async function verifyFreeHolding(symbol: string, qty: number): Promise<void> {
+  const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
+  if (!held || held.qty < qty || !Number.isInteger(qty)) throw new Error('Holding changed or quantity is unsupported');
+  const sells = (await broker.getOpenOrders()).filter(o => sameSymbol(o.symbol, symbol) && o.side === 'sell');
+  if (sells.length) throw new Error('Existing sell orders must be reviewed before adding protection');
 }

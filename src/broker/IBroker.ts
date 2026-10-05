@@ -1,4 +1,5 @@
 export interface Position {
+  assetClass?: 'equity' | 'other';
   symbol: string;
   qty: number;
   avgCost: number;
@@ -7,6 +8,7 @@ export interface Position {
 }
 
 export interface AccountInfo {
+  accountId?: string;
   equity: number;
   cash: number;
   buyingPower: number;
@@ -23,6 +25,8 @@ export interface AccountInfo {
 }
 
 export interface OrderRequest {
+  clientOrderId?: string;
+  timeInForce?: 'day' | 'ioc';
   symbol: string;
   side: 'buy' | 'sell';
   qty: number;
@@ -55,6 +59,8 @@ export interface OrderRequest {
  * price away.
  */
 export interface OpenOrder {
+  groupId?: string;
+  clientOrderId?: string;
   id: string;
   symbol: string;
   side: 'buy' | 'sell';
@@ -120,14 +126,28 @@ export interface Fill {
  * rejected. This is one placement call so the venue links them instead.
  */
 export interface OcoRequest {
+  clientOrderId?: string;
   symbol: string;
   qty: number;
   stopPrice: number;
   takeProfitPrice: number;
 }
 
+export interface ExecutionOrder {
+  id: string;
+  clientOrderId?: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  filledQty: number;
+  filledPrice: number | null;
+  status: 'open' | 'partial' | 'filled' | 'cancelled' | 'rejected';
+}
+
 export interface IBroker {
   getPositions(): Promise<Position[]>;
+  getOrder(id: string): Promise<ExecutionOrder | null>;
+  findOrder(clientOrderId: string): Promise<ExecutionOrder | null>;
   getAccountInfo(): Promise<AccountInfo>;
   getOpenOrders(): Promise<OpenOrder[]>;
   placeOrder(order: OrderRequest): Promise<{ id: string }>;

@@ -1,22 +1,7 @@
-/**
- * L0 — policy mutation.
- *
- * The only write path to policy.yaml that is not a human editor. Validates
- * the proposed change before touching disk and backs up the previous file
- * to policy/history/ so every change is reversible.
- *
- * Deliberately narrow: only the fields a user would express as a preference
- * ("add TSLA", "reduce position size to 3%") are exposed. Immutable ceilings
- * are enforced by the existing parsePolicy validator, which runs on the RESULT
- * (see the end of `updateTradingSettings`) — so the only shape check here is the
- * one that has to precede the mutation: that the sections it writes into exist at all.
- */
+/** Host-side settings helper. The dashboard uses atomic revision activation directly. */
 
-import fs from 'fs';
-import path from 'path';
 import { dump as dumpYaml, load as parseYamlDoc } from 'js-yaml';
-import { writeFileAtomic } from '../core/fsAtomic';
-import { HISTORY_DIR, POLICY_FILE, parsePolicy, readPolicyText, reloadPolicy } from './load';
+import { parsePolicy, readPolicyText, saveStrategy, getPolicyHash } from './load';
 
 export interface TradingSettingsUpdate {
   /** Add these symbols to the watchlist (idempotent). */
@@ -128,24 +113,8 @@ export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTra
     return { ok: false, errors: validation.errors };
   }
 
-  // Backup previous file
-  try {
-    if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    fs.writeFileSync(path.join(HISTORY_DIR, `policy-${stamp}.yaml`), text, 'utf8');
-  } catch {
-    // Non-fatal — a backup failure must not block the mutation
-  }
-
-  // Atomic because policy is the file every startup path needs to read, and the backup above
-  // is not an answer to a truncated one — restoring it is a manual step and the daemon would
-  // already be down. See `core/fsAtomic.ts`.
-  try {
-    writeFileAtomic(POLICY_FILE, newText);
-  } catch (err: any) {
-    return { ok: false, errors: [`cannot write policy: ${err.message}`] };
-  }
-  reloadPolicy();
+  try { saveStrategy(doc, getPolicyHash(), 'host-admin'); }
+  catch (err: any) { return { ok: false, errors: [err.message] }; }
 
   return { ok: true, applied, version: doc.version };
 }
