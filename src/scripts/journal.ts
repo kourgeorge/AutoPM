@@ -15,9 +15,8 @@
  *   npm run journal -- 20 NVDA # last 20 for one symbol
  */
 
-import fs from 'fs';
 import { canonicalSymbol } from '../core/symbols';
-import { JOURNAL_FILE } from '../journal/journal';
+import { readDecisions } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 
 const KINDS = ['entry', 'exit', 'hold', 'veto', 'rejected'];
@@ -70,27 +69,8 @@ function main(): void {
   const limit = limitArg ? Number(limitArg) : 20;
   const symbol = symbolArg?.toUpperCase();
 
-  let raw: string;
-  try {
-    raw = fs.readFileSync(JOURNAL_FILE, 'utf8');
-  } catch {
-    console.log(`No journal yet at ${JOURNAL_FILE} — nothing has been decided.`);
-    return;
-  }
-
-  const problems: string[] = [];
-  const records: DecisionRecord[] = [];
-
-  raw.split('\n').forEach((line, i) => {
-    if (line.trim() === '') return;
-    try {
-      const rec = JSON.parse(line) as DecisionRecord;
-      problems.push(...checkRecord(rec, i + 1));
-      records.push(rec);
-    } catch {
-      problems.push(`line ${i + 1}: unparseable — ${line.slice(0, 60)}…`);
-    }
-  });
+  const records = readDecisions();
+  const problems = records.flatMap((record, i) => checkRecord(record, i + 1));
 
   // Canonical, so `btc/usd` on the command line finds the `BTCUSD` records the venue wrote.
   const wanted = symbol ? canonicalSymbol(symbol) : null;

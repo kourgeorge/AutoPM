@@ -90,7 +90,7 @@ export function registerOperatorCommands(trader: Trader): void {
     help: 'Every open position with stop, target and P&L.',
     run: () => {
       const tick = getLastTick();
-      if (!tick) return ui.reply('No tick yet — wait a minute after start-up.');
+      if (!tick || tick.positionsStale) return ui.reply('Holdings are unavailable; the account cannot be reported as flat.');
       const rows = Object.values(tick.positions).sort((a, b) => a.symbol.localeCompare(b.symbol));
       if (rows.length === 0) return ui.reply('No open positions.');
       const header = ['SYMBOL', 'QTY', 'ENTRY', 'PRICE', 'P&L', 'STOP', 'TO STOP', 'TARGET', 'HELD'];
@@ -116,11 +116,11 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'pause',
-    help: 'Stop starting new trader cycles. Broker-side stops stay in place.',
+    help: 'Pause queued trading actions and new trader cycles. Existing broker orders stay active.',
     run: () => {
       if (trader.status.paused) return ui.reply('The trader is already paused.');
       trader.pause();
-      ui.reply('Trader paused. A cycle already running will finish first. Stops resting at the broker still protect open positions. Type /resume to continue.');
+      ui.reply('Trading paused and saved. Queued actions are blocked. Orders already accepted by the broker remain active; protection checks continue. Type /resume to continue.');
     },
   });
 

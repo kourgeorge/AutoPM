@@ -1,11 +1,16 @@
+import { readAccount, readPositions, readOrders } from '../core/accountRead';
+import { validateAnnotation, actAnnotation } from '../strategy/annotation';
+export { validateAnnotation, actAnnotation } from '../strategy/annotation';
+export type { AnnotateInput, AnnotationValidation } from '../strategy/annotation';
+import { ToolRegistry } from '../agents/toolRegistry';
+import { agentContext } from '../core/agentContext';
+import { listCommands } from '../core/commands';
 import { broker } from '../broker';
 import { BrokerRejection } from '../broker/errors';
 import {
   GuardRejection,
   enterPosition,
   exitPosition,
-  type EnterPositionResult,
-  type ExitPositionResult,
 } from '../strategy/orderManager';
 // Only the reporting predicate remains here. The rules that *refuse* an order moved below
 // the decision maker, into `enterPosition`, where a second caller cannot skip them.
@@ -33,7 +38,7 @@ import { computeSignals, signalSummary, signalTally } from '../strategy/signals'
 import { computeMeanReversionSignals } from '../strategy/meanReversion';
 import { reversalFilter } from '../strategy/reversal';
 import { getLastTick } from '../features/lastTick';
-import { watchlistScan } from '../features/watchlistScan';
+import { entryPlan, riskAwareWatchlistScan } from '../strategy/entryPlanning';
 import {
   getPositionSnapshot,
   getState,
@@ -52,7 +57,7 @@ import {
   type OcoArmResult,
 } from '../strategy/stopOrders';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
-import { recordLesson } from '../journal/lessons';
+import { recordLesson, listLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
 import { openedAtFromFills } from '../review/fillsLedger';
@@ -65,6 +70,16 @@ import type { OpenOrder } from '../broker/IBroker';
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    name: 'get_entry_plan',
+    description: 'Size a proposed long equity trade against the user risk profile using the IOC entry limit, stop loss, reward:risk, current holdings, sector limits and estimated portfolio volatility. Returns maxQty and measured risk. Choose a supported stop and target first; never move them merely to pass a budget. This is a read-only plan, not an order or an approval.',
+    input_schema: { type: 'object', properties: {
+      symbol: { type: 'string' }, price: { type: 'number', minimum: 0.01 },
+      stopLoss: { type: 'number', minimum: 0.01 }, takeProfit: { type: 'number', minimum: 0.01 },
+    }, required: ['symbol', 'price', 'stopLoss', 'takeProfit'] },
+  },
+  { name: 'get_lessons', description: 'Read the latest active, evidence-linked advisory lessons.', input_schema: { type: 'object', properties: {}, required: [] } },
+  { name: 'get_commands', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked action IDs. Read get_proposals for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
   {
     name: 'get_market_status',
     description: 'Get current market status: open/closed, ET time, and minutes until next open or close.',
@@ -82,12 +97,12 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_open_orders',
-    description: 'Read the orders actually resting at the venue right now, grouped by position. This system places market orders and protective sell stops; a stop whose orderId matches the position\'s stopOrderIdRecordedHere is its own, and anything else was placed outside it. Two separate facts per position: stopLevelRecordedHere is the level the stop detector watches while this process runs, venueStop is the order that protects the position when it is not. Use this to answer "is there a stop on my positions, and where" instead of assuming either way.',
+    description: "Read broker orders grouped by position. Match ownership by recorded order ID. Desired stop levels and actual broker stops are separate facts; inspect both price and quantity before claiming full protection.",
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'execute_entry',
-    description: 'Buy at market. The stop is recorded as YOUR baseline AND placed at the venue as a real resting GTC sell stop, so the position stays protected while this process is not running — which means the stop can fill on its own, without an execute_exit call. The target is recorded only and is not sent anywhere. The result reports under venueStop whether the stop actually rests at the venue, and why not when it does not (crypto cannot have one; a fill that did not confirm in time is retried by the stop sweep). Risk rules (position size, max positions, buying power, daily loss limit) are enforced and return an error if violated. The filled qty may be smaller than requested if the macro regime caps it; the result reports what was actually bought.',
+    description: "Queue a whole-share long equity entry under the active strategy. ok:true is a queue receipt. An automatic or human-approved action is executed separately using an IOC limit buy; fills and broker protection are reconciled later. Inspect get_proposals before reporting any fill or stop as confirmed.",
     input_schema: {
       type: 'object',
       properties: {
@@ -105,7 +120,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'annotate_position',
-    description: 'Set or tighten the stop, target and thesis on a position — one opened without them (legacy or external holdings, anything showing NO STOP RECORDED HERE) or one whose stop you now want raised. Writes the stop into the state so the stop detector begins watching it immediately, AND moves the real sell stop resting at the venue to match, so the level holds while this process is not running. TIGHTEN-ONLY: a stop can be raised or restated, never widened — a lower stop is refused as stop_loosened. If the thesis has changed enough that the old stop is wrong, exit rather than giving the position more room. Records a hold decision in the journal so the thesis survives cycle boundaries.',
+    description: "Queue a stop/target adjustment for an already managed holding. Human adoption is required for unmanaged holdings. Stops can only tighten upward; targets can only move closer. The original entry thesis is preserved; this management rationale and broker confirmation are recorded separately.",
     input_schema: {
       type: 'object',
       properties: {
@@ -120,7 +135,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_exit',
-    description: 'Close a position at market price. Omit qty to close it entirely. Give qty to sell only part of it (a whole number of shares, no more than the position holds) — the stop and thesis on the remainder are kept as they were.',
+    description: "Queue an exit from a managed position. Omit qty to request the whole holding, or provide whole shares to sell part. Existing protection stays until the executor attempts the exit. Inspect proposal status for approval, submission and fills.",
     input_schema: {
       type: 'object',
       properties: {
@@ -139,7 +154,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_proposals',
-    description: 'Read-only. List trade proposals held for a human to decide because automation policy requires it for that action (entry, exit, stop or target adjustment) — created automatically when execute_entry, execute_exit or annotate_position returns pending:true. There is no tool to approve or reject one: a human decides by typing approve/reject directly into the terminal, and the executor places the order or moves the stop on its own next pass once they do. Use this to check on a proposal you already created, not to act on one.',
+    description: "Read automatic and manual actions and their authoritative parameters, statuses, and broker results. Only pending actions await a human decision. approved waits for execution; submitted/partial await fills; unknown needs broker review. No model can approve or reject an action.",
     input_schema: {
       type: 'object',
       properties: {
@@ -151,11 +166,12 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'ack_event',
-    description: 'Mark a machine event answered so it stops escalating. Call it for every event you deal with, including ones you decide to ignore.',
+    description: "Record how an incident is being handled. acting requires an existing proposalId linked to this event; the incident remains open until that action succeeds. Acknowledging a critical or urgent incident records observation without resolving it. ignoring requires a reason and explicitly declines action.",
     input_schema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'The event id, verbatim from MACHINE EVENTS or get_pending_events.' },
+        proposalId: { type: 'string', description: 'Required for acting: an existing proposal linked to this event.' },
         disposition: {
           type: 'string',
           enum: ['acting', 'acknowledged', 'ignoring'],
@@ -215,16 +231,17 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'write_lesson',
-    description: 'Record ONE changed rule of thumb, in prose, for every future cycle to read. This is the only thing you can say that outlives this cycle — the context you are given is rebuilt from scratch next time, so a conclusion you do not write here is lost. Write one only when something actually taught you a rule: "XLE gapped on an OPEC headline nobody checked, so energy entries need a scheduled-events check" is a lesson; "the tape was choppy" is noise, and restating a rule already in your policy is noise. Most cycles must add nothing, and that is the correct outcome. Name the evidence inside the text — a scorecard number, a round trip, a veto you hit.',
+    description: "Store a concise advisory observation with existing journal decision IDs as evidence. Do not restate strategy rules or write routine cycle summaries. Lessons cannot change permissions or settings; the operator can edit or retire them.",
     input_schema: {
       type: 'object',
       properties: {
+        evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'IDs of existing journal decisions supporting this observation.' },
         lesson: {
           type: 'string',
           description: 'The lesson in prose: what happened, what it generalizes to, and what you will do differently. Markdown is fine.',
         },
       },
-      required: ['lesson'],
+      required: ['lesson', 'evidenceIds'],
     },
   },
   {
@@ -245,7 +262,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_watchlist_scan',
-    description: 'Read the WHOLE watchlist as one table: every non-held watchlist symbol with its five signal scores, tally (including composite, their mean), the reversal filter, ATR, RSI, both EMAs, price and price staleness. Use this INSTEAD of calling get_signals once per symbol when you are scanning for a candidate — it is one call rather than eighteen, and the numbers are identical because both come from the same deterministic computation. These are the exact figures the machine judged on its last 60-second pass, not a fresh fetch: tickAt and ageMs say when, and a caveat appears if the table is older than a few tick intervals. Held names are NOT rows — they are listed in heldExcluded, so their absence means held, not off the watchlist. A symbol the machine declined to score (too little bar history) is still a row, with notScored naming why, so silence never stands in for missing data. priceStale is about the PRICE only; signals come from bars, so a row can have no price and full scores. Rows are SORTED by composite descending, which is an ordering and not a judgement of quality; unscored rows sort last. The five signals are one trend family and correlated, so read composite rather than counting votes, and read reversal separately — it is the only reading here that can disagree with them. Before the first tick of a process there is no table at all and this returns an error rather than an empty list. For a symbol that is not on the watchlist, or for a fresh reading right now, use get_signals(symbol).',
+    description: 'Read the WHOLE watchlist as one table: every non-held watchlist symbol with its five signal scores, tally (including composite, their mean), the reversal filter, ATR, RSI, both EMAs, price and price staleness. Use this INSTEAD of calling get_signals once per symbol when you are scanning for a candidate — it is one call rather than eighteen, and the numbers are identical because both come from the same deterministic computation. These are the exact figures the machine judged on its last 60-second pass, not a fresh fetch: tickAt and ageMs say when, and a caveat appears if the table is older than a few tick intervals. Held names are NOT rows — they are listed in heldExcluded, so their absence means held, not off the watchlist. A symbol the machine declined to score (too little bar history) is still a row, with notScored naming why, so silence never stands in for missing data. priceStale is about the PRICE only; signals come from bars, so a row can have no price and full scores. With a configured risk profile, rows include riskFit and riskAdjustedScore, calculated against current holdings, and sort feasible setups first by signal per incremental volatility budget. Without a configured profile rows sort by composite. Risk fit uses an ATR stop as a preview; confirm actual supported levels with get_entry_plan. A scan is not an entry approval. The five signals are one trend family and correlated, so read composite rather than counting votes, and read reversal separately — it is the only reading here that can disagree with them. Before the first tick of a process there is no table at all and this returns an error rather than an empty list. For a symbol that is not on the watchlist, or for a fresh reading right now, use get_signals(symbol).',
     input_schema: {
       type: 'object',
       properties: {},
@@ -292,12 +309,12 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: 'Schedule the next trader cycle. MUST be the final tool call of every cycle. This is a MAXIMUM silence, not a polling interval — the machine watches every 60 seconds and wakes you when something crosses, so a short sleep costs a full cycle and tells you nothing new. Market open: 60. Market closed: 240. Do NOT use 10 when the market is closed — that wastes cycles and burns tokens for no reason.',
+    description: "Finish this trader turn and set the maximum delay before another cycle. Call separately after inspecting all earlier action results. Remaining calls in the same batch will not execute. Typical cadence: 60 minutes while open, 240 while closed.",
     input_schema: {
       type: 'object',
       properties: {
         minutes: {
-          type: 'number',
+          type: 'number', minimum: 1, maximum: 1440,
           description: 'Maximum minutes until next cycle. MUST be 60 when market is open, MUST be 240 when market is closed. Never use 10 during closed hours.',
         },
         reason: { type: 'string', description: 'Why this duration was chosen.' },
@@ -314,19 +331,23 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
 
 // ── Executor ──────────────────────────────────────────────────────────────────
 
-export async function executeTraderTool(
+async function dispatchTraderTool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<string> {
   try {
     switch (name) {
+      case 'sleep': return JSON.stringify({ ok: true, sleepMs: Number(input.minutes) * 60000 });
+      case 'get_lessons': return JSON.stringify(listLessons(20, true));
+      case 'get_commands': return JSON.stringify(listCommands());
       case 'get_market_status':   return await toolGetMarketStatus();
       case 'get_account':         return await toolGetAccount();
       case 'get_positions':       return await toolGetPositions();
       case 'get_open_orders':     return await toolGetOpenOrders();
       case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'get_signals':         return await toolGetSignals(input);
-      case 'get_watchlist_scan':  return toolGetWatchlistScan();
+      case 'get_watchlist_scan':  return JSON.stringify(await riskAwareWatchlistScan());
+      case 'get_entry_plan':     return JSON.stringify(await entryPlan(input as { symbol: string; price: number; stopLoss: number; takeProfit: number }));
       case 'get_correlation':     return await toolGetCorrelation(input);
       case 'get_exposure':        return await toolGetExposure();
       case 'get_calendar':        return await toolGetCalendar(input);
@@ -373,6 +394,9 @@ export async function executeTraderTool(
     return JSON.stringify({ error: err.message });
   }
 }
+
+export const TRADER_REGISTRY = new ToolRegistry(TRADER_TOOL_DEFINITIONS, dispatchTraderTool);
+export const executeTraderTool = (name: string, input: Record<string, unknown>) => TRADER_REGISTRY.execute(name, input);
 
 // ── Implementations ───────────────────────────────────────────────────────────
 
@@ -517,24 +541,6 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
   });
 }
 
-/**
- * The watchlist as one table, read out of the tick that already computed it.
- *
- * Sync, and reaches nothing: no broker call, no network, no promise. The whole point is
- * that the numbers were computed a few seconds ago by `collectAndCompute` and then thrown
- * away. `get_signals` had to re-fetch bars per symbol to rebuild them, so a discretionary
- * pass over eighteen names spent eighteen of thirty rounds rebuilding a table that had been
- * in memory — which is why PLAYBOOK.md's "assess watchlist candidates" step was unfollowable
- * as written, and an unfollowable instruction is a fabrication vector.
- *
- * Thin on purpose. The projection lives in `features/watchlistScan.ts`, beside the tick it
- * reads; nothing here rounds, sorts or decides. `get_signals` stays for the two things this
- * cannot do: a symbol that is not on the watchlist, and a reading taken right now.
- */
-function toolGetWatchlistScan(): string {
-  return JSON.stringify(watchlistScan(getLastTick(), getPolicy().triggers.tickIntervalMs));
-}
-
 async function toolGetCorrelation(input: Record<string, unknown>): Promise<string> {
   const { symbol } = input as { symbol: string };
   const result = await correlationGate(symbol);
@@ -633,7 +639,7 @@ export interface AccountSnapshot {
  * daily-loss verdict two ways.
  */
 export async function getAccountSnapshot(): Promise<AccountSnapshot> {
-  const account = await broker.getAccountInfo();
+  const account = await readAccount();
   const risk = getPolicy().risk;
 
   // The daily reset used to happen HERE, on the first account call of each day, which made
@@ -681,7 +687,7 @@ async function toolGetAccount(): Promise<string> {
  * type, is what says whose order it is.
  */
 const VENUE_STOPS_CAVEAT =
-  'This system places market orders and protective sell stops. A stop whose orderId matches the position\'s stopOrderIdRecordedHere is this system\'s own, placed from the recorded stopLevel; any other order listed here was placed outside this system. The two facts stay separate on purpose: stopLevelRecordedHere is what the stop detector compares the price against while this process runs, and venueStop is what protects the position when it is not running. Crypto can have no venue stop at all — the venue rejects a plain stop on a coin.';
+  'This system queues entry/exit orders and manages protective stops and targets. A stop whose orderId matches the position\'s stopOrderIdRecordedHere is this system\'s own, placed from the recorded stopLevel; any other order listed here was placed outside this system. The two facts stay separate on purpose: stopLevelRecordedHere is what the stop detector compares the price against while this process runs, and venueStop is what protects the position when it is not running. Crypto can have no venue stop at all — the venue rejects a plain stop on a coin.';
 
 export interface BrokerOrderView {
   /** Every order resting at the venue, ungrouped. */
@@ -732,8 +738,8 @@ export interface BrokerOrderView {
  */
 export async function brokerOrderView(): Promise<BrokerOrderView> {
   const [orders, positions] = await Promise.all([
-    broker.getOpenOrders(),
-    broker.getPositions(),
+    readOrders(),
+    readPositions(),
   ]);
   const snapshots = getState().positionSnapshots;
 
@@ -830,7 +836,7 @@ async function toolGetOpenOrders(): Promise<string> {
 }
 
 async function toolGetPositions(): Promise<string> {
-  const positions = await broker.getPositions();
+  const positions = await readPositions();
   return JSON.stringify({
     count: positions.length,
     maxPositions: getPolicy().risk.maxPositions,
@@ -932,232 +938,6 @@ function journalRefusal(
  * than thrown — the recorded level and its detector are the fallback, and losing that write over
  * a venue refusal would be the worse outcome.
  */
-export interface AnnotateInput {
-  symbol: string;
-  stopLoss: number;
-  takeProfit?: number | null;
-  thesis: string;
-  entryPrice?: number | null;
-}
-
-export type AnnotationValidation =
-  | { ok: false; response: string }
-  | {
-      ok: true;
-      symbol: string;
-      stopLoss: number;
-      takeProfit: number | null;
-      thesis: string;
-      effectiveEntry: number;
-      heldQty: number;
-      snapEntryPriceMissing: boolean;
-    };
-
-/**
- * Everything `toolAnnotatePosition` knows once the position, price and tighten-only checks
- * have passed. Pure — reads the broker/state but writes nothing, so it is safe for
- * `proposalExecutor.ts` to re-run from scratch against whatever the position looks like by
- * the time a human decides, not against what it looked like when the proposal was created.
- */
-export async function validateAnnotation(input: AnnotateInput): Promise<AnnotationValidation> {
-  const { symbol, stopLoss, thesis } = input;
-  const takeProfit = input.takeProfit ?? null;
-  const providedEntryPrice = input.entryPrice ?? undefined;
-
-  // Confirm the position is live at the venue — annotating a phantom is worse than
-  // doing nothing, because it creates a stop the detector will report on air.
-  const positions = await broker.getPositions();
-  // `sameSymbol`, not `===`: the model quotes the symbol as the portfolio renders it, which
-  // for crypto is the snapshot's `BTC/USD` against the venue's `BTCUSD`. An exact match
-  // reported "no open position" for a position sitting right there in the same context.
-  const held = positions.find(p => sameSymbol(p.symbol, symbol));
-  if (!held) {
-    return { ok: false, response: JSON.stringify({ error: `No open position in ${symbol} at the venue — nothing to annotate` }) };
-  }
-
-  // Entry price: the snapshot if it has one, else the caller's, else the venue's cost
-  // basis. The venue fallback is why this can no longer fail for want of a number the
-  // broker already told us.
-  const snap = getPositionSnapshot(symbol);
-  const effectiveEntry = snap?.entryPrice ?? providedEntryPrice ?? held.avgCost;
-
-  // Same shape as toolExecuteExit's exit price. Degrades to the cost basis when the broker
-  // omits marketValue, which is the pre-existing convention for "no better number".
-  const currentPrice = (held.marketValue ?? held.avgCost * held.qty) / held.qty;
-  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-    return { ok: false, response: JSON.stringify({ error: `Cannot determine a current price for ${symbol} — refusing to set a stop against an unknown level` }) };
-  }
-
-  if (!(stopLoss > 0 && stopLoss < currentPrice)) {
-    return {
-      ok: false,
-      response: JSON.stringify({
-        error: stopLoss >= currentPrice
-          ? `stopLoss $${stopLoss} is at or above the current price $${currentPrice.toFixed(2)} — that level is already breached, use execute_exit if you want out`
-          : `stopLoss $${stopLoss} must be above zero and below the current price $${currentPrice.toFixed(2)}`,
-      }),
-    };
-  }
-  if (takeProfit != null && takeProfit <= currentPrice) {
-    return { ok: false, response: JSON.stringify({ error: `takeProfit $${takeProfit} must be above the current price $${currentPrice.toFixed(2)}` }) };
-  }
-
-  // Tighten-only. `canTighten` is shared with the stop sweep so the tool and the repair pass
-  // cannot come to different conclusions about what counts as loosening.
-  //
-  // Journalled as a veto with a machine-readable rule, exactly like the guards in
-  // `orderManager`, because the interesting question is not this one refusal — it is the pattern
-  // across a month.
-  if (!canTighten(snap?.stopLevel, stopLoss)) {
-    recordDecision(decision('veto', 'guard', {
-      symbol,
-      rationale: thesis,
-      vetoRule: 'stop_loosened',
-      intendedStop: stopLoss,
-      price: currentPrice,
-    }));
-    return {
-      ok: false,
-      response: JSON.stringify({
-        error: `stopLoss $${stopLoss} is below the stop already recorded for ${symbol} ($${snap!.stopLevel}). `
-          + `Stops are tighten-only: they can be raised or restated, never widened. If the thesis has `
-          + `changed enough that the old stop is wrong, exit the position rather than giving it more room.`,
-        rejectedBy: 'guard',
-        rule: 'stop_loosened',
-        recordedStop: snap!.stopLevel,
-      }),
-    };
-  }
-
-  // Mirror check for the take-profit side: it may only move toward the market, never further
-  // away. Only checked when the caller actually supplied one — omitting takeProfit leaves the
-  // recorded level, if any, untouched.
-  if (takeProfit != null && !canLowerTakeProfit(snap?.takeProfitLevel, takeProfit)) {
-    recordDecision(decision('veto', 'guard', {
-      symbol,
-      rationale: thesis,
-      vetoRule: 'take_profit_loosened',
-      intendedTarget: takeProfit,
-      price: currentPrice,
-    }));
-    return {
-      ok: false,
-      response: JSON.stringify({
-        error: `takeProfit $${takeProfit} is above the take-profit already recorded for ${symbol} ($${snap!.takeProfitLevel}). `
-          + `Take-profits are tighten-only: they can be lowered toward the market or restated, never raised `
-          + `further away. If the thesis has changed enough that the old target is wrong, exit the position `
-          + `rather than pushing the target further out.`,
-        rejectedBy: 'guard',
-        rule: 'take_profit_loosened',
-        recordedTakeProfit: snap!.takeProfitLevel,
-      }),
-    };
-  }
-
-  return {
-    ok: true,
-    symbol,
-    stopLoss,
-    takeProfit,
-    thesis,
-    effectiveEntry,
-    heldQty: held.qty,
-    snapEntryPriceMissing: snap?.entryPrice == null,
-  };
-}
-
-/**
- * Records the hold decision, writes the baselines, and makes the venue agree. Never called
- * until a `validateAnnotation` has passed — and, on the manual path, until a human has
- * approved: recording a tighter stop that is then rejected would misreport what this system
- * believes protects the position, which is the reason this is a separate function at all.
- */
-export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true }>): Promise<string> {
-  const { symbol, stopLoss, takeProfit, thesis, effectiveEntry, heldQty, snapEntryPriceMissing } = v;
-
-  // Record a hold decision: this becomes the entryDecisionId the portfolio context resolves
-  // as the thesis, so "rationale not recorded" is replaced by the supplied text next cycle.
-  const record = recordDecision(decision('hold', 'trader', {
-    symbol,
-    rationale: thesis,
-    triggerEventId: null,
-    executed: false,
-    qty: null,
-    price: effectiveEntry,
-    intendedStop: stopLoss,
-    intendedTarget: takeProfit ?? null,
-    atrAtEntry: null,
-    orderId: null,
-  }));
-
-  // Write baselines. entryPrice only if it was missing — the ownership invariant from
-  // openPositionSnapshot: entry baselines are written once and never overwritten.
-  // Same rule for `openedAt`: filled only when missing, from the fills ledger — a snapshot
-  // created here for a position whose record was lost would otherwise have no holding time.
-  const openedAtMissing = getPositionSnapshot(symbol)?.openedAt == null;
-  const openedAt = openedAtMissing ? openedAtFromFills(symbol) : null;
-  upsertPositionSnapshot(symbol, {
-    stopLevel: stopLoss,
-    ...(takeProfit != null && { takeProfitLevel: takeProfit }),
-    ...(snapEntryPriceMissing && { entryPrice: effectiveEntry }),
-    ...(openedAt && { openedAt }),
-    entryDecisionId: record.id,
-  });
-
-  // Read the write back. The bug this replaces was a success report with no write behind
-  // it, so the report is now conditional on the state actually holding the level.
-  const written = getPositionSnapshot(symbol);
-  if (written?.stopLevel !== stopLoss) {
-    return JSON.stringify({ error: `Failed to record the stop for ${symbol} — state still shows ${written?.stopLevel ?? 'no stop'}` });
-  }
-
-  // Now make the venue agree. `moveStopTo` replaces a resting stop rather than cancelling and
-  // re-placing it — cancel-then-place would leave a window with no protection at all — and arms
-  // one if none rests, which covers an inherited position being annotated for the first time.
-  if (isCryptoSymbol(symbol)) {
-    return JSON.stringify({
-      ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
-      entryPrice: effectiveEntry, entryDecisionId: record.id,
-      venueStop: {
-        orderId: null,
-        note: `${symbol} is a crypto pair and the venue rejects a plain stop on a coin, so no stop `
-          + `can rest there. The level is recorded and the breach detector is watching it, but only `
-          + `while this process runs.`,
-      },
-    });
-  }
-
-  const effectiveTakeProfit = written?.takeProfitLevel;
-  if (effectiveTakeProfit != null && effectiveTakeProfit > 0) {
-    const venueOco = await moveOcoTo(symbol, heldQty, stopLoss, effectiveTakeProfit);
-    return JSON.stringify({
-      ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
-      entryPrice: effectiveEntry, entryDecisionId: record.id,
-      venueOco: venueOco.ok
-        ? {
-            stopOrderId: venueOco.stopOrderId, takeProfitOrderId: venueOco.takeProfitOrderId,
-            note: `The stop/take-profit pair resting at the venue is now $${stopLoss} / $${effectiveTakeProfit}, `
-              + `so these levels hold while this process is not running.`,
-          }
-        : {
-            stopOrderId: null, takeProfitOrderId: null,
-            note: `The levels are recorded and the breach detector is watching them, but the venue pair `
-              + `was NOT moved: ${venueOco.reason} Until the sweep succeeds, these levels only hold while `
-              + `this process runs.`,
-          },
-    });
-  }
-
-  const venueStop = await moveStopTo(symbol, heldQty, stopLoss);
-  return JSON.stringify({
-    ok: true, symbol, stopLevel: stopLoss, takeProfitLevel: takeProfit ?? null,
-    entryPrice: effectiveEntry, entryDecisionId: record.id,
-    venueStop: venueStop.ok
-      ? { orderId: venueStop.orderId, note: `The stop resting at the venue is now $${stopLoss}, so this level holds while this process is not running.` }
-      : { orderId: null, note: `The level is recorded and the breach detector is watching it, but the venue stop was NOT moved: ${venueStop.reason} Until the stop sweep succeeds, this level only holds while this process runs.` },
-  });
-}
-
 async function toolAnnotatePosition(input: Record<string, unknown>): Promise<string> {
   const { symbol, stopLoss, takeProfit, thesis, entryPrice } = input as {
     symbol: string; stopLoss: number; takeProfit?: number; thesis: string; entryPrice?: number;
@@ -1172,14 +952,13 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
   const stopManual = automationLevel('stop_adjust') === 'manual';
   const targetManual = validated.takeProfit != null && automationLevel('target_adjust') === 'manual';
 
-  if (!stopManual && !targetManual) {
-    return actAnnotation(validated);
-  }
+
 
   // Nothing is recorded or moved yet — `proposalExecutor.ts` re-validates from these exact
   // raw inputs and calls `actAnnotation` itself once a human decides.
   const proposal = createProposal({
-    kind: stopManual ? 'stop_adjust' : 'target_adjust',
+    kind: stopManual || !targetManual ? 'stop_adjust' : 'target_adjust',
+    automatic: !stopManual && !targetManual,
     symbol: validated.symbol,
     venue: config.venue,
     params: { symbol, stopLoss, takeProfit: takeProfit ?? null, thesis, entryPrice: entryPrice ?? null },
@@ -1187,206 +966,31 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     timeoutMs: getPolicy().automation.timeoutMs,
   });
   return JSON.stringify({
-    ok: true, pending: true, proposalId: proposal.id,
+    ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(proposal.status), status: proposal.status, proposalId: proposal.id,
     symbol: validated.symbol, stopLoss: validated.stopLoss, takeProfit: validated.takeProfit,
-    note: `Automation policy requires a human to approve this ${stopManual ? 'stop' : 'target'} adjustment. Proposal ${proposal.id} is waiting — nothing has been recorded or moved at the venue yet. It executes on its own once approved.`,
+    note: `Adjustment queued as ${proposal.id}. ${proposal.automatic ? 'Automatic execution is enabled.' : 'Human approval is required.'} Broker confirmation will be reported separately.`,
   });
 }
 
 async function toolExecuteEntry(input: Record<string, unknown>): Promise<string> {
   const { symbol, qty, price, stopLoss, takeProfit, atr, reason, eventId } = input as {
-    symbol: string; qty: number; price: number;
-    stopLoss: number; takeProfit: number; atr: number; reason: string; eventId?: string;
+    symbol: string; qty: number; price: number; stopLoss: number; takeProfit: number;
+    atr: number; reason: string; eventId?: string;
   };
-
-  const triggerEventId = resolveEventId(eventId, symbol);
-  const signal: SignalResult = { symbol, signal: 'buy', reason, price, atr, stopLoss, takeProfit };
-
-  // Every risk rule now lives inside `enterPosition`, below this tool, where no caller
-  // can skip it.
-  let result: EnterPositionResult;
   try {
-    result = await enterPosition(signal, qty);
-  } catch (err) {
-    const refusal = journalRefusal(err, {
-      symbol,
-      rationale: reason,
-      triggerEventId,
-      qty: qty ?? null,
-      price: price ?? null,
-      intendedStop: stopLoss ?? null,
-      intendedTarget: takeProfit ?? null,
-      atrAtEntry: atr ?? null,
-    });
-    if (refusal) return refusal;
-    throw err;
-  }
-
-  // Automation policy holds entries for a human on this venue: the guard chain has already
-  // passed, but nothing was bought and nothing was recorded — `proposalExecutor.ts` re-validates
-  // and calls `actEntry` itself once a human decides, on its own tick, not this one.
-  if (result.status === 'pending') {
-    return JSON.stringify({
-      ok: true, pending: true, proposalId: result.proposalId,
-      symbol, requestedQty: qty, price, stopLoss, takeProfit,
-      note: `Automation policy requires a human to approve this entry. Proposal ${result.proposalId} is waiting — nothing has been bought yet. It executes on its own once approved; no further action from you is needed unless you want to check get_proposals.`,
-    });
-  }
-
-  // `filledQty`, not `qty`: the guard's regime sizing can cut the request, and journalling
-  // the number the model asked for would record a position that was never opened.
-  const { orderId, qty: filledQty, venueOco } = result;
-
-  // Journalled BEFORE the snapshot, because the snapshot stores the record's id: the
-  // position and the decision that opened it are linked from the moment both exist.
-  const record = recordDecision(decision('entry', 'trader', {
-    symbol,
-    rationale: reason,
-    triggerEventId,
-    executed: true,
-    qty: filledQty,
-    price,
-    intendedStop: stopLoss,
-    intendedTarget: takeProfit,
-    atrAtEntry: atr,
-    orderId,
-    // The only durable account of whether the position is actually protected at the venue. The
-    // tool result below says the same thing, but the model reads that once and the cycle ends;
-    // this answers "why did that position sit naked until the sweep found it" a week later.
-    venueStopId: venueOco.ok ? venueOco.stopOrderId : null,
-    venueStopMissing: venueOco.ok ? null : venueOco.reason,
-  }));
-
-  // The one write, which is why `enterPosition` returns the pair's ids instead of recording them
-  // itself: until this call runs there is no snapshot to patch.
-  openPositionSnapshot({
-    symbol,
-    entryPrice: price,
-    sessionHigh: price,
-    sessionLow: price,
-    stopLevel: stopLoss,
-    takeProfitLevel: takeProfit,
-    openedAt: record.at,
-    entryDecisionId: record.id,
-    ...(venueOco.ok && { stopOrderId: venueOco.stopOrderId, takeProfitOrderId: venueOco.takeProfitOrderId }),
-  });
-
-  return JSON.stringify({
-    ok: true, symbol, qty: filledQty, requestedQty: qty,
-    price, stopLoss, takeProfit, decisionId: record.id,
-    // Whether the pair is only levels here or also a real order pair at the venue, and WHY when
-    // it is only levels. A quiet `null` would read as "no protection", which is wrong — the
-    // levels are recorded and watched either way — and an unexplained one invites a guess.
-    venueOco: venueOco.ok
-      ? {
-          stopOrderId: venueOco.stopOrderId, takeProfitOrderId: venueOco.takeProfitOrderId,
-          stopLevel: stopLoss, takeProfitLevel: takeProfit,
-          note: 'A real sell stop and take-profit rest at the venue as a linked pair, so the position is protected while this process is not running.',
-        }
-      : {
-          stopOrderId: null, takeProfitOrderId: null, stopLevel: stopLoss, takeProfitLevel: takeProfit,
-          note: `No stop/take-profit pair rests at the venue: ${venueOco.reason} The recorded levels are still watched by the breach detector, but only while this process runs.`,
-        },
-  });
+    const result = await enterPosition({ symbol, signal: 'buy', price, stopLoss, takeProfit, atr, reason }, qty, resolveEventId(eventId, symbol) ?? undefined);
+    return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Action queued. Read its status to distinguish approval, submission, and fills.' });
+  } catch (err) { const refusal = journalRefusal(err, { symbol, rationale: reason, qty, price }); if (refusal) return refusal; throw err; }
 }
 
-/**
- * Close a position.
- *
- * Order matters: confirm there is something to sell, sell it, record it, and only then
- * discard the baselines. The previous order removed the snapshot before knowing the sell
- * had happened, so a no-op or a venue rejection destroyed `entryPrice`, `stopLevel`,
- * `sessionHigh` and `openedAt` for a position that was still open — and still returned
- * `{ ok: true }`.
- */
 async function toolExecuteExit(input: Record<string, unknown>): Promise<string> {
-  const { symbol, reason, eventId, qty: requestedQty } = input as {
-    symbol: string; reason: string; eventId?: string; qty?: number;
-  };
-
-  const triggerEventId = resolveEventId(eventId, symbol);
-
-  // Read before the sell, not as a pre-check — `exitPosition`'s `no_position` guard owns
-  // that — but because once the sell fills the broker stops reporting the position, and
-  // the P&L the record needs goes with it.
-  // `sameSymbol`, like `toolAnnotatePosition` — `===` missed a `BTCUSD` position asked for
-  // as `BTC/USD`, so the exit record carried `qty: null, price: null, pnl: null` for a sell
-  // that had gone through.
-  const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
-
-  let result: ExitPositionResult;
+  const { symbol, reason, qty, eventId } = input as { symbol: string; reason: string; qty?: number; eventId?: string };
   try {
-    result = await exitPosition(symbol, reason, requestedQty);
-  } catch (err) {
-    const refusal = journalRefusal(err, {
-      symbol,
-      rationale: reason,
-      triggerEventId,
-      qty: requestedQty ?? held?.qty ?? null,
-      pnl: held?.unrealizedPnL ?? null,
-    });
-    if (refusal) return refusal;
-    throw err;
-  }
-
-  // Automation policy holds exits for a human on this venue: `exitPosition` validated but has
-  // NOT cancelled the resting stop/take-profit pair or touched the venue — the position stays
-  // exactly as protected as it was. `proposalExecutor.ts` re-validates and calls `actExit`
-  // itself once a human decides, which is the point in the code where cancellation happens.
-  if (result.status === 'pending') {
-    return JSON.stringify({
-      ok: true, pending: true, proposalId: result.proposalId,
-      symbol, reason, requestedQty: requestedQty ?? null,
-      note: `Automation policy requires a human to approve this exit. Proposal ${result.proposalId} is waiting — the position is untouched, still protected by its resting stop. It executes on its own once approved.`,
-    });
-  }
-
-  // Resting sell orders this exit had to cancel to free the shares — which now includes THIS
-  // SYSTEM'S OWN stop, since the position was protected at the venue. Reported back because the
-  // model is the only thing that can act on it: if the sell somehow leaves a remainder held,
-  // nothing at the venue is watching it any more, and a hand-placed order cancelled alongside
-  // ours is not put back by anything (only ours is, and only if the sell itself fails).
-  const { orderId, cancelled, qty: soldQty } = result;
-
-  // `exitPosition` throws `no_position` when there is nothing to sell, so reaching here
-  // means the position existed and the order was accepted.
-  //
-  // `held` was read before the sell and is the best source for price and P&L. In the rare
-  // race where a fill beat the pre-read (position already gone from the broker's book),
-  // mark them unknown — the record still lands and the snapshot lifecycle below still runs.
-  // P&L is scaled to the fraction actually sold: `held.unrealizedPnL` is for the WHOLE
-  // position, and reporting it in full against a partial sale would overstate the result.
-  const exitPrice = held
-    ? (held.marketValue ?? held.avgCost * held.qty) / held.qty
-    : null;
-  const pnl = held && held.qty !== 0 && held.unrealizedPnL != null
-    ? held.unrealizedPnL * (soldQty / held.qty)
-    : null;
-
-  const record = recordDecision(decision('exit', 'trader', {
-    symbol,
-    rationale: reason,
-    triggerEventId,
-    executed: true,
-    qty: soldQty,
-    price: exitPrice,
-    pnl,
-    orderId,
-  }));
-
-  // A partial exit keeps the snapshot — same entryPrice, sessionHigh/sessionLow, openedAt,
-  // entryDecisionId — since the position is still open and every stop detector measures
-  // against it. Only a sell that takes the position to zero clears it.
-  const remaining = (held?.qty ?? soldQty) - soldQty;
-  if (remaining <= 0) removePositionSnapshot(symbol);
-
-  return JSON.stringify({
-    ok: true, symbol, qty: soldQty, price: exitPrice,
-    pnl, reason, decisionId: record.id,
-    ...(remaining > 0 ? { remaining } : {}),
-    ...(cancelled.length > 0 ? { cancelledOrders: cancelled } : {}),
-  });
+    const result = await exitPosition(symbol, reason, qty, resolveEventId(eventId, symbol) ?? undefined);
+    return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Exit queued. Existing protection is preserved until execution.' });
+  } catch (err) { const refusal = journalRefusal(err, { symbol, rationale: reason, qty }); if (refusal) return refusal; throw err; }
 }
+
 
 function toolGetProposals(input: Record<string, unknown>): string {
   const { symbol, includeDecided } = input as { symbol?: string; includeDecided?: boolean };
@@ -1403,6 +1007,10 @@ function toolGetProposals(input: Record<string, unknown>): string {
       status: p.status,
       createdAt: p.createdAt,
       expiresAt: p.expiresAt,
+      automatic: p.automatic,
+      accountId: p.accountId,
+      commandId: p.commandId,
+      requestedBy: p.requestedBy,
       decidedBy: p.decidedBy,
       rejectReason: p.rejectReason,
       result: p.result,
@@ -1411,22 +1019,7 @@ function toolGetProposals(input: Record<string, unknown>): string {
 }
 
 function toolGetPendingEvents(): string {
-  const events = getPendingEvents();
-  return JSON.stringify({
-    count: events.length,
-    events: events.map(e => ({
-      id: e.id,
-      kind: e.kind,
-      severity: e.severity,
-      symbol: e.symbol,
-      firedAt: e.firedAt,
-      headline: e.headline,
-      evidence: e.evidence,
-      suggestedAction: e.suggestedAction,
-      wakeCount: e.wakeCount,
-      policyVersion: e.policyVersion,
-    })),
-  });
+  return JSON.stringify({ events: getPendingEvents() });
 }
 
 /**
@@ -1461,8 +1054,8 @@ function resolveAckId(id: string): { id: string; symbol: string | null; correcte
 }
 
 function toolAckEvent(input: Record<string, unknown>): string {
-  const { id: givenId, disposition, note } = input as {
-    id: string; disposition: AckDisposition; note?: string;
+  const { id: givenId, disposition, note, proposalId } = input as {
+    id: string; disposition: AckDisposition; note?: string; proposalId?: string;
   };
   // Resolved before the ack: `ackEvent` deletes from `pending`, so afterwards there is no
   // event left to ask which symbol it was about.
@@ -1481,7 +1074,7 @@ function toolAckEvent(input: Record<string, unknown>): string {
   }
   const { id, symbol, corrected } = resolved;
 
-  if (!ackEvent(id, disposition, note)) {
+  if (!ackEvent(id, disposition, note, proposalId)) {
     return JSON.stringify({ ok: false, error: 'unknown or already-acked event id' });
   }
 
@@ -1564,10 +1157,10 @@ async function toolGetPriceStats(input: Record<string, unknown>): Promise<string
  * every cycle that is visible in `data/LESSONS.md` on the first read.
  */
 function toolWriteLesson(input: Record<string, unknown>): string {
-  const lesson = recordLesson(String(input.lesson ?? ''));
+  const lesson = recordLesson(String(input.lesson ?? ''), input.evidenceIds as string[] ?? []);
   return JSON.stringify({
     ok: true,
     stored: lesson,
-    note: 'Every future cycle will read this until an operator deletes it.',
+    note: 'Saved as an advisory observation; the operator can edit or retire it in Lessons.',
   });
 }

@@ -33,6 +33,8 @@ import { canTighten } from '../strategy/stopOrders';
 import { getHistoricalBars } from './barCache';
 import { buildDailyDossier, type OpenPositionInput, type CandidateInput } from './aiDossier';
 import { decideDay, type Decision } from './aiDecision';
+import { assessEntryRisk, entryLimitPrice } from '../strategy/riskBudget';
+import { hasRiskProfile } from '../policy/riskProfiles';
 
 export type ExitMode = 'stop_only' | 'stop_trailing' | 'stop_takeprofit';
 
@@ -133,6 +135,12 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
   const { policy, exitMode, start, end, slippagePct, initialEquity, takeProfitRMult, ai } = config;
   const symbols = policy.strategy.watchlist;
   const caveats: string[] = [];
+  if (hasRiskProfile(policy.risk)) {
+    caveats.push('Risk-profile sizing uses only history through the decision session. Historical sectors are unavailable, so concentration uses the largest possible overlap. The historical cache uses raw prices and corporate-action jumps may inflate its volatility estimate; live risk histories adjust for splits.');
+    if (exitMode !== 'stop_takeprofit' && policy.risk.minRewardRisk != null) {
+      caveats.push('This exit mode has no mechanical profit target: its reward:risk threshold is checked only for AI entries supplying a target. These results do not validate that threshold for targetless entries.');
+    }
+  }
 
   const barsBySymbol = new Map<string, Bar[]>();
   const dateIndexBySymbol = new Map<string, Map<string, number>>();
@@ -438,18 +446,28 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
       if (dayLoss.state !== 'ok') break;
       if (open.size >= policy.risk.maxPositions) break;
 
-      const qty = requestedQty(equityNow, cand.price, policy);
-      if (qty <= 0) continue;
       const buyingPower = cash;
-      if (buyingPower < qty * cand.price) continue;
-      if (positionSizeVeto(qty, cand.price, equityNow, policy)) continue;
-
       const openPositions = [...open.values()].map(p => ({
         symbol: p.symbol,
         qty: p.qty,
         avgCost: p.entryPrice,
         marketValue: p.qty * (lastKnownPrice.get(p.symbol) ?? p.entryPrice),
       }));
+      const stop = cand.aiStop != null ? cand.aiStop : cand.price - policy.risk.stopLossAtrMult * cand.atrVal;
+      const limit = entryLimitPrice(cand.price, cand.price);
+      const takeProfit = cand.aiTakeProfit != null ? cand.aiTakeProfit
+        : (exitMode === 'stop_takeprofit' ? limit + takeProfitRMult * (limit - stop) : null);
+      const riskPlan = hasRiskProfile(policy.risk) ? assessEntryRisk({
+        symbol: cand.symbol, price: limit, stopLoss: stop, takeProfit,
+        equity: equityNow, buyingPower, positions: openPositions, policy,
+        inputs: { asOf: t, sectors: {}, errors: {}, histories: Object.fromEntries(
+          [...openPositions.map(p => p.symbol), cand.symbol].map(symbol => [symbol,
+            (barsBySymbol.get(symbol) ?? []).filter(bar => dateOf(bar) <= t).slice(-61)]),
+        ) },
+      }) : null;
+      const qty = riskPlan ? (riskPlan.allowed ? riskPlan.maxQty : 0) : requestedQty(equityNow, cand.price, policy);
+      if (qty <= 0 || buyingPower < qty * cand.price) continue;
+      if (positionSizeVeto(qty, cand.price, equityNow, policy)) continue;
       if (exposureVeto(qty * cand.price, openPositions, equityNow, policy)) continue;
 
       const idxMap = dateIndexBySymbol.get(cand.symbol)!;
@@ -457,10 +475,8 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
       const t1Idx = idxMap.get(t1)!;
       const fillBar = bars[t1Idx];
       const entryPrice = fillBar.o * (1 + slippagePct);
-      const stop = cand.aiStop != null ? cand.aiStop : cand.price - policy.risk.stopLossAtrMult * cand.atrVal;
-      const takeProfit = cand.aiTakeProfit != null
-        ? cand.aiTakeProfit
-        : (exitMode === 'stop_takeprofit' ? entryPrice + takeProfitRMult * (entryPrice - stop) : null);
+      // Profile-based plans mirror the live IOC ceiling: a gap above it receives no fill.
+      if (riskPlan && (entryPrice > limit || entryPrice <= stop || (takeProfit != null && entryPrice >= takeProfit))) continue;
 
       open.set(cand.symbol, {
         symbol: cand.symbol,

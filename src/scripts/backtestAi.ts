@@ -1,3 +1,4 @@
+import { newJobDirectory } from '../core/jobs';
 /**
  * The Level 1.5 backtest — same walk-forward engine as `npm run backtest`, but the AI (the same
  * model the live bot uses, via `config.ai`) decides entry/exit timing and its own stop-loss/
@@ -26,7 +27,7 @@ const DEFAULT_START = '2016-01-01';
 const SLIPPAGE_PCT = 0.0005;
 const INITIAL_EQUITY = 100_000;
 const TAKE_PROFIT_R_MULT = 2;
-const OUT_DIR = path.join(process.cwd(), 'backtest-results');
+const OUT_DIR = newJobDirectory('backtestAi');
 
 function argValue(flag: string): string | undefined {
   const idx = process.argv.indexOf(flag);

@@ -147,6 +147,10 @@ export interface PortfolioData {
 
 /** The complete derived state of one tick. Ephemeral — never stored. */
 export interface TickData {
+  positionsStale?: boolean;
+  positionsError?: string | null;
+  ordersStale?: boolean;
+  orders?: import('../broker/IBroker').OpenOrder[];
   positions: Record<string, PositionData>;
   watchlist: Record<string, WatchlistData>;
   account: AccountData;
@@ -479,6 +483,7 @@ export function computeTick(
     marketValue: pd.price === null ? undefined : pd.qty * pd.price,
   }));
   const accountData = buildAccountData(raw.account, held.length, state.startOfDayEquity);
+  if (accountData.dayPnLPct != null && accountData.dayPnLPct <= -p.risk.maxDailyLossPct * 100) updateState({ dailyLossHalted: true });
   const shape = concentration(book, accountData.equity ?? NaN, sectors);
 
   const priorPeak = state.equityPeak;
@@ -506,6 +511,10 @@ export function computeTick(
 
   return {
     positions,
+    positionsStale: !isUsable(raw.positions),
+    positionsError: isUsable(raw.positions) ? null : isPresent(raw.positions) ? 'Stale holdings' : raw.positions.error,
+    ordersStale: !isUsable(raw.openOrders),
+    orders: isUsable(raw.openOrders) ? raw.openOrders.value : [],
     watchlist,
     account: accountData,
     portfolio,

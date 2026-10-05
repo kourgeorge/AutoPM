@@ -1,8 +1,8 @@
 {
   "name": "autotrade",
   "version": "1.0.0",
-  "description": "Autonomous momentum trading agent using Alpaca paper trading API",
-  "main": "dist/index.js",
+  "description": "Account-scoped automated trading worker and dashboard",
+  "main": "dist/daemon.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/daemon.js",
@@ -15,7 +15,13 @@
     "backtest:signals": "ts-node src/scripts/backtestSignalFamilies.ts",
     "backtest:ai": "ts-node src/scripts/backtestAi.ts",
     "dev:headless": "HEADLESS=1 ts-node src/daemon.ts",
-    "start:headless": "HEADLESS=1 node dist/daemon.js"
+    "start:headless": "HEADLESS=1 node dist/daemon.js",
+    "test": "node --test tests/*.test.cjs",
+    "user": "ts-node src/scripts/user.ts",
+    "backup": "ts-node src/scripts/backup.ts",
+    "import:fills": "ts-node src/scripts/importFills.ts",
+    "verify:isolated": "node scripts/verify-isolated.cjs",
+    "test:browser": "node --test tests/browser.check.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
@@ -30,9 +36,13 @@
     "yahoo-finance2": "^4.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/asciichart": "^1.5.8",
     "@types/node": "^20.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

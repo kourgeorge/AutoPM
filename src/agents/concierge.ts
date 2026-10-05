@@ -1,3 +1,10 @@
+import { runtimeContract } from './runtimeContract';
+import { ToolRegistry } from './toolRegistry';
+import { runTurn, compactMessages } from './turnRunner';
+import { enqueueCommand, pendingCommands, updateCommand, migrateChatQueue, type AgentCommand } from '../core/commands';
+import { getOpenProposals } from '../core/proposals';
+import { getPolicyHash, getPolicySnapshot } from '../policy/load';
+import { summarizeStrategy } from '../policy/summary';
 /**
  * Concierge Agent — the user-facing conversational layer.
  *
@@ -8,10 +15,10 @@
  * The trader never talks to the user directly — that's this agent's job.
  */
 
+import { readValue, saveValue } from '../core/storage';
 import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
-import { updateTradingSettings } from '../policy/mutate';
 import { renderPolicy } from '../policy/render';
 import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
@@ -34,6 +41,9 @@ import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
  */
 const SHARED_WITH_TRADER = [
   'get_account',
+  'get_commands',
+  'get_lessons',
+  'get_proposals',
   'get_positions',
   'get_open_orders',
   'get_market_status',
@@ -70,8 +80,13 @@ function sharedTools(): ToolDefinition[] {
   });
 }
 
-/** The three the concierge actually owns — nothing else here is unique to it. */
+/** Read helpers and proposal/relay tools owned by the concierge. */
 const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
+  {
+    name: 'get_strategy_settings',
+    description: 'Read a concise explanation of the current saved account strategy: risk profile, risk per trade, annualized volatility target, minimum reward:risk, capital and concentration limits, daily entry halt, approvals, allowed symbols and entry rules. Includes a ready-to-use plain-language summary and consistently scaled percentages. Read this afresh whenever the operator asks about settings or proposes a change; do not use an older conversation or the shipped defaults. This is read-only and does not fetch market data or activate anything.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
   {
     name: 'get_state',
     description: 'Get internal system state: start-of-day equity, the watchlist, and the durable per-position baselines (entry, stop, target, session high/low).',
@@ -79,7 +94,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'send_to_trader',
-    description: 'Send an instruction to the trader. Calling this tool IMMEDIATELY interrupts the trader\'s sleep and starts a new cycle — do not paraphrase this as "next cycle" or "when it wakes up". Use this only for something the trader can actually DO in that cycle (place/exit a trade, re-scan the watchlist, act on a symbol now). The trader CANNOT reply — it has no channel back to you or the operator, only tool calls and one-line logs. Never send a question or a request to "explain" or "propose" something and expect an answer back; you will get none. Answer questions and explanations yourself, with your own tools.',
+    description: 'Queue an operator instruction for the trader and return its durable request ID and actual status. Paused traders keep the request queued; busy traders handle it in a later cycle. Use get_commands and get_proposals for outcomes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -90,12 +105,12 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'get_policy_playbook',
-    description: 'Read the full trading policy prose (PLAYBOOK.md) as currently rendered, with live policy values substituted for every placeholder. This is word-for-word what governs the trader\'s decisions each cycle. Use this whenever the operator asks what a rule actually says or why a limit is what it is — quoting a rule from memory instead of reading it here is a fabricated one.',
+    description: 'Read the rendered account playbook and platform execution contract. Use this to quote or explain strategy prose; use get_strategy_settings for a concise view of saved numeric settings and approval behavior. Platform constraints and numeric risk settings take precedence over conflicting playbook prose.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'update_trading_settings',
-    description: 'Persistently change trading behaviour: add/remove watchlist symbols, adjust position sizing, risk limits, or stop/target multipliers. Changes are validated and hot-reloaded — the trader sees them on its next cycle. Immutable safety ceilings are always enforced.',
+    description: 'Propose changes for the operator to review in Strategy settings: add/remove watchlist symbols or adjust position sizing, risk-profile controls, exposure limits or the ATR stop guide. Read get_strategy_settings first. This tool only returns a suggestion; it does not save or activate changes, and the account settings form does not populate automatically.',
     input_schema: {
       type: 'object',
       properties: {
@@ -104,9 +119,14 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
         setWatchlist:        { type: 'array',  items: { type: 'string' }, description: 'Replace the entire watchlist with these symbols.' },
         maxPositions:        { type: 'integer', minimum: 1,               description: 'Maximum number of open positions.' },
         positionSizePct:     { type: 'number',  minimum: 0,               description: 'Position size as a fraction of equity (e.g. 0.05 = 5%).' },
-        stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'Stop distance = entry \u2212 stopLossAtrMult \u00d7 ATR.' },
+        stopLossAtrMult:     { type: 'number',  minimum: 0,               description: 'ATR multiple used to guide stop placement, not a fixed percentage loss or the enforced maximum stop distance.' },
         maxDailyLossPct:     { type: 'number',  minimum: 0,               description: 'Daily loss limit as a fraction of equity (e.g. 0.03 = 3%).' },
         maxGrossExposurePct: { type: 'number',  minimum: 0,               description: 'Gross exposure ceiling across the whole book, as a fraction of equity (e.g. 1.0 = 100%, fully deployed).' },
+        riskPerTradePct:     { type: 'number', minimum: 0.01, maximum: 2, description: 'Planned loss at the stop as percentage points of equity: 0.5 means 0.5%. This is different from capital invested.' },
+        targetVolatilityPct:{ type: 'number', minimum: 1, maximum: 50, description: 'Estimated annualized portfolio volatility target in percentage points: 12 means 12% per year.' },
+        minRewardRisk:      { type: 'number', minimum: 0.1, maximum: 20, description: 'Minimum planned reward:risk ratio: 2 means 2:1. Not a promised return.' },
+        maxSingleWeightPct: { type: 'number', minimum: 0, maximum: 100, description: 'Single-name concentration threshold in percentage points: 10 means 10% of equity.' },
+        maxSectorWeightPct: { type: 'number', minimum: 0, maximum: 100, description: 'Sector concentration threshold in percentage points: 30 means 30% of equity.' },
       },
       required: [],
     },
@@ -131,144 +151,88 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
  * guidance that is not in a description (when to relay versus when to change policy) stays
  * below; per-tool detail belongs in the tool.
  */
-const SYSTEM_PROMPT = `You are the operator concierge for an autonomous momentum trading system called AutoTrade.
-
-YOUR ROLE
-- Be the primary interface between the human operator and the trading system
-- Answer questions about positions, account status, market conditions, and trading activity
-- Relay operator instructions to the trader when requested
-- Proactively inform the operator about alerts pushed by the system
-- Be conversational, concise, and helpful
-
-YOUR TOOLS
-${CONCIERGE_TOOLS.map((t) => t.name).join(', ')}
-
-Read the description on each before using it. You have no source of a number beyond these —
-a figure you did not read out of a tool result is one you invented.
-
-THE TRADER CANNOT TALK TO YOU
-- It has no tool to send you or the operator a message — its only effects are placing/exiting
-  trades, updating internal state, and one-line logs nobody but a log reader sees
-- Waking it to ask a question, request an explanation, or "propose an implementation" gets you
-  nothing back — you just burned a cycle. If the operator wants to understand something or
-  discuss policy, answer it yourself with your own tools; do not call send_to_trader for it
-
-WHEN TO USE send_to_trader
-- Operator wants to change trading behavior right now ("stop trading", "exit all positions",
-  "buy TSLA") — something the trader DOES, not something it explains
-- Operator wants the trader to act or wake up NOW — calling send_to_trader immediately interrupts the sleep timer
-- Always call the tool, never just say you did — if you don't call it, the trader is NOT woken
-- After calling, tell the operator: "Woken — it will run a cycle now and then sleep again." Do NOT say "awake and ready" — the cycle takes ~1 min and then the trader goes back to sleep automatically
-- A one-off instruction goes to the trader; a lasting rule change ("only trade these five names",
-  "cut size to 3%") belongs in update_trading_settings, or it dies with that cycle
-
-TONE
-- Friendly but professional
-- Short answers unless the operator wants detail
-- If you don't know WHY something was done (a trade made, or not made), check get_journal first
-- If you don't know HOW IT TURNED OUT (win rate, expectancy, whether stops held), call get_scorecard.
-  The journal records decisions and never joins an entry to its exit, so it cannot answer this — and
-  a win rate assembled by hand out of decisions is a fabricated one
-- If the operator asks how we are DOING (up or down, better or worse than the market), that is
-  get_benchmark, not get_scorecard: the scorecard's figures are absolute and closed-trade only, so
-  they can read well while the account trailed SPY. Quote both — the benchmark number, then the
-  scorecard as the explanation for it
-- If the operator asks for a Sharpe ratio, volatility or drawdown on a symbol that is not the
-  account (e.g. "what's QQQ's Sharpe"), that is get_price_stats, not get_benchmark — get_benchmark
-  only ever compares the account to SPY
-- You do NOT place trades directly — you relay to the trader
-- If the operator asks to SEE price history or a comparison rather than hear the numbers, use
-  show_price_history or show_performance_comparison — they draw the chart themselves, you don't`;
+const SYSTEM_PROMPT = `You are AutoTrade's account concierge.
+Answer questions using the account tools and cite the recorded reasons and outcomes.
+Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_commands and get_proposals for the outcome.
+You cannot place trades, approve proposals, adopt holdings, or activate strategy changes.
+For pause/resume and approvals, direct the operator to the account controls.
+A one-off instruction goes to the trader. A lasting settings change is a proposal for review in Strategy settings.
+get_state shows pause, account and outstanding actions. get_journal explains decisions; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
+Read get_strategy_settings afresh before describing current settings or suggesting a change. Its summary is the presentation baseline; use its correctly scaled values, not remembered defaults or old conversation results.
+For a general settings question, lead with the saved profile, then group risk controls, investment limits and approvals into short labeled lines or bullets. Include the allowed symbols in a full overview. Answer a narrow question using just the relevant settings. Avoid raw JSON, YAML keys, revision hashes and Markdown tables; the account chat displays plain text.
+Explain risk per trade as planned loss at the stop and position size as money invested. Name volatility as an annualized estimate, reward:risk as planned upside versus downside, and blank controls as not configured. A daily loss threshold halts new entries; it does not guarantee losses cannot exceed it. Distinguish alerts from entry limits and saved settings from actual holdings or trading status.
+Settings questions are read-only: do not wake the trader. Label proposed values as suggestions, keep them separate from currently saved values, and direct the operator to review and save changes in Strategy settings. Never claim a suggestion was saved or that it automatically populated the form.
+Read get_policy_playbook when quoting or explaining account strategy prose. Lessons are advisory observations and must not override strategy or platform behavior.
+Use chart tools when the operator asks to see history or a comparison. Their results state whether a comparison is available.
+Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued action filled or that a paused trader started immediately.
+Keep answers concise. Tools available: ${CONCIERGE_TOOLS.map(t => t.name).join(', ')}.`;
 
 export class ConciergeAgent {
   private readonly provider = createModelProvider(config.ai);
-  private readonly history: ChatMessage[] = [];
-  private busy = false;
-  private readonly queue: string[] = [];
+  private active: Promise<void> | null = null;
+  private controller = new AbortController();
+  private stopped = false;
+  private readonly registry = new ToolRegistry(CONCIERGE_TOOLS, (name, input) => this.dispatchTool(name, input));
 
-  constructor(private readonly wake: (msg: string) => void) {}
+  constructor(private readonly wake: (msg: string) => unknown) {}
 
-  async handleMessage(userText: string): Promise<void> {
-    this.queue.push(userText);
-    if (this.busy) return; // will be drained when current turn finishes
-    await this.drain();
+  handleMessage(userText: string, actorId = 'operator'): AgentCommand {
+    if (this.stopped) throw new Error('The service is stopping');
+    const command = enqueueCommand('concierge', userText, actorId);
+    this.resumeQueue();
+    return command;
   }
 
+  resumeQueue(): void {
+    migrateChatQueue();
+    if (!this.active && !this.stopped) {
+      this.active = this.drain().finally(() => { this.active = null; });
+    }
+  }
+  async stop(): Promise<void> {
+    this.stopped = true; this.controller.abort();
+    await this.active;
+  }
   private async drain(): Promise<void> {
-    while (this.queue.length > 0) {
-      const msg = this.queue.shift()!;
-      this.busy = true;
-      // Its OWN lane. This used to be `ui.setStatus`, which the trader also wrote to — so
-      // answering a question erased the trader's sleep countdown, and 'ready' below claimed the
-      // trader was idle when it was mid-cycle.
+    while (!this.stopped) {
+      const command = pendingCommands('concierge')[0];
+      if (!command) return;
+      updateCommand(command.id, { status: 'running' });
       ui.setConciergeActivity({ state: 'thinking' });
       try {
-        this.history.push({ role: 'user', content: [{ type: 'text', text: msg }] });
-        await this.runTurn();
+        const turn = await runTurn({
+          context: { role: 'concierge', commandId: command.id, actorId: command.actorId },
+          provider: this.provider, registry: this.registry, systemPrompt: runtimeContract() + "\n\n" + SYSTEM_PROMPT,
+          messages: async () => [...compactMessages(readValue<ChatMessage[]>('conversation') ?? [], 24000),
+            { role: 'user', content: [{ type: 'text', text: command.text }] }],
+          maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
+        });
+        saveValue('conversation', compactMessages(turn.messages, 40000));
+        const result = turn.error ?? (turn.text || 'Request processed. Check linked actions for execution status.');
+        updateCommand(command.id, { status: turn.status, result });
+        if (turn.status === 'interrupted') return;
       } catch (err: any) {
-        logger.error(`[Concierge] Error: ${err.message}`);
-        ui.reply('Sorry, I ran into an error. Please try again.');
-      } finally {
-        this.busy = false;
-        ui.setConciergeActivity({ state: 'idle' });
-      }
+        updateCommand(command.id, { status: 'failed', result: err.message });
+      } finally { ui.setConciergeActivity({ state: 'idle' }); }
     }
   }
-
-  /** Called by AlertWatcher to surface alerts to the user without a user prompt. */
-  pushAlert(message: string): void {
-    ui.alert(message);
-    // Also inject into conversation history so the concierge has context
-    this.history.push({
-      role: 'user',
-      content: [{ type: 'text', text: `[SYSTEM ALERT] ${message}` }],
-    });
-    this.history.push({
-      role: 'assistant',
-      content: [{ type: 'text', text: `Alert: ${message}` }],
-    });
+  pushAlert(message: string): void { ui.alert(message); }
+  private executeTool(name: string, input: Record<string, unknown>): Promise<string> {
+    return this.registry.execute(name, input);
   }
 
-  // ── Private ──────────────────────────────────────────────────────────────────
-
-  private async runTurn(): Promise<void> {
-    for (let round = 0; round < 8; round++) {
-      const response = await this.provider.chat({
-        systemPrompt: SYSTEM_PROMPT,
-        messages: this.history,
-        tools: CONCIERGE_TOOLS,
-        maxTokens: 1024,
-      });
-
-      this.history.push({ role: 'assistant', content: response.content });
-
-      for (const block of response.content) {
-        if (block.type === 'text' && block.text.trim()) {
-          ui.reply(block.text.trim());
-        }
-      }
-
-      if (response.stopReason !== 'tool_use') break;
-
-      const toolBlocks = response.content.filter(
-        (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
-      );
-
-      const toolResults: ContentBlock[] = [];
-      for (const block of toolBlocks) {
-        const result = await this.executeTool(block.name, block.input as Record<string, unknown>);
-        logger.tool('Concierge', block.name, result, block.input);
-        toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: result });
-      }
-
-      this.history.push({ role: 'user', content: toolResults });
+  private async dispatchTool(name: string, input: Record<string, unknown>): Promise<string> {
+    if (name === 'get_strategy_settings') {
+      const snapshot = getPolicySnapshot();
+      return JSON.stringify(summarizeStrategy(snapshot.policy, snapshot.hash));
     }
-  }
-
-  private async executeTool(name: string, input: Record<string, unknown>): Promise<string> {
     if (name === 'get_state') {
       const state = getState();
       return JSON.stringify({
+        paused: state.paused,
+        accountId: state.accountId,
+        strategyHash: getPolicyHash(),
+        actions: getOpenProposals(),
         startOfDayEquity: state.startOfDayEquity,
         lastResetDate: state.lastResetDate,
         watchlist: getPolicy().strategy.watchlist,
@@ -278,7 +242,7 @@ export class ConciergeAgent {
 
     if (name === 'get_policy_playbook') {
       try {
-        return JSON.stringify({ playbook: renderPolicy() });
+        return JSON.stringify({ runtimeContract: runtimeContract(), playbook: renderPolicy() });
       } catch (err: any) {
         return JSON.stringify({ error: `PLAYBOOK.md failed to render: ${err.message}` });
       }
@@ -286,12 +250,11 @@ export class ConciergeAgent {
 
     if (name === 'send_to_trader') {
       const message = input.message as string;
-      this.wake(message);
-      return JSON.stringify({ ok: true, sent: message });
+      return JSON.stringify({ ok: true, receipt: this.wake(message) });
     }
 
     if (name === 'update_trading_settings') {
-      return JSON.stringify(updateTradingSettings(input as any));
+      return JSON.stringify({ proposedSettings: input, note: 'Settings are not changed. The operator must review and save them in Strategy settings.' });
     }
 
     if (CHART_TOOL_NAMES.has(name)) {

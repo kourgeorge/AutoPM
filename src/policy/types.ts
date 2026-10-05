@@ -7,6 +7,12 @@
  */
 
 export interface RiskPolicy {
+  /** Percentage points of equity at the planned stop. Null preserves an unconfigured legacy account. */
+  riskPerTradePct: number | null;
+  /** Annualized portfolio volatility target in percentage points, estimated from daily returns. */
+  targetVolatilityPct: number | null;
+  /** Minimum planned (target - entry) / (entry - stop). This is not expected return. */
+  minRewardRisk: number | null;
   maxPositions: number;
   positionSizePct: number;
   stopLossAtrMult: number;
@@ -29,13 +35,14 @@ export interface RiskPolicy {
    */
   earningsBlackoutDays: number;
   /**
-   * Percentage points of equity in one name before `concentration_breach` warns. Percentage
+   * Percentage points of equity in one name before `concentration_breach` warns. Also an entry
+   * ceiling when risk-profile controls are configured. Percentage
    * points, not a fraction — unlike this block's other *Pct fields (maxDailyLossPct,
    * maxGrossExposurePct), which are historical and stayed fractions. New thresholds use
    * percentage points per §5.1 of roadmap.md.
    */
   maxSingleWeightPct: number;
-  /** Same units and same caveat as maxSingleWeightPct, but for a whole GICS sector. */
+  /** Same units and entry ceiling as maxSingleWeightPct, but for a whole GICS sector. */
   maxSectorWeightPct: number;
 }
 

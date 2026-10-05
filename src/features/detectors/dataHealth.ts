@@ -14,7 +14,12 @@ import { boolCrossing, type Detector, type DetectorHit } from '../eventBus';
 export const dataStaleDetector: Detector = {
   kind: 'data_stale',
   evaluate(data, _policy) {
-    const hits: DetectorHit[] = [];
+    const hits: DetectorHit[] = [{
+      symbol: null, cooldownKey: 'data_stale:positions', severity: 'warn',
+      headline: 'Holdings unavailable; account exposure cannot be measured',
+      evidence: { reason: data.positionsError ?? 'unknown' }, suggestedAction: null,
+      crossing: boolCrossing(data.positionsStale === true),
+    }];
 
     // `maxQuoteAgeMs` is a market-hours rule. Overnight EVERY quote is legitimately older
     // than it, so ungated this produced one warn per position plus one per watchlist symbol

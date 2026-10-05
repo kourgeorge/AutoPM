@@ -180,6 +180,7 @@ async function fetchAlpacaBars(
   limit: number,
   timeframe: Timeframe,
   now: Date,
+  adjustment?: 'split',
 ): Promise<Bar[]> {
   const crypto = isCryptoSymbol(symbol);
   const wireSymbol = crypto ? cryptoPair(symbol) : symbol.toUpperCase();
@@ -194,6 +195,7 @@ async function fetchAlpacaBars(
   // Crypto trades on Alpaca's own book: one feed, no entitlement tiers, no embargo.
   if (!crypto) {
     params.end = new Date(now.getTime() - SIP_EMBARGO_MS).toISOString();
+    if (adjustment) params.adjustment = adjustment;
   }
 
   const res = await alpacaData.get<any>(
@@ -221,13 +223,14 @@ export async function collectBars(
   limit = 60,
   timeframe: Timeframe = '1Day',
   maxAgeMs?: number,
+  adjustment?: 'split',
 ): Promise<Maybe<Bar[]>> {
   const now = new Date();
   const threshold = maxAgeMs ?? (await maxAgeFor(symbol, timeframe, now));
 
   let alpacaError: unknown;
   try {
-    const bars = await fetchAlpacaBars(symbol, limit, timeframe, now);
+    const bars = await fetchAlpacaBars(symbol, limit, timeframe, now, adjustment);
     return observe(bars, ALPACA_SOURCE, bars[bars.length - 1].t, threshold);
   } catch (err) {
     alpacaError = err;

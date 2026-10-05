@@ -245,6 +245,7 @@ class TerminalUI implements OperatorUI {
   private frame = 0;
   private paintFailed = false;
   private ticker: NodeJS.Timeout;
+  private restoreStreams?: () => void;
   /**
    * Whether the last line written to the log was blank. Starts true so the first chat block
    * does not open with a wasted row at the top of an empty box.
@@ -1046,7 +1047,10 @@ class TerminalUI implements OperatorUI {
    * Everything else (console.log, third-party warnings, etc.) is captured.
    */
   captureStreams(): void {
+    if (this.restoreStreams) return;
     const self = this;
+    const originalOut = process.stdout.write;
+    const originalErr = process.stderr.write;
     const origOut = process.stdout.write.bind(process.stdout);
     const origErr = process.stderr.write.bind(process.stderr);
 
@@ -1071,6 +1075,17 @@ class TerminalUI implements OperatorUI {
 
     (process.stdout as any).write = makeCapture(origOut);
     (process.stderr as any).write = makeCapture(origErr);
+    this.restoreStreams = () => {
+      process.stdout.write = originalOut;
+      process.stderr.write = originalErr;
+    };
+  }
+
+  close(): void {
+    clearInterval(this.ticker);
+    this.restoreStreams?.();
+    this.restoreStreams = undefined;
+    this.screen.destroy();
   }
 }
 

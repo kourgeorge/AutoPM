@@ -253,7 +253,8 @@ async function cashFlowsInWindow(from: string): Promise<{ count: number | null }
     const res = await alpacaTrading.get('/v2/account/activities', {
       params: { activity_types: 'CSD,CSW,JNLC', after: `${from}T00:00:00Z`, page_size: 100 },
     });
-    const rows: any[] = Array.isArray(res.data) ? res.data : [];
+    if (!Array.isArray(res.data) || res.data.length >= 100) return { count: null };
+    const rows: any[] = res.data;
     const inWindow = rows.filter((a) => {
       const stamp = String(a?.date ?? a?.transaction_time ?? '').slice(0, 10);
       return stamp !== '' && stamp >= from;
@@ -301,10 +302,10 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
   const equityLevels = equityDates.map(d => equityLeg.series.get(d)!).filter(Number.isFinite);
   const spyLevels = spyDates.map(d => spyLeg.series.get(d)!).filter(Number.isFinite);
 
-  const portfolioReturnPct = totalReturnPct(equityLevels);
+  let portfolioReturnPct = totalReturnPct(equityLevels);
   const spyReturnPct = totalReturnPct(spyLevels);
 
-  const equityReturns = dailyReturns(equityLevels);
+  let equityReturns = dailyReturns(equityLevels);
   const spyReturns = dailyReturns(spyLevels);
 
   const sessions = dates.length;
@@ -321,14 +322,8 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
     caveats.push(`only ${equityReturns.length} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so the Sharpe figures are null rather than noisy`);
   }
 
-  if (from != null) {
-    const flows = await cashFlowsInWindow(from);
-    if (flows.count == null) {
-      caveats.push('deposits and withdrawals in the window could not be checked; the equity curve is not adjusted for them in any case, so any cash movement shows up as return');
-    } else if (flows.count > 0) {
-      caveats.push(`${flows.count} cash movement(s) (deposit, withdrawal or journal) fall inside this window — the equity curve includes them, so portfolioReturnPct is NOT a pure return series and the excess figure is not attributable to trading`);
-    }
-  }
+  const accountingIssue = from ? await accountPerformanceIssue(from) : null;
+  if (accountingIssue) { portfolioReturnPct = null; equityReturns = []; caveats.push(accountingIssue); }
 
   if (equityReturns.length >= MIN_RETURNS_FOR_SHARPE) {
     caveats.push('Sharpe figures use a zero risk-free rate on both legs — read them as return per unit of volatility, and compare portfolio to SPY rather than to a textbook threshold');
@@ -349,7 +344,7 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
     portfolioVolPct: r(annualisedVolPct(equityReturns)),
     spyVolPct: r(annualisedVolPct(spyReturns)),
 
-    maxDrawdownPct: r(maxDrawdownPct(equityLevels)),
+    maxDrawdownPct: portfolioReturnPct == null ? null : r(maxDrawdownPct(equityLevels)),
     spyMaxDrawdownPct: r(maxDrawdownPct(spyLevels)),
 
     caveats,
@@ -400,4 +395,26 @@ export async function symbolStats(symbol: string, opts: { days?: number } = {}):
     maxDrawdownPct: r(maxDrawdownPct(levels)),
     caveats,
   };
+}
+
+/** Shared accounting gate for every tool that labels account equity movement as performance. */
+async function accountPerformanceIssue(from: string): Promise<string | null> {
+  const flows = await cashFlowsInWindow(from);
+  if (flows.count == null) return 'Cash-flow history could not be verified; account performance is unavailable.';
+  return flows.count > 0 ? 'Deposits, withdrawals or journals affect this window; adjusted account performance is unavailable.' : null;
+}
+export async function comparePerformance(a: string, b: string, days: number) {
+  const leg = (name: string) => name === 'ACCOUNT' ? fetchEquityCurve(days) : fetchSymbolCurve(name, days);
+  const [first, second] = await Promise.all([leg(a), leg(b)]);
+  const dates = [...first.series.keys()].filter(d => second.series.has(d)).sort();
+  const valuesA = dates.map(d => first.series.get(d)!), valuesB = dates.map(d => second.series.get(d)!);
+  const caveats = [first.error, second.error].filter((s): s is string => !!s);
+  const issue = dates.length && [a,b].includes('ACCOUNT') ? await accountPerformanceIssue(dates[0]) : null;
+  if (issue) caveats.push(issue);
+  if (dates.length < 2) caveats.push('Fewer than two common sessions are available.');
+  const changePctA = issue && a === 'ACCOUNT' ? null : r(totalReturnPct(valuesA));
+  const changePctB = issue && b === 'ACCOUNT' ? null : r(totalReturnPct(valuesB));
+  return { a, b, from: dates[0] ?? null, to: dates.at(-1) ?? null, sessions: dates.length,
+    valuesA, valuesB, changePctA, changePctB,
+    excessPct: changePctA != null && changePctB != null ? r(changePctA-changePctB) : null, caveats };
 }

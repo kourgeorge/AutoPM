@@ -1,3 +1,4 @@
+import { newJobDirectory } from '../core/jobs';
 /**
  * The Level 1 backtest baseline — the `stop_only` exit mode over the full 10-year range at
  * whatever `Policy` is currently live. This is the closest thing to "did the mechanical part
@@ -26,7 +27,7 @@ const START = '2016-01-01';
 const SLIPPAGE_PCT = 0.0005;
 const INITIAL_EQUITY = 100_000;
 const TAKE_PROFIT_R_MULT = 2;
-const OUT_DIR = path.join(process.cwd(), 'backtest-results');
+const OUT_DIR = newJobDirectory('backtest');
 
 async function main() {
   const end = new Date().toISOString().slice(0, 10);

@@ -1,14 +1,19 @@
-version: 7
+version: 8
 risk:
+  # Balanced profile. These three new values use percentage points (0.5 = 0.5%)
+  # and a reward:risk multiple. They are estimates/budgets, not guaranteed outcomes.
+  riskPerTradePct: 0.5
+  targetVolatilityPct: 12
+  minRewardRisk: 2
   maxPositions: 10
   positionSizePct: 0.1
   stopLossAtrMult: 2
-  maxDailyLossPct: 0.03
+  maxDailyLossPct: 0.02
   # Gross exposure ceiling across the whole book, as a fraction of equity. 1 = 100%, fully
   # deployed on no margin — the level `maxPositions x positionSizePct` already implies at these
   # defaults. Enforced by `exposureVeto` in orderManager.ts: ten correctly-sized positions can
   # still add up past this with nothing else checking the book as a whole.
-  maxGrossExposurePct: 1
+  maxGrossExposurePct: 0.8
   # Minimum days until the next earnings print required to open a new position. Enforced by
   # `earningsVeto` in orderManager.ts — a gap at the open jumps past any resting stop, so this
   # is the one entry risk `stopLossAtrMult` cannot bound.
@@ -16,9 +21,9 @@ risk:
   # Percentage points of equity a single name can reach before concentration_breach warns.
   # Percentage points like the new triggers.portfolioDrawdownPct, not a fraction like this
   # block's older *Pct keys (see roadmap.md §5.1).
-  maxSingleWeightPct: 15
+  maxSingleWeightPct: 10
   # Same units and same caveat, for a whole sector.
-  maxSectorWeightPct: 35
+  maxSectorWeightPct: 30
 strategy:
   watchlist:
     - AAPL
@@ -93,7 +98,7 @@ triggers:
   # a slower, book-wide bleed the per-position detectors below can't see.
   portfolioDrawdownPct: 6
 automation:
-  # The automation gate — for each action kind below, does the machine act immediately, or
+  # The automation gate — for each action kind below, is the queued action approved automatically, or
   # does it create a PROPOSAL and wait for a human to type `approve <id>` / `reject <id>` in
   # the terminal UI?
   #
@@ -114,9 +119,7 @@ automation:
     targetAdjust: auto
   # How long a pending proposal waits for you before settling as onTimeout.
   timeoutMs: 600000
-  # deny | allow. WARNING on `deny` with `exit: manual`: an unattended agent then cannot close
-  # a losing position — a stop-breach exit proposal expires unexecuted. If you are not watching
-  # the terminal, set `exit: auto` or `onTimeout: allow` (gate becomes delay-and-notify).
+  # Unanswered manual approvals always expire. Use exit: auto for unattended exits.
   onTimeout: deny
 immutable:
   maxPositionsCeiling: 10

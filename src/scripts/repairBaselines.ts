@@ -172,27 +172,9 @@ async function main(): Promise<void> {
     lines.push('Nothing to write.');
   } else {
     for (const v of fixes) patchPositionSnapshot(v.symbol, v.patch!);
-    // The state module debounces its write by 5s. Wait for the file itself to show the change
-    // rather than reporting success off an in-memory object that may never reach disk.
-    const deadline = Date.now() + 20_000;
-    let confirmed = false;
-    while (Date.now() < deadline && !confirmed) {
-      await new Promise((r) => setTimeout(r, 1_000));
-      try {
-        const onDisk = JSON.parse(fs.readFileSync('data/state.json', 'utf8')).positionSnapshots ?? {};
-        confirmed = fixes.every((v) => {
-          const s = onDisk[canonicalSymbol(v.symbol)] ?? {};
-          return Object.entries(v.patch!).every(([k, val]) => s[k] === val);
-        });
-      } catch {
-        // mid-write; try again
-      }
-    }
-    lines.push(
-      confirmed
-        ? `WROTE ${fixes.length} snapshot(s) to data/state.json — verified on disk.`
-        : 'WRITE NOT CONFIRMED on disk after 20s — check data/state.json before restarting the daemon.',
-    );
+    const saved = getState().positionSnapshots;
+    const confirmed = fixes.every(v => Object.entries(v.patch!).every(([key, value]) => (saved[canonicalSymbol(v.symbol)] as any)?.[key] === value));
+    lines.push(confirmed ? `WROTE ${fixes.length} snapshot(s) to the account database — verified.` : 'Database verification failed.');
     for (const v of fixes) {
       const s = getPositionSnapshot(v.symbol);
       lines.push(`  ${v.symbol}: high ${s?.sessionHigh}, low ${s?.sessionLow}`);

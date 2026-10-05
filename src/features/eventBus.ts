@@ -35,6 +35,9 @@ import type { Policy } from '../policy/types';
 import { getState, updateState } from '../state/state';
 import type { TickData } from './compute';
 import { appendEventLog } from './eventLog';
+import { appendRecord, readValue, saveValue, transaction } from '../core/storage';
+import { getProposal } from '../core/proposals';
+import { agentContext, assertAgentActive, recordToolEffect } from '../core/agentContext';
 
 export type EventKind =
   | 'stop_breach'
@@ -174,6 +177,11 @@ export interface TriggerEvent {
   cooldownKey: string;
   suggestedAction: SuggestedAction | null;
 
+  proposalId?: string;
+  needsReview?: boolean;
+  handledBy?: string;
+  commandId?: string;
+  handling?: 'observed' | 'action_pending' | 'declined' | 'resolved';
   ackedAt: string | null;
   ackDisposition: AckDisposition | null;
   ackNote: string | null;
@@ -231,35 +239,63 @@ const breachStreak = new Map<string, number>();
  */
 let droppedCount = 0;
 
+let hydrated = false;
+function hydrateRegistry(): void {
+  if (hydrated) return;
+  hydrated = true;
+  const saved = readValue<{ pending: TriggerEvent[]; live: TriggerEvent[] }>('eventRegistry');
+  for (const event of saved?.pending ?? []) pending.set(event.id, event);
+  for (const event of saved?.live ?? []) live.set(event.cooldownKey, pending.get(event.id) ?? event);
+}
+function persistRegistry(): void {
+  saveValue('eventRegistry', { pending: [...pending.values()], live: [...live.values()].slice(-500) });
+}
 export function getPendingEvents(): TriggerEvent[] {
+  hydrateRegistry();
+  let dirty = false;
+  for (const event of pending.values()) {
+    if (event.handling !== 'action_pending' || !event.proposalId) continue;
+    const action = getProposal(event.proposalId);
+    let changed = false;
+    const incomplete = action?.status === 'executed' && action.kind === 'exit' && (action.result?.filledQty ?? 0) < (action.result?.qty ?? Infinity);
+    if (action?.status === 'executed' && !incomplete) {
+      event.handling = 'resolved'; event.ackedAt = new Date().toISOString(); pending.delete(event.id); changed = true;
+    } else if (incomplete || !action || ['failed','expired','rejected','unknown'].includes(action.status)) {
+      event.handling = 'observed'; event.ackedAt = null; event.ackDisposition = null;
+      event.ackNote = `Action ${event.proposalId} ${action?.status ?? 'missing'}; review required`; event.proposalId = undefined; event.needsReview = true; changed = true;
+    }
+    if (changed) { dirty = true; appendRecord('eventHandling', event.id + ':' + (event.handling ?? '') + ':' + Date.now(), new Date().toISOString(), event); }
+  }
+  if (dirty) persistRegistry();
   return [...pending.values()];
 }
-
-/**
- * Mark an event answered. Stops escalation for its key; the condition may still hold.
- * Returns false for an unknown or already-acked id.
- *
- * The ack is recorded on the event in `live`, not only removed from `pending`, because the
- * escalation gate reads `live.get(key).ackedAt` — an ack that only deleted the pending
- * entry would leave a still-breaching critical escalating against a `wakeCount` nobody
- * could see the answer to.
- */
-export function ackEvent(id: string, disposition?: AckDisposition, note?: string): boolean {
+export function ackEvent(id: string, disposition: AckDisposition = 'acknowledged', note?: string, proposalId?: string): boolean {
+  hydrateRegistry(); assertAgentActive();
+  if (!['acting','acknowledged','ignoring'].includes(disposition)) throw new Error('Invalid event disposition');
   const event = pending.get(id);
   if (!event) return false;
-  event.ackedAt = new Date().toISOString();
-  event.ackDisposition = disposition ?? 'acknowledged';
-  event.ackNote = note ?? null;
-  pending.delete(id);
-  return true;
+  if (disposition === 'ignoring' && !note?.trim()) throw new Error('Declining an incident requires a reason');
+  if (disposition === 'acting') {
+    const p = proposalId ? getProposal(proposalId) : undefined;
+    if (!p || p.eventId !== id || ['failed','expired','rejected','unknown'].includes(p.status)) throw new Error('acting requires a valid proposalId linked to this event');
+  }
+  return transaction(() => {
+    event.ackDisposition = disposition; event.ackNote = note ?? null; event.proposalId = proposalId;
+    event.handledBy = agentContext.getStore()?.actorId ?? 'system'; event.commandId = agentContext.getStore()?.commandId;
+    event.handling = disposition === 'acting' ? 'action_pending' : disposition === 'ignoring' ? 'declined' : 'observed';
+    const closed = disposition === 'ignoring' || (disposition === 'acknowledged' && !wakesTrader(event));
+    event.ackedAt = closed ? new Date().toISOString() : null;
+    if (closed) pending.delete(id);
+    persistRegistry();
+    appendRecord('eventHandling', id + ':' + Date.now(), new Date().toISOString(), event);
+    recordToolEffect({ ok: true, id, disposition, handling: event.handling, proposalId });
+    return true;
+  });
 }
-
-/** Test seam. Clears in-memory registries; persisted arming is untouched. */
-export function resetEventRegistry(): void {
-  pending.clear();
-  live.clear();
-  breachStreak.clear();
-  droppedCount = 0;
+/** Tests may clear the durable registry; restart tests retain it and reload. */
+export function resetEventRegistry(preserveDurable = false): void {
+  pending.clear(); live.clear(); breachStreak.clear(); droppedCount = 0; hydrated = false;
+  if (!preserveDurable) saveValue('eventRegistry', { pending: [], live: [] });
 }
 
 // ── The gates ─────────────────────────────────────────────────────────────────
@@ -401,14 +437,10 @@ function resolveEvent(
  * there is nothing for an eviction to undo beyond the visible-queue drop counted below.
  */
 function enqueue(event: TriggerEvent, tick?: TickState): void {
-  // `info` is a level, not an incident: the newest reading of a key says everything the
-  // older ones did. Left to accumulate, an hourly overnight heartbeat puts 16 near-identical
-  // lines in front of the LLM by morning. The pile-up is an artefact of `pending` being
-  // keyed by `id` while `live` is keyed by `cooldownKey` — so supersede here, where both
-  // maps are in hand. An already-acked predecessor is gone from `pending` and nothing
-  // needs replacing; warn and above keep accumulating, because each of those IS an incident.
+  hydrateRegistry();
+  // One open incident per detector key; the event log retains every escalation.
   const prev = live.get(event.cooldownKey);
-  if (event.severity === 'info' && prev && pending.has(prev.id)) {
+  if (prev && pending.has(prev.id)) {
     pending.delete(prev.id);
   }
 
@@ -439,6 +471,7 @@ function enqueue(event: TriggerEvent, tick?: TickState): void {
       tick.dirty = true;
     }
   }
+  persistRegistry();
 }
 
 /**
@@ -475,6 +508,9 @@ export function processHits(
   tick: TickState,
   now: number = Date.now(),
 ): TriggerEvent[] {
+  for (const event of getPendingEvents()) {
+    if (event.needsReview) { tick.armed.add(event.cooldownKey); delete tick.cooldowns[event.cooldownKey]; tick.dirty = true; event.needsReview = false; persistRegistry(); }
+  }
   const fired: TriggerEvent[] = [];
   const firedAt = new Date(now).toISOString();
 
@@ -512,6 +548,10 @@ export function processHits(
         const cleared = live.get(key);
         live.delete(key);
         if (cleared) {
+          for (const incident of pending.values()) if (incident.cooldownKey === key) {
+            incident.handling = 'resolved'; incident.ackedAt = firedAt; pending.delete(incident.id);
+            appendRecord('eventHandling', incident.id + ':resolved:' + firedAt, firedAt, incident);
+          }
           const event = resolveEvent(cleared, hit, firedAt, policy.version);
           enqueue(event, tick);
           fired.push(event);
@@ -551,10 +591,12 @@ export function processHits(
     if (hit.severity !== 'critical') continue;
 
     const previous = live.get(key);
-    if (previous?.ackedAt) continue;
+    if (previous?.ackedAt || previous?.handling === 'action_pending') continue;
     if (elapsedSince(tick.cooldowns[key], now) < policy.triggers.criticalCooldownMs) continue;
 
     const event = makeEvent(kind, hit, firedAt, policy.version, (previous?.wakeCount ?? 0) + 1);
+    // Escalation updates an existing incident, preserving action links and acknowledgment IDs.
+    if (previous) { event.id = previous.id; event.firedAt = previous.firedAt; }
     disarm(key, firedAt, tick);
     enqueue(event, tick);
     fired.push(event);

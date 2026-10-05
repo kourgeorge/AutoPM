@@ -17,6 +17,8 @@
  */
 
 import crypto from 'crypto';
+import { readValue, saveValue, transaction, appendRecord } from '../core/storage';
+import { dump as dumpYaml } from 'js-yaml';
 import fs from 'fs';
 import path from 'path';
 import { load as parseYaml } from 'js-yaml';
@@ -36,8 +38,9 @@ import { DATA_DIR } from '../core/paths';
  * whatever DATA_DIR is set to: they are tracked source, not per-broker record, and PLAYBOOK.md
  * is the system prompt itself.
  */
-export const DEFAULT_POLICY_FILE = path.join(process.cwd(), 'policy', 'default.yaml');
-export const TEMPLATE_FILE = path.join(process.cwd(), 'policy', 'PLAYBOOK.md');
+export const DEFAULT_POLICY_FILE = path.join(__dirname, '../../policy/default.yaml');
+export const SHIPPED_TEMPLATE_FILE = path.join(__dirname, '../../policy/PLAYBOOK.md');
+export const TEMPLATE_FILE = path.join(DATA_DIR, 'policy', 'PLAYBOOK.md');
 
 /** Live (user-managed) policy and its history — inside the gitignored data directory. */
 export const DATA_POLICY_DIR = path.join(DATA_DIR, 'policy');
@@ -46,6 +49,8 @@ export const HISTORY_DIR = path.join(DATA_POLICY_DIR, 'history');
 
 /** Ensure data/policy/policy.yaml exists, seeding from the project default if not. */
 function ensureLivePolicy(): void {
+  fs.mkdirSync(DATA_POLICY_DIR, { recursive: true });
+  if (!fs.existsSync(TEMPLATE_FILE)) fs.copyFileSync(SHIPPED_TEMPLATE_FILE, TEMPLATE_FILE);
   if (!fs.existsSync(POLICY_FILE)) {
     fs.mkdirSync(DATA_POLICY_DIR, { recursive: true });
     fs.copyFileSync(DEFAULT_POLICY_FILE, POLICY_FILE);
@@ -165,9 +170,10 @@ function symbolList(src: Record<string, unknown>, where: string, key: string, er
     errs.push(`${where}.${key}: expected a non-empty list`);
     return [];
   }
+  if (v.length > 100) errs.push(`${where}.${key}: at most 100 symbols are supported`);
   const bad = v.filter((s) => typeof s !== 'string' || !/^[A-Z.\-]{1,10}$/.test(s));
   if (bad.length > 0) errs.push(`${where}.${key}: not ticker symbols: ${JSON.stringify(bad)}`);
-  return v as string[];
+  return [...new Set(v)] as string[];
 }
 
 /**
@@ -195,8 +201,21 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
       : num(imm, 'immutable', 'maxGrossExposurePctCeiling', errs, { min: 0 }),
   };
 
+  const ceilings = { maxPositionsCeiling: 10, maxDailyLossPctCeiling: 0.05,
+    positionSizePctCeiling: 0.1, stopLossAtrMultCeiling: 4, maxGrossExposurePctCeiling: 1.5 };
+  for (const [key, maximum] of Object.entries(ceilings)) {
+    if (immutable[key as keyof typeof immutable] > maximum) errs.push('immutable.' + key + ' exceeds platform ceiling ' + maximum);
+  }
+  if (immutable.minTickIntervalMs < 30_000) errs.push('immutable.minTickIntervalMs must be at least 30000');
+
   const r = block(root, 'risk', errs);
+  const optionalRiskNumber = (key: string, min: number, max: number): number | null =>
+    r[key] == null ? null : num(r, 'risk', key, errs, { min, max });
   const risk = {
+    // Upgrades preserve existing account behavior until the operator configures these controls.
+    riskPerTradePct: optionalRiskNumber('riskPerTradePct', 0.01, 2),
+    targetVolatilityPct: optionalRiskNumber('targetVolatilityPct', 1, 50),
+    minRewardRisk: optionalRiskNumber('minRewardRisk', 0.1, 20),
     maxPositions: num(r, 'risk', 'maxPositions', errs, { int: true, min: 1, max: immutable.maxPositionsCeiling }),
     positionSizePct: num(r, 'risk', 'positionSizePct', errs, { min: 0, max: immutable.positionSizePctCeiling }),
     stopLossAtrMult: num(r, 'risk', 'stopLossAtrMult', errs, { min: 0, max: immutable.stopLossAtrMultCeiling }),
@@ -254,9 +273,9 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
   const parseOverride = (key: string): RegimeOverride => {
     const raw = isRecord(regimeRaw[key]) ? regimeRaw[key] as Record<string, unknown> : {};
     return {
-      sizeMult: typeof raw.sizeMult === 'number' ? raw.sizeMult : (DEFAULT_REGIME as any)[key].sizeMult,
-      rsiEntryMin: typeof raw.rsiEntryMin === 'number' ? raw.rsiEntryMin : (DEFAULT_REGIME as any)[key].rsiEntryMin,
-      compositeMin: typeof raw.compositeMin === 'number' ? raw.compositeMin : (DEFAULT_REGIME as any)[key].compositeMin,
+      sizeMult: raw.sizeMult === undefined ? (DEFAULT_REGIME as any)[key].sizeMult : num(raw, 'regime.' + key, 'sizeMult', errs, { min: 0, max: 1 }),
+      rsiEntryMin: raw.rsiEntryMin === undefined ? (DEFAULT_REGIME as any)[key].rsiEntryMin : num(raw, 'regime.' + key, 'rsiEntryMin', errs, { min: 0, max: 100 }),
+      compositeMin: raw.compositeMin === undefined ? (DEFAULT_REGIME as any)[key].compositeMin : num(raw, 'regime.' + key, 'compositeMin', errs, { min: strategy.compositeMin, max: 1 }),
     };
   };
 
@@ -340,6 +359,8 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
       ?? DEFAULT_AUTOMATION.onTimeout,
   };
 
+  if (automation.onTimeout === 'allow') errs.push('automation.onTimeout must be deny: unanswered approvals never authorize a trade; use auto for automatic execution');
+
   return { policy: { version, risk, strategy, triggers, regime, automation, immutable }, errors: errs };
 }
 
@@ -372,11 +393,12 @@ export function parsePolicy(text: string, source = POLICY_FILE): PolicyLoadResul
 /** First load. Throws — there is no previous policy to keep. */
 export function loadPolicy(): Policy {
   ensureLivePolicy();
-  const text = fs.readFileSync(POLICY_FILE, 'utf8');
+  const text = readPolicyText();
   const result = parsePolicy(text);
   if (!result.ok) {
     throw new Error(`Invalid policy at ${POLICY_FILE}:\n  - ${result.errors.join('\n  - ')}`);
   }
+  if (!readValue('activeStrategy')) saveValue('activeStrategy', { text, playbook: fs.readFileSync(TEMPLATE_FILE, 'utf8') });
   _policy = result.policy;
   _meta = result.meta;
   logger.info(`[Policy] Loaded v${result.meta.version} (${result.meta.hash})`);
@@ -387,7 +409,7 @@ export function loadPolicy(): Policy {
 export function reloadPolicy(): PolicyLoadResult {
   let text: string;
   try {
-    text = fs.readFileSync(POLICY_FILE, 'utf8');
+    text = readPolicyText();
   } catch (err: any) {
     return { ok: false, errors: [`cannot read ${POLICY_FILE}: ${err.message}`] };
   }
@@ -422,5 +444,47 @@ export function useEphemeralPolicy(policy: Policy): void {
 
 /** Raw yaml text of the active policy file. Used by mutate.ts and history snapshots. */
 export function readPolicyText(): string {
-  return fs.readFileSync(POLICY_FILE, 'utf8');
+  return readValue<{ text: string }>('activeStrategy')?.text ?? fs.readFileSync(POLICY_FILE, 'utf8');
+}
+
+/** Full effective strategy identity, including the per-account pinned playbook. */
+export function getPolicyHash(): string {
+  const policy = getPolicy();
+  const template = readPlaybook();
+  return crypto.createHash('sha256').update(JSON.stringify(policy)).update(template).digest('hex');
+}
+
+export function getPolicySnapshot() {
+  const { RISK_PROFILES, riskProfileName } = require('./riskProfiles') as typeof import('./riskProfiles');
+  return { policy: getPolicy(), hash: getPolicyHash(), playbook: readPlaybook(),
+    riskProfiles: RISK_PROFILES, riskProfile: riskProfileName(getPolicy().risk) };
+}
+
+export function readPlaybook(): string {
+  return readValue<{ playbook: string }>('activeStrategy')?.playbook ?? fs.readFileSync(fs.existsSync(TEMPLATE_FILE) ? TEMPLATE_FILE : SHIPPED_TEMPLATE_FILE, 'utf8');
+}
+
+/** Atomically activate settings, pinned prose, and audit history as one revision. */
+export function saveStrategy(settings: unknown, expectedHash: string, actorId: string, playbook = readPlaybook()) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Strategy must be an object');
+  const doc = settings as Record<string, unknown>;
+  const allowed = ['version', 'risk', 'strategy', 'triggers', 'regime', 'automation', 'immutable'];
+  if (Object.keys(doc).some(key => !allowed.includes(key))) throw new Error('Unknown strategy field');
+  if (typeof playbook !== 'string' || playbook.length < 100 || playbook.length > 50000) throw new Error('Playbook must contain 100–50000 characters');
+  const next = { ...doc, version: getPolicy().version + 1, immutable: getPolicy().immutable };
+  const text = dumpYaml(next, { lineWidth: -1 });
+  const parsed = parsePolicy(text);
+  if (!parsed.ok) throw new Error(parsed.errors.join('; '));
+  // Lazy import avoids the renderer/loader module cycle during startup.
+  require('./render').renderTemplate(playbook, parsed.policy);
+  transaction(() => {
+    const persisted = readValue<{ text: string; playbook: string }>('activeStrategy');
+    const active = persisted ? parsePolicy(persisted.text) : null;
+    const actualHash = active?.ok ? crypto.createHash('sha256').update(JSON.stringify(active.policy)).update(persisted!.playbook).digest('hex') : getPolicyHash();
+    if (!expectedHash || expectedHash !== actualHash) throw new Error('Strategy changed; reload before saving');
+    appendRecord('strategy', crypto.randomUUID(), new Date().toISOString(), { actorId, before: persisted, after: { text, playbook } });
+    saveValue('activeStrategy', { text, playbook });
+  });
+  _policy = parsed.policy; _meta = parsed.meta;
+  return getPolicySnapshot();
 }

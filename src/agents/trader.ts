@@ -1,20 +1,29 @@
+import { withAccountRead } from '../core/accountRead';
+import { describeDecision } from '../journal/types';
+import { readDecision } from '../journal/journal';
+import { runTurn } from './turnRunner';
+import { enqueueCommand, pendingCommands, updateCommand, getCommand } from '../core/commands';
+import { readRecord } from '../core/storage';
+import { runtimeContract } from './runtimeContract';
 import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { logger } from '../core/logger';
 import { canonicalSymbol } from '../core/symbols';
+import { getPolicyHash } from '../policy/load';
 import { renderPolicy } from '../policy/render';
 import { getPolicy } from '../policy/load';
-import { getState } from '../state/state';
+import { getState, updateState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
-import { getOpenProposals } from '../core/proposals';
+import { getOpenProposals, refreshCommandOutcome } from '../core/proposals';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
 import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
 import { ui } from '../ui/ui';
 import {
   TRADER_TOOL_DEFINITIONS,
+  TRADER_REGISTRY,
   brokerOrderView,
   executeTraderTool,
   getMarketStatusSnapshot,
@@ -24,249 +33,88 @@ import type { ChatMessage, ContentBlock } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
 
 const MAX_ROUNDS = 30;
-const DEFAULT_SLEEP_MS = 10 * 60_000;
+const DEFAULT_SLEEP_MS = 60 * 60_000;
 const ERROR_RECOVERY_SLEEP_MS = 60_000;
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
 const PAUSED_RECHECK_MS = 60 * 60_000;
 
-/**
- * The L3 system prompt: policy/PLAYBOOK.md rendered against the active policy.
- *
- * `renderPolicy` throws on an unknown placeholder or a bad filter, and PLAYBOOK.md is
- * NOT covered by the guarded reload path that protects policy.yaml — so a prose typo
- * would otherwise brick the trading loop. The last good prompt is kept and reused;
- * the FIRST render still throws, because trading on a prompt nobody could produce is
- * worse than not trading.
- */
-let _lastGoodPrompt: string | null = null;
-
-function systemPrompt(): string {
-  try {
-    return (_lastGoodPrompt = renderPolicy());
-  } catch (err: any) {
-    logger.error('[Trader] PLAYBOOK.md render failed — using last good prompt', err.message);
-    if (!_lastGoodPrompt) throw err;
-    return _lastGoodPrompt;
-  }
-}
+/** Policy activation validates the prompt; a later render error stops the cycle. */
+function systemPrompt(): string { return runtimeContract() + "\n\nACCOUNT STRATEGY\n" + renderPolicy(); }
 
 export class Trader {
   private running = false;
   private readonly provider = createModelProvider(config.ai);
-  private readonly pendingMessages: string[] = [];
   private wakeUp: (() => void) | null = null;
-  /**
-   * A wake that arrived while a cycle was running.
-   *
-   * `wakeUp` is only set during `interruptibleSleep`, so before this flag existed every
-   * wake during a cycle was silently discarded — precisely the wakes that matter, since a
-   * cycle is when the market is being acted on. The next sleep is skipped instead of the
-   * running cycle being aborted: interrupting between `execute_entry` and the baseline
-   * write would leave a filled order with no stop recorded anywhere.
-   */
   private wakePending = false;
-  /** Cycles since this process started — a counter, not a persisted statistic. */
   private cycleCount = 0;
-  /**
-   * Operator `/pause`. Stops NEW cycles only: a cycle already running finishes (same reason
-   * `wakePending` never aborts one), and stops resting at the broker keep protecting positions.
-   * Instructions that arrive while paused stay queued for the first cycle after `/resume`.
-   */
-  private paused = false;
+  private controller = new AbortController();
+  private active: Promise<void> | null = null;
+  private get paused(): boolean { return getState().paused; }
 
   async start(): Promise<void> {
     this.running = true;
-    logger.info('='.repeat(60));
-    logger.info('Trader started');
-    logger.info('='.repeat(60));
-    await this.loop();
+    this.active = this.loop();
+    await this.active;
   }
-
-  stop(): void {
-    this.running = false;
-    this.wakeUp?.();
+  async stop(): Promise<void> {
+    this.running = false; this.controller.abort(); this.wakeUp?.();
+    await this.active;
   }
-
-  pause(): void {
-    this.paused = true;
+  pause(): void { updateState({ paused: true }); this.controller.abort(); }
+  resume(): void { updateState({ paused: false }); this.wakeUp?.(); }
+  get status(): { paused: boolean; cycles: number } { return { paused: this.paused, cycles: this.cycleCount }; }
+  wake(message?: string): { commandId?: string; status: string } {
+    const command = message ? enqueueCommand('trader', message) : undefined;
+    if (this.paused) return { commandId: command?.id, status: 'queued_paused' };
+    if (this.wakeUp) this.wakeUp(); else this.wakePending = true;
+    return { commandId: command?.id, status: 'queued' };
   }
-
-  resume(): void {
-    if (!this.paused) return;
-    this.paused = false;
-    this.wakeUp?.();
-  }
-
-  get status(): { paused: boolean; cycles: number } {
-    return { paused: this.paused, cycles: this.cycleCount };
-  }
-
-  /**
-   * Wake the trader from sleep. Optionally inject an instruction that
-   * will appear in the next cycle context (sent by the concierge on behalf
-   * of the operator).
-   */
-  wake(message?: string): void {
-    if (message) {
-      this.pendingMessages.push(message);
-      logger.info(`[Trader] Instruction queued: "${message}"`);
-    }
-    if (this.paused) {
-      logger.info('[Trader] Paused — wake ignored until /resume');
-      return;
-    }
-    if (this.wakeUp) {
-      logger.info('[Trader] Waking for next cycle');
-      this.wakeUp();
-    } else {
-      logger.info('[Trader] Wake arrived mid-cycle — next sleep will be skipped');
-      this.wakePending = true;
-    }
-  }
-
-  // ── Private ─────────────────────────────────────────────────────────────────
-
   private async loop(): Promise<void> {
     while (this.running) {
-      // A wake while paused ends this sleep too; the loop just re-checks and goes back under.
       if (this.paused) {
-        ui.setTraderActivity({ state: 'idle', detail: 'paused — /resume to continue' });
-        await this.interruptibleSleep(PAUSED_RECHECK_MS);
-        continue;
+        ui.setTraderActivity({ state: 'idle', detail: 'paused' });
+        await this.interruptibleSleep(PAUSED_RECHECK_MS); continue;
       }
+      let sleepMs = ERROR_RECOVERY_SLEEP_MS;
       try {
         this.cycleCount++;
-        const startedAt = Date.now();
+        const at = Date.now();
         ui.setTraderActivity({ state: 'thinking', detail: `cycle ${this.cycleCount}` });
-
         const cycle = await this.runCycle();
-        let sleepMs = cycle.sleepMs;
-
-        ui.setCycle({
-          n: this.cycleCount,
-          lastMs: Date.now() - startedAt,
-          inTokens: cycle.inTokens,
-          outTokens: cycle.outTokens,
-        });
-
-        if (this.wakePending) {
-          this.wakePending = false;
-          logger.info('[Trader] Wake was pending — starting the next cycle immediately');
-          sleepMs = 0;
-        }
-        const mins = (sleepMs / 60_000).toFixed(0);
-        logger.info(`[Trader] Sleeping ${mins} min`);
-        // An absolute deadline rather than a duration string: the panel subtracts `now` once a
-        // second, which is what turns "next cycle in 7 min" into a countdown that actually
-        // moves — and it stays truthful if a wake cuts the sleep short.
-        ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
-        await this.interruptibleSleep(sleepMs);
-      } catch (err: any) {
-        // `err.message` alone is not diagnosable: the Anthropic SDK reports every transport
-        // failure as the single string "Connection error." and hides the real reason
-        // (ECONNRESET, ETIMEDOUT, EAI_AGAIN, a 502 from a proxy) in `name`, `status` and the
-        // `cause` chain. Unwrap them, or a recurring cycle failure has no evidence at all.
-        const detail = [
-          err?.name && err.name !== 'Error' ? `name=${err.name}` : null,
-          err?.status ? `status=${err.status}` : null,
-          err?.requestID ? `requestID=${err.requestID}` : null,
-        ].filter(Boolean).join(' ');
-        const causes: string[] = [];
-        for (let c = err?.cause, depth = 1; c && depth <= 4; c = c?.cause, depth++) {
-          causes.push(`cause[${depth}]: ${c?.code ?? c?.name ?? '?'} ${c?.message ?? ''}`.trim());
-        }
-        logger.error(`[Trader] Cycle error: ${err.message}${detail ? ` (${detail})` : ''}`);
-        for (const c of causes) logger.error(`[Trader]   ${c}`);
-        ui.setTraderActivity({ state: 'error', detail: 'error — retrying in 1 min' });
-        await this.interruptibleSleep(ERROR_RECOVERY_SLEEP_MS);
-      }
+        sleepMs = cycle.sleepMs;
+        ui.setCycle({ n: this.cycleCount, lastMs: Date.now()-at, inTokens: cycle.inTokens, outTokens: cycle.outTokens });
+      } catch (err: any) { logger.error('[Trader] ' + err.message); }
+      if (!this.running) break;
+      if (this.paused) continue;
+      if (this.wakePending || (!this.paused && pendingCommands('trader').length)) { this.wakePending = false; continue; }
+      ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
+      await this.interruptibleSleep(sleepMs);
     }
-    logger.info('[Trader] Stopped.');
     ui.setTraderActivity({ state: 'idle', detail: 'stopped' });
   }
-
   private interruptibleSleep(ms: number): Promise<void> {
     return new Promise(resolve => {
       const timer = setTimeout(() => { this.wakeUp = null; resolve(); }, ms);
       this.wakeUp = () => { clearTimeout(timer); this.wakeUp = null; resolve(); };
     });
   }
-
-  /** One cycle's outcome: when to wake next, and what it cost. */
   private async runCycle(): Promise<{ sleepMs: number; inTokens: number; outTokens: number }> {
-    const state = getState();
-    const pendingMessages = this.pendingMessages.splice(0);
-
-    const messages: ChatMessage[] = [
-      {
-        role: 'user',
-        content: [{ type: 'text', text: await buildCycleContext(state, pendingMessages) }],
-      },
-    ];
-
-    let scheduledSleepMs = DEFAULT_SLEEP_MS;
-    // Summed across the tool rounds, not taken from the last response: a cycle that called ten
-    // tools paid for ten prompts, and the last one alone understates the cost several-fold.
-    // Providers that report no usage report 0 (see `modelProvider.ts`), which is honest here.
-    let inTokens = 0;
-    let outTokens = 0;
-    // Rendered per cycle, so a hot PLAYBOOK.md edit takes effect on the next one.
-    const prompt = systemPrompt();
-
-    for (let round = 0; round < MAX_ROUNDS; round++) {
-      const response = await this.provider.chat({
-        systemPrompt: prompt,
-        messages,
-        tools: TRADER_TOOL_DEFINITIONS,
-        maxTokens: 4096,
-      });
-
-      inTokens += response.usage.inputTokens;
-      outTokens += response.usage.outputTokens;
-
-      messages.push({ role: 'assistant', content: response.content });
-
-      if (response.stopReason === 'tool_use') {
-        const toolBlocks = response.content.filter(
-          (b): b is Extract<ContentBlock, { type: 'tool_use' }> => b.type === 'tool_use',
-        );
-
-        let sleepCalled = false;
-        const results: ContentBlock[] = [];
-
-        for (const block of toolBlocks) {
-          if (block.name === 'sleep') {
-            const minutes = (block.input.minutes as number) ?? 10;
-            scheduledSleepMs = minutes * 60_000;
-            sleepCalled = true;
-            logger.info(`[Trader] Next cycle in ${minutes} min — ${block.input.reason}`);
-            results.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: JSON.stringify({ ok: true, nextCycleIn: `${minutes} min` }),
-            });
-          } else {
-            const result = await executeTraderTool(block.name, block.input);
-            logger.tool('Trader', block.name, result, block.input);
-            results.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: result,
-            });
-          }
-        }
-
-        messages.push({ role: 'user', content: results });
-
-        if (sleepCalled) break;
-        continue;
-      }
-
-      // end_turn or max_tokens
-      break;
-    }
-
-    return { sleepMs: scheduledSleepMs, inTokens, outTokens };
+    const command = pendingCommands('trader')[0] ?? enqueueCommand('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
+    const hash = getPolicyHash();
+    this.controller = new AbortController();
+    updateCommand(command.id, { status: 'running' });
+    const turn = await runTurn({
+      context: { role: 'trader', commandId: command.id, actorId: command.actorId },
+      provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), [command.text]) }] }],
+      maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
+      beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
+    });
+    const actions = getCommand(command.id)?.actionIds ?? [];
+    updateCommand(command.id, { status: turn.status === 'completed' && actions.length ? 'waiting' : turn.status,
+      result: turn.error ?? (actions.length ? `Actions queued: ${actions.join(', ')}. Execution outcomes are reported separately.` : turn.text || 'Review completed; no trade action was queued.') });
+    if (turn.status === 'completed' && actions.length) refreshCommandOutcome(command.id);
+    return { sleepMs: turn.sleepMs ?? DEFAULT_SLEEP_MS, inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }
 
@@ -388,7 +236,7 @@ async function buildPortfolioContext(
   const theses = new Map(
     needed.size === 0
       ? []
-      : readDecisions().filter(r => needed.has(r.id)).map(r => [r.id, r] as const),
+      : [...needed].map(id => readDecision(id)).filter((r): r is NonNullable<typeof r> => !!r).map(r => [r.id, r] as const),
   );
 
   // One batched resolve for every venue-confirmed holding, BEFORE the loop — never a fetch
@@ -480,7 +328,7 @@ async function buildPortfolioContext(
   // and reports nothing, which is indistinguishable from a position behaving well.
   const unstopped = rows.filter(r => r.e && r.snap?.stopLevel == null).map(r => r.label);
   if (unstopped.length > 0) {
-    lines.push(`Held at the venue with no stop recorded here — the stop detector has no level to compare against and will report nothing, and since the venue stop is placed FROM that level, this system has armed nothing at the venue either: ${unstopped.join(', ')}. Fix with annotate_position; BROKER ORDERS shows what actually rests there.`);
+    lines.push(`Held at the venue with no stop recorded here — the stop detector has no level to compare against and will report nothing, and since the venue stop is placed FROM that level, this system has armed nothing at the venue either: ${unstopped.join(', ')}. Unmanaged holdings need explicit human adoption. For managed holdings inspect broker protection before proposing an adjustment.`);
   }
 
   if (exp) {
@@ -532,7 +380,7 @@ async function buildAccountStatus(): Promise<string> {
     );
     const startEquityStr = account.startOfDayEquity != null
       ? `$${account.startOfDayEquity.toFixed(2)}`
-      : 'unknown — call get_account to initialize';
+      : 'unknown — waiting for the account reset';
     const dayPnlStr = account.dailyPnL != null
       ? ` Day P&L ${account.dailyPnL >= 0 ? '+' : ''}$${account.dailyPnL.toFixed(2)}` +
         (account.dailyPnLPct != null ? ` (${signed(account.dailyPnLPct)}).` : '.')
@@ -631,7 +479,7 @@ function buildPendingProposals(): string {
     lines.push(`[${p.id}] ${p.status.toUpperCase()} ${p.kind} ${p.symbol} — ${p.reason} (${remaining})`);
   }
 
-  lines.push('These wait on a human decision, not on you — get_proposals for the full detail. Nothing here needs a tool call.');
+  lines.push('Only PENDING actions await human approval. Automatic, submitted, partial and unknown actions have their own execution states. get_proposals provides details and confirmed outcomes.');
   lines.push('=== END PENDING PROPOSALS ===');
   return lines.join('\n');
 }
@@ -657,7 +505,7 @@ function buildDecisionHistory(): string {
     const pnl = r.pnl != null ? ` P&L $${r.pnl.toFixed(2)}` : '';
     const why = r.vetoRule ? ` [${r.vetoRule}]` : r.venueMessage ? ` [${r.venueMessage}]` : '';
     lines.push(
-      `  ${r.at.slice(0, 16)} ${r.kind.toUpperCase().padEnd(8)} ${(r.symbol ?? '—').padEnd(6)}${qty}${pnl}${why} — ${r.rationale}`,
+      `  ${r.at.slice(0,16)} ${describeDecision(r)}${why}`,
     );
   }
   lines.push('get_journal(symbol?, limit?) for the full history.');
@@ -699,7 +547,7 @@ const MAX_LESSONS = 20;
  */
 async function buildBrokerOrders(): Promise<string> {
   const lines = ['=== BROKER ORDERS ==='];
-  lines.push('This system sends market orders and protective sell stops. A stop matching a position\'s recorded SL is its own; anything else below was placed outside it. A stop resting here can fill without an execute_exit call.');
+  lines.push('Broker orders below are observations. Ownership is established by recorded order ID, not by price. Stops and targets may fill without an execute_exit call.');
 
   let view: Awaited<ReturnType<typeof brokerOrderView>>;
   try {
@@ -729,7 +577,7 @@ async function buildBrokerOrders(): Promise<string> {
       .filter(r => r.stopLevelRecordedHere != null && r.venueStop == null)
       .map(r => r.symbol);
     if (noVenueStop.length > 0) {
-      lines.push(`SL recorded here but NO stop resting at the venue — protected only while this process runs: ${noVenueStop.join(', ')}. Permanent for a crypto pair (the venue rejects a plain stop on a coin); for an equity the stop sweep retries every minute, so it is either seconds old or being refused.`);
+      lines.push(`SL recorded here but NO stop resting at the venue — protected only while this process runs: ${noVenueStop.join(', ')}. Inspect the protection status and unresolved actions; unsupported holdings require operator review.`);
     }
 
     for (const m of view.stopMismatches) {
@@ -757,15 +605,15 @@ function describeOrder(o: OpenOrder): string {
 }
 
 function buildLessons(): string {
-  const all = readLessons();
+  const all = readLessons(20);
   if (all.length === 0) return '';
 
   const shown = all.slice(-MAX_LESSONS);
   const lines = [`=== LESSONS (${shown.length}${all.length > shown.length ? ` of ${all.length}` : ''}) ===`];
-  lines.push('Written by earlier cycles of this system. They are standing rules of thumb, not history — treat them as binding unless this cycle produces evidence against one, in which case write the correction with write_lesson.');
+  lines.push('Research observations from previous cycles. These are suggestions, not permissions or binding rules. The active strategy and account mandate always take precedence.');
   for (const lesson of shown) {
     lines.push('');
-    lines.push(lesson);
+    lines.push(lesson.slice(0,600));
   }
   lines.push('=== END LESSONS ===');
   return lines.join('\n');
@@ -776,11 +624,19 @@ function buildLessons(): string {
  * daemon; this is the user half, and every block in it is prose the model will read as fact —
  * so it has to be readable without starting a trading loop to see it.
  */
-export async function buildCycleContext(
+async function renderCycleContext(
   state: ReturnType<typeof getState>,
   pendingMessages: string[],
 ): Promise<string> {
   const lines: string[] = [`=== CYCLE: ${new Date().toISOString()} ===`];
+
+  if (pendingMessages.length > 0) {
+    lines.push('');
+    lines.push('=== OPERATOR INSTRUCTIONS ===');
+    pendingMessages.forEach(m => lines.push(`> ${m}`));
+    lines.push('=== END OPERATOR INSTRUCTIONS ===');
+    lines.push('Act on these instructions as part of this cycle.');
+  }
 
   // First, before any of the standing bookkeeping: the events are the reason this cycle
   // exists at all, and a wake whose trigger is buried under the portfolio reads as a
@@ -808,13 +664,7 @@ export async function buildCycleContext(
   const lessonsCtx = buildLessons();
   if (lessonsCtx) { lines.push(''); lines.push(lessonsCtx); }
 
-  if (pendingMessages.length > 0) {
-    lines.push('');
-    lines.push('=== OPERATOR INSTRUCTIONS ===');
-    pendingMessages.forEach(m => lines.push(`> ${m}`));
-    lines.push('=== END OPERATOR INSTRUCTIONS ===');
-    lines.push('Act on these instructions as part of this cycle.');
-  }
+
 
   lines.push('');
   lines.push('If MACHINE EVENTS are present, deal with the critical and urgent ones before anything else. Otherwise start from MARKET & ACCOUNT and PORTFOLIO CONTEXT above — get_market_status / get_account / get_positions are for a fresher read on demand, not a mandatory first step. End with sleep().');
@@ -822,3 +672,7 @@ export async function buildCycleContext(
   return lines.join('\n');
 }
 
+
+export function buildCycleContext(state: ReturnType<typeof getState>, pendingMessages: string[]): Promise<string> {
+  return withAccountRead(() => renderCycleContext(state, pendingMessages));
+}

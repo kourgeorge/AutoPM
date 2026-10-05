@@ -12,7 +12,6 @@ data/proposals.jsonl
 data/LESSONS.md
 data/sectors.json
 data/fundamentals.json
-package-lock.json
 # Throwaway probe scripts and their output. Under ./tmp rather than /tmp because
 # ts-node resolves against rootDir; kept out of git because each one answers a
 # single question about live data and is worthless the day after.
@@ -57,3 +56,8 @@ autotrade-system-architecture.visual-check.*
 
 # A real position export — actual holdings and cost basis. This repo is PUBLIC.
 autotrade-positions-import.csv
+
+# Account database, its WAL files, and account job artifacts.
+data/*.sqlite*
+data/jobs/
+data/backups/

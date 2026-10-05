@@ -5,6 +5,7 @@
  * Alpaca data and trading APIs via axios, using the same credentials as the broker.
  */
 
+import { config } from '../core/config';
 import type { ToolDefinition } from '../core/types';
 import {
   alpacaData as dataClient,
@@ -23,7 +24,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         symbols:   { type: 'string',  description: 'Ticker symbol, e.g. "AAPL".' },
         timeframe: { type: 'string',  description: 'Bar size: "1Min", "5Min", "15Min", "1Hour", "1Day". Default "1Day".' },
-        limit:     { type: 'integer', description: 'Bars to return, newest last (default 20, max 1000).' },
+        limit:     { type: 'integer', description: 'Bars to return, newest last (default 20, max 100).' },
         start:     { type: 'string',  description: 'ISO 8601 start date, e.g. "2025-01-01". Defaults to a window wide enough for `limit` bars.' },
         end:       { type: 'string',  description: 'ISO 8601 end date. Defaults to 16 minutes ago, the earliest the consolidated tape may be queried.' },
         feed:      { type: 'string',  enum: ['sip', 'iex'], description: 'Leave unset for the full consolidated tape. "iex" is one venue, under 3% of volume — only for comparing against it deliberately.' },
@@ -84,7 +85,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         symbols: { type: 'string',  description: 'Comma-separated tickers, e.g. "AAPL,MSFT". Omit for general market news.' },
-        limit:   { type: 'integer', description: 'Articles to return (default 10, max 50).' },
+        limit:   { type: 'integer', minimum: 1, maximum: 50, description: 'Articles to return (default 10, max 50).' },
         start:   { type: 'string',  description: 'ISO 8601 start datetime.' },
         end:     { type: 'string',  description: 'ISO 8601 end datetime.' },
       },
@@ -93,7 +94,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_portfolio_history',
-    description: 'Account equity and P&L over a historical period.',
+    description: 'Raw account equity history. Deposits and withdrawals can change equity; this is not investment return. Use get_benchmark for verified performance.',
     input_schema: {
       type: 'object',
       properties: {
@@ -164,7 +165,7 @@ const DAYS_PER_BAR: Record<string, number> = {
  */
 async function getStockBars(input: Record<string, unknown>): Promise<string> {
   const timeframe = String(input.timeframe ?? '1Day');
-  const limit = Number(input.limit ?? 20);
+  const limit = Math.max(1, Math.min(100, Number(input.limit ?? 20)));
 
   const params: Record<string, unknown> = {
     symbols:   input.symbols,
@@ -224,7 +225,7 @@ async function getMarketMovers(input: Record<string, unknown>): Promise<string> 
 }
 
 async function getNews(input: Record<string, unknown>): Promise<string> {
-  const params: Record<string, unknown> = { limit: input.limit ?? 10 };
+  const params: Record<string, unknown> = { limit: Math.max(1, Math.min(50, Number(input.limit ?? 10))) };
   if (input.symbols) params.symbols = input.symbols;
   if (input.start)   params.start   = input.start;
   if (input.end)     params.end     = input.end;
@@ -234,6 +235,7 @@ async function getNews(input: Record<string, unknown>): Promise<string> {
 }
 
 async function getPortfolioHistory(input: Record<string, unknown>): Promise<string> {
+  if (config.broker !== 'alpaca') return JSON.stringify({ error: 'Portfolio history is not supported by the active broker' });
   const params: Record<string, unknown> = { period: input.period ?? '1W' };
   if (input.timeframe) params.timeframe = input.timeframe;
 

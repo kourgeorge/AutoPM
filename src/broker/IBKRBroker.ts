@@ -1,8 +1,9 @@
-import { IBApiNext } from '@stoqey/ib';
+import { assertExecutionOwner } from '../core/runtime';
+import { IBApiNext, type OpenOrder as IbOrder } from '@stoqey/ib';
 import { firstValueFrom } from 'rxjs';
 import { config } from '../core/config';
 import { etNow } from '../core/time';
-import type { IBroker, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
+import type { IBroker, ExecutionOrder, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
 import { BrokerRejection } from './errors';
 import { logger } from '../core/logger';
 import { isCryptoSymbol } from '../core/symbols';
@@ -120,12 +121,20 @@ const IB_SIDE: Record<string, 'buy' | 'sell'> = {
 export class IBKRBroker implements IBroker {
   private readonly api: IBApiNext;
   private readonly account: string;
+  private readonly observedOrders = new Map<string, IbOrder>();
 
   constructor() {
     const { host, port, clientId, account } = config.ibkr;
+    if (!account) throw new Error('IBKR_ACCOUNT is required; implicit account selection is disabled');
     this.account = account;
     this.api = new IBApiNext({ host, port, reconnectInterval: 5_000 });
     this.api.connect(clientId);
+    this.api.getOpenOrders().subscribe({
+      next: update => { for (const order of update.all) {
+        if (order.order.account === this.account) this.observedOrders.set(String(order.orderId), order);
+      } },
+      error: err => logger.warn('[IBKR] order updates disconnected: ' + String(err)),
+    });
 
     // placeNewOrder/modifyOrder resolve once the request is SENT to TWS, not once TWS accepts
     // it — a rejection (bad permissions, read-only API, a sanity check, ...) only ever surfaces
@@ -145,11 +154,8 @@ export class IBKRBroker implements IBroker {
       'getAccountInfo',
     );
 
-    // Pick the configured account or fall back to the first available one.
-    const tagValues =
-      (this.account && update.all.has(this.account)
-        ? update.all.get(this.account)
-        : update.all.values().next().value) ?? new Map();
+    const tagValues = update.all.get(this.account);
+    if (!tagValues) throw new Error('Configured IBKR account is not available');
 
     const usd = (tag: string): number => {
       const v = (tagValues as Map<string, any>).get(tag)?.get('USD')?.value;
@@ -157,6 +163,7 @@ export class IBKRBroker implements IBroker {
     };
 
     return {
+      accountId: this.account,
       equity:      usd('NetLiquidation'),
       cash:        usd('TotalCashValue'),
       buyingPower: usd('BuyingPower'),
@@ -174,11 +181,12 @@ export class IBKRBroker implements IBroker {
     );
 
     const result: Position[] = [];
-    for (const acctPositions of update.all.values()) {
+    for (const acctPositions of [update.all.get(this.account) ?? []]) {
       for (const p of acctPositions) {
         if (!p.pos) continue;
         result.push({
-          symbol:        p.contract.symbol ?? '',
+          assetClass: p.contract.secType === 'STK' && p.contract.currency === 'USD' ? 'equity' : 'other',
+          symbol: p.contract.secType === 'STK' && p.contract.currency === 'USD' ? p.contract.symbol ?? '' : `${p.contract.localSymbol ?? p.contract.symbol}:${p.contract.secType}:${p.contract.conId}`,
           qty:           p.pos,
           avgCost:       p.avgCost ?? 0,
           marketValue:   p.marketValue ?? undefined,
@@ -191,7 +199,7 @@ export class IBKRBroker implements IBroker {
 
   async getOpenOrders(): Promise<OpenOrder[]> {
     const orders = await withTimeout(this.api.getAllOpenOrders(), 'getOpenOrders');
-    return orders.map(o => {
+    return orders.filter(o => o.order.account === this.account).map(o => {
       const rawType = String(o.order.orderType ?? '');
       const type = IB_ORDER_TYPES[rawType] ?? 'other';
       // TWS overloads one field: `auxPrice` is the trigger on a stop and the trail distance
@@ -199,6 +207,8 @@ export class IBKRBroker implements IBroker {
       const aux = typeof o.order.auxPrice === 'number' ? o.order.auxPrice : undefined;
       return {
         id:           String(o.orderId),
+        clientOrderId: o.order.orderRef,
+        groupId: o.order.ocaGroup,
         symbol:       o.contract.symbol ?? '',
         side:         (o.order.action === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell',
         qty:          Number(o.order.totalQuantity ?? 0),
@@ -223,6 +233,7 @@ export class IBKRBroker implements IBroker {
       currency: 'USD',
     };
     const order = {
+      account: this.account, orderRef: req.clientOrderId,
       action:        req.side === 'buy' ? 'BUY' : 'SELL',
       totalQuantity: req.qty,
       orderType:     IB_TYPE_OUT[req.type],
@@ -232,7 +243,7 @@ export class IBKRBroker implements IBroker {
       auxPrice:      req.type === 'stop' ? req.stopPrice : undefined,
       // A STOP IS ALWAYS GTC — DAY would cancel the protection at every close, which is the
       // window it exists to cover. Crypto is GTC because that is all the venue accepts for it.
-      tif:           req.type === 'stop' || isCryptoSymbol(req.symbol) ? 'GTC' : 'DAY',
+      tif:           req.timeInForce?.toUpperCase() ?? (req.type === 'stop' || isCryptoSymbol(req.symbol) ? 'GTC' : 'DAY'),
     };
 
     let orderId: number;
@@ -250,8 +261,35 @@ export class IBKRBroker implements IBroker {
     return { id: String(orderId) };
   }
 
+  private async lookupOrder(id?: string, ref?: string): Promise<ExecutionOrder | null> {
+    const orders = await withTimeout(this.api.getAllOpenOrders(), 'getAllOpenOrders');
+    for (const order of orders) if (order.order.account === this.account) this.observedOrders.set(String(order.orderId), order);
+    const order = [...this.observedOrders.values()].find(o => o.order.account === this.account && (id ? String(o.orderId) === id : o.order.orderRef === ref));
+    if (!order) return null; // TWS cannot prove a historical order is absent. Never auto-resubmit.
+    const filledQty = order.orderStatus?.filled ?? 0;
+    const status = String(order.orderStatus?.status ?? '');
+    return { id: String(order.orderId), clientOrderId: order.order.orderRef,
+      symbol: order.contract.symbol ?? '', side: order.order.action === 'BUY' ? 'buy' : 'sell',
+      qty: Number(order.order.totalQuantity), filledQty, filledPrice: order.orderStatus?.avgFillPrice ?? null,
+      status: status === 'Filled' ? 'filled' : ['Cancelled','ApiCancelled'].includes(status) ? 'cancelled'
+        : status === 'Inactive' ? 'rejected' : filledQty > 0 ? 'partial' : 'open' };
+  }
+  getOrder(id: string): Promise<ExecutionOrder | null> { return this.lookupOrder(id); }
+  findOrder(ref: string): Promise<ExecutionOrder | null> { return this.lookupOrder(undefined, ref); }
+
   async cancelOrder(id: string): Promise<void> {
+    const before = await this.getOrder(id);
+    if (!before) throw new Error('Cannot verify ownership/status of order ' + id);
+    assertExecutionOwner();
     this.api.cancelOrder(parseInt(id, 10));
+    // Absence from open orders does not prove cancellation rather than a racing fill.
+    for (let i = 0; i < 20; i++) {
+      const after = await this.getOrder(id);
+      if (after?.status === 'cancelled') return;
+      if (after?.status === 'filled') throw new Error('Order filled during cancellation');
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error('IBKR cancellation is unconfirmed; execution deferred for reconciliation');
   }
 
   /**
@@ -263,15 +301,12 @@ export class IBKRBroker implements IBroker {
    * field moved. Reconstructing it from our own records instead would quietly rewrite the qty or
    * the TIF of an order we may not have placed.
    *
-   * CAVEAT, and it is the same one `orderManager.ts` documents for `cancelOrder`: this is void
-   * and fire-and-forget. TWS confirms asynchronously, so a resolved promise here means the
-   * request was handed over, NOT that the stop moved. Alpaca's is a round trip that either
-   * returns the new order or throws.
+   * Modification is confirmed by a subsequent broker order read; timeouts remain unknown.
    */
   async replaceStopOrder(id: string, stopPrice: number): Promise<{ id: string }> {
     const orderId = parseInt(id, 10);
     const open = await withTimeout(this.api.getAllOpenOrders(), 'getAllOpenOrders');
-    const existing = open.find(o => o.orderId === orderId);
+    const existing = open.find(o => o.orderId === orderId && o.order.account === this.account);
 
     if (!existing) {
       // Not found means filled, cancelled, or placed by another client id. All three mean the
@@ -285,6 +320,7 @@ export class IBKRBroker implements IBroker {
     }
 
     try {
+      assertExecutionOwner();
       this.api.modifyOrder(orderId, existing.contract, {
         ...existing.order,
         auxPrice: stopPrice,
@@ -294,7 +330,13 @@ export class IBKRBroker implements IBroker {
       throw new BrokerRejection(null, inner.message, null, { replaceStopOrderId: id, stopPrice });
     }
 
-    return { id };
+    for (let i = 0; i < 20; i++) {
+      const open = await this.getOpenOrders();
+      const confirmed = open.find(o => o.id === id);
+      if (confirmed && confirmed.stopPrice === stopPrice) return { id };
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error('IBKR stop replacement is unconfirmed');
   }
 
   /**
@@ -315,9 +357,10 @@ export class IBKRBroker implements IBroker {
       exchange: 'SMART',
       currency: 'USD',
     };
-    const ocaGroup = `oco-${req.symbol}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const ocaGroup = req.clientOrderId ?? `oco-${req.symbol}-${Date.now()}`;
 
     const stopOrder = {
+      account: this.account, orderRef: req.clientOrderId ? req.clientOrderId + '-stop' : undefined,
       action:        'SELL',
       totalQuantity: req.qty,
       orderType:     'STP',
@@ -327,6 +370,7 @@ export class IBKRBroker implements IBroker {
       ocaType:       1,
     };
     const takeProfitOrder = {
+      account: this.account, orderRef: req.clientOrderId ? req.clientOrderId + '-target' : undefined,
       action:        'SELL',
       totalQuantity: req.qty,
       orderType:     'LMT',
@@ -349,19 +393,13 @@ export class IBKRBroker implements IBroker {
 
     let takeProfitOrderId: number;
     try {
+      assertExecutionOwner();
       takeProfitOrderId = await withTimeout(
         this.api.placeNewOrder(contract as any, takeProfitOrder as any),
         'placeOco(takeProfit)',
       );
     } catch (err: any) {
-      // The stop leg landed and the take-profit leg didn't. Cancel the lone leg rather than
-      // hand the caller a half-armed pair it doesn't know about — the same "never leave a
-      // partial state undocumented" rule the repair pass in `stopOrders.ts` relies on.
-      try {
-        this.api.cancelOrder(stopOrderId);
-      } catch {
-        // Best-effort; the sweep's repair pass will find and clear the orphaned leg either way.
-      }
+      // Retain the accepted protective stop. The durable intent records the uncertain pair.
       const inner: Error = err?.error ?? err;
       throw new BrokerRejection(null, inner.message, null, req);
     }
@@ -371,12 +409,12 @@ export class IBKRBroker implements IBroker {
 
   /**
    * Same read-back-then-`modifyOrder` pattern as `replaceStopOrder`, changing `lmtPrice`
-   * instead of `auxPrice`. Same fire-and-forget caveat applies.
+   * instead of `auxPrice`. Confirmation uses a subsequent broker order read.
    */
   async replaceTakeProfitOrder(id: string, limitPrice: number): Promise<{ id: string }> {
     const orderId = parseInt(id, 10);
     const open = await withTimeout(this.api.getAllOpenOrders(), 'getAllOpenOrders');
-    const existing = open.find(o => o.orderId === orderId);
+    const existing = open.find(o => o.orderId === orderId && o.order.account === this.account);
 
     if (!existing) {
       throw new BrokerRejection(
@@ -388,6 +426,7 @@ export class IBKRBroker implements IBroker {
     }
 
     try {
+      assertExecutionOwner();
       this.api.modifyOrder(orderId, existing.contract, {
         ...existing.order,
         lmtPrice: limitPrice,
@@ -397,7 +436,12 @@ export class IBKRBroker implements IBroker {
       throw new BrokerRejection(null, inner.message, null, { replaceTakeProfitOrderId: id, limitPrice });
     }
 
-    return { id };
+    for (let i = 0; i < 20; i++) {
+      const confirmed = (await this.getOpenOrders()).find(o => o.id === id);
+      if (confirmed && confirmed.limitPrice === limitPrice) return { id };
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error('IBKR target replacement is unconfirmed');
   }
 
   /**
@@ -434,7 +478,7 @@ export class IBKRBroker implements IBroker {
     const ingestedAt = new Date().toISOString();
 
     return details
-      .filter(d => d.execution.execId != null)
+      .filter(d => d.execution.execId != null && d.execution.acctNumber === this.account && d.contract.secType === 'STK' && d.contract.currency === 'USD')
       // An unrecognised side is DROPPED, not guessed. The old ternary sent everything that
       // was not BOT/BUY down the `sell` branch, so a blank or renamed side became a sell —
       // and a fabricated sell against a real position fabricates an EXIT, which enters the

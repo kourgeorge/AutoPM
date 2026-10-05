@@ -42,6 +42,7 @@ if (!config.alpaca.keyId || !config.alpaca.secretKey) {
 function makeClient(baseURL: string): AxiosInstance {
   return axios.create({
     baseURL,
+    timeout: config.requestTimeoutMs,
     headers: {
       'APCA-API-KEY-ID': config.alpaca.keyId,
       'APCA-API-SECRET-KEY': config.alpaca.secretKey,

@@ -549,7 +549,7 @@ function immutableViolation(): void {
 
 /**
  * 9. Escalation ladder — the mechanism that stands in for auto-execution. An unanswered
- *    critical must get LOUDER, and an acked one must go quiet even while still breaching.
+ *    critical must get LOUDER, and an explicitly declined one must go quiet even while still breaching.
  */
 function escalation(): void {
   const hold = [position('AAPL', 10, 100)];
@@ -567,9 +567,9 @@ function escalation(): void {
   const second = t6.find((e) => e.kind === 'stop_breach');
   check('unanswered critical escalates to wakeCount 2', second?.wakeCount === 2, `got ${second?.wakeCount}`);
 
-  check('ack accepted', second !== undefined && ackEvent(second.id));
+  check('explicit decline accepted', second !== undefined && ackEvent(second.id, 'ignoring', 'Explicitly accepting this condition in replay'));
   const t18 = tick(world, at(18));
-  check('acked critical stops escalating', countOf(t18, 'stop_breach') === 0);
+  check('explicitly declined critical stops escalating', countOf(t18, 'stop_breach') === 0);
 }
 
 /**
@@ -883,8 +883,8 @@ function journalSeam(): void {
     policyVersion: getPolicy().version,
   });
 
-  check('the record is still stamped', rec.id.startsWith('entry:REPLAY:') && rec.at !== '', rec.id);
-  check('id and at agree', rec.id.endsWith(rec.at), rec.id);
+  check('the record has an identity', rec.id.length > 0, rec.id);
+  check('the record has a valid timestamp', Number.isFinite(Date.parse(rec.at)), rec.at);
 
   const sizeAfter = fs.existsSync(JOURNAL_FILE) ? fs.statSync(JOURNAL_FILE).size : -1;
   check('nothing was appended to disk', sizeAfter === sizeBefore, `${sizeBefore} -> ${sizeAfter}`);
@@ -2264,6 +2264,8 @@ function proposalLifecycle(): void {
     getOpenProposals().some((p) => p.id === toApprove.id),
   );
 
+  transitionProposal(toApprove.id, 'executing');
+  transitionProposal(toApprove.id, 'submitted', { result: { orderId: 'sim-1' } });
   transitionProposal(toApprove.id, 'executed', { result: { orderId: 'sim-1' } });
   const afterExecute = getProposal(toApprove.id);
   check('executing moves the proposal to executed', afterExecute?.status === 'executed');

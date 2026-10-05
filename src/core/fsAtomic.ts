@@ -1,22 +1,4 @@
-/**
- * Whole-file writes that a crash cannot truncate.
- *
- * `fs.writeFileSync` truncates the target and then writes, so a crash — or a full disk —
- * mid-write leaves a half-written file where a complete one used to be. `rename` within a
- * filesystem is atomic, so writing a sibling temp file and renaming it over the target means
- * a reader only ever sees the old contents or the new ones, never a prefix of the new.
- *
- * This exists as one function because three files needed it and only one had it: `policy.yaml`
- * is read by every startup path, `data/state.json` is rewritten on a debounce many times a
- * minute and its loader treats a parse failure as "start fresh" (silently discarding every
- * position snapshot), and `data/sectors.json` is a cache. Three copies of a temp-and-rename
- * dance would be three chances to forget the unlink on failure.
- *
- * NOT for the append-only writers (`journal.ts`, `lessons.ts`, `fillsLedger.ts`): an append
- * never truncates what is already on disk, so it is a different hazard class and a
- * rename-over would be actively wrong there.
- */
-
+/** Atomic replacement for regenerable cache files. Financial data uses SQLite. */
 import fs from 'fs';
 
 /**
