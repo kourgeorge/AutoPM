@@ -8,6 +8,7 @@ import { listRecords, readRecord, saveRecord, transaction } from './storage';
 import { agentContext, assertAgentActive, recordToolResult } from './agentContext';
 import { getRequest, linkRequestAction, updateRequest } from './requests';
 import { decision, recordDecision, recordDecisionOutcome, readDecision } from '../journal/journal';
+import { playDing } from './sound';
 
 const OPEN: ActionStatus[] = ['pending', 'approved', 'executing', 'submitted', 'partial', 'unknown'];
 const NEXT: Record<ActionStatus, ActionStatus[]> = {
@@ -92,7 +93,7 @@ export interface TransitionMeta {
   result?: NonNullable<Action['result']>; decisionId?: string;
 }
 export function transitionAction(id: string, status: ActionStatus, meta: TransitionMeta = {}): Action {
-  return transaction(() => {
+  const next = transaction(() => {
     const p = getAction(id);
     if (!p) throw new Error('no such action: ' + id);
     if (!NEXT[p.status].includes(status)) throw new Error(`Action ${id} is already ${p.status}; cannot change to ${status}`);
@@ -106,6 +107,9 @@ export function transitionAction(id: string, status: ActionStatus, meta: Transit
     for (const row of listRecords<{ actionIds?: string[] }>('requests', { where: c => c.actionIds?.includes(id) ?? false })) refreshRequestOutcome(row.id);
     return next;
   });
+  // After the transaction commits, so a rolled-back fill never dings. `executed` is reached once.
+  if (status === 'executed' && (next.kind === 'entry' || next.kind === 'exit')) playDing();
+  return next;
 }
 export function decideAction(id: string, decision: 'approve' | 'reject', decidedBy: 'human' | 'timeout', rejectReason?: string, actorId = 'operator'): Action {
   const current = getAction(id);
