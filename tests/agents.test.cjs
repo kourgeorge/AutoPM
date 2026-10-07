@@ -95,17 +95,24 @@ test('concierge settings reads are fresh, local and unaffected by conflicting pl
   assert.equal(JSON.parse(await concierge.executeTool('get_strategy_settings', { activate: true })).ok, false);
 });
 
-test('concierge risk-profile suggestions remain separate from the saved settings', async () => {
-  const concierge = new ConciergeAgent(() => assert.fail('Settings questions must not wake the trader'));
+test('concierge saves requested settings changes and refuses invalid ones', async () => {
+  const concierge = new ConciergeAgent(() => assert.fail('Settings changes must not wake the trader'));
+  const before = policy.getPolicySnapshot();
+  const values = { riskPerTradePct: 0.75, targetVolatilityPct: 20, minRewardRisk: 2.5, maxSectorWeightPct: 20 };
+  const result = JSON.parse(await concierge.executeTool('update_trading_settings', values));
+  assert.equal(result.ok, true);
+  assert.ok(result.applied.some(line => /riskPerTradePct: 0\.5 → 0\.75/.test(line)));
+  assert.equal(result.saved.risk.riskPerTradePctOfEquity, 0.75);
+  assert.notEqual(policy.getPolicyHash(), before.hash);
+  const fresh = JSON.parse(await concierge.executeTool('get_strategy_settings', {}));
+  assert.equal(fresh.risk.riskPerTradePctOfEquity, 0.75);
+  assert.equal(fresh.risk.annualizedPortfolioVolatilityTargetPct, 20);
+  assert.deepEqual(policy.getPolicy().automation, before.policy.automation);
   const hash = policy.getPolicyHash();
-  const values = { riskPerTradePct: 0.25, targetVolatilityPct: 8, minRewardRisk: 2.5, maxSectorWeightPct: 20 };
-  const action = JSON.parse(await concierge.executeTool('update_trading_settings', values));
-  assert.deepEqual(action.proposedSettings, values);
-  assert.match(action.note, /not changed/);
-  assert.equal(policy.getPolicyHash(), hash);
-  assert.equal(JSON.parse(await concierge.executeTool('get_strategy_settings', {})).risk.riskPerTradePctOfEquity, 0.5);
   assert.equal(JSON.parse(await concierge.executeTool('update_trading_settings', { riskPerTradePct: 50 })).ok, false);
+  assert.equal(policy.getPolicyHash(), hash);
   assert.equal(commands.pendingRequests('trader').length, 0);
+  policy.saveStrategy(before.policy, hash, 'test', before.playbook);
 });
 
 test('a settings explanation reaches the account conversation without a trader handoff', async () => {
@@ -113,7 +120,7 @@ test('a settings explanation reaches the account conversation without a trader h
   let rounds = 0;
   concierge.provider = { chat: async request => {
     assert.match(request.systemPrompt, /Read get_strategy_settings afresh/);
-    assert.match(request.systemPrompt, /Settings questions are read-only/);
+    assert.match(request.systemPrompt, /Settings questions do not wake the trader/);
     assert.ok(request.tools.some(tool => tool.name === 'get_strategy_settings'));
     if (rounds++ === 0) return toolResponse([['get_strategy_settings', {}]]);
     const result = request.messages.flatMap(m => m.content).find(b => b.type === 'tool_result');
