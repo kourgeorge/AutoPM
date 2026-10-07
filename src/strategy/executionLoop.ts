@@ -1,6 +1,6 @@
-import { sweepProposals } from './proposalExecutor';
+import { sweepActions } from './actionExecutor';
 import { sweepStops } from './stopOrders';
-import { executionHealthy, renewLease, runtimeFailed } from '../core/runtime';
+import { executionHealthy, runtimeFailed } from '../core/runtime';
 import { logger } from '../core/logger';
 import { refreshJournalProtection } from '../journal/protection';
 
@@ -14,8 +14,7 @@ export class ExecutionLoop {
     if (!this.running) return;
     this.active = (async () => {
       try {
-        renewLease();
-        await sweepProposals();
+        await sweepActions();
         await sweepStops();
         await refreshJournalProtection();
         executionHealthy();

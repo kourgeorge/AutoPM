@@ -1,4 +1,4 @@
-/** Atomic replacement for regenerable cache files. Financial data uses SQLite. */
+/** Atomic replacement for regenerable cache files. Account data goes through `storage.ts`. */
 import fs from 'fs';
 
 /**

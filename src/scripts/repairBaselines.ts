@@ -34,7 +34,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import { fetchTradedRange } from '../collect/priceSource';
 import { canonicalSymbol } from '../core/symbols';
-import { openedAtFromFills } from '../review/fillsLedger';
+import { openedAtFromFills } from '../review/fills';
 import { getPositionSnapshot, getState, patchPositionSnapshot, type PositionSnapshot } from '../state/state';
 
 const WRITE = process.argv.includes('--write');

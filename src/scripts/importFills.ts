@@ -1,7 +1,7 @@
 import fs from 'fs';
 import crypto from 'crypto';
 import { getState } from '../state/state';
-import { recordFills } from '../review/fillsLedger';
+import { recordFills } from '../review/fills';
 import { transaction, appendRecord, closeStorage } from '../core/storage';
 import type { Fill } from '../broker/IBroker';
 
@@ -16,7 +16,7 @@ try {
   }
   const count = transaction(() => {
     const added = recordFills(input.fills as Fill[]);
-    appendRecord('operator', crypto.randomUUID(), new Date().toISOString(), { action: 'import_fills', actorId: 'host-admin', count: added, sourceHash: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') });
+    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { action: 'import_fills', actorId: 'host-admin', count: added, sourceHash: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') });
     return added;
   });
   process.stdout.write(`Imported ${count} new or corrected fills for ${input.accountId}.\n`);

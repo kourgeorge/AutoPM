@@ -44,6 +44,7 @@ export interface DecisionRecord {
    * What the decision INTENDED, recorded even when nothing filled. A veto with no
    * intended stop is indistinguishable from one with a bad stop unless this is here.
    */
+  intendedPrice?: number | null;
   intendedStop: number | null;
   intendedTarget: number | null;
   atrAtEntry: number | null;
@@ -76,10 +77,9 @@ export interface DecisionRecord {
   /** `Policy.version` at the moment of the decision — a number, as declared. */
   policyVersion: number;
   policyHash?: string;
-  accountId?: string | null;
-  proposalId?: string;
+  actionId?: string;
   orderStatus?: string;
-  commandId?: string;
+  requestId?: string;
   actorId?: string;
   requestedQty?: number | null;
   filledQty?: number;

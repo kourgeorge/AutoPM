@@ -18,14 +18,11 @@
  * case it was written for.
  */
 
-import { appendRecord, readRecords, importJsonLines, transaction } from '../core/storage';
-import path from 'path';
+import { appendRecord, readRecords, transaction } from '../core/storage';
 import { logger } from '../core/logger';
 import type { Fill } from '../broker/IBroker';
 import { canonicalSymbol } from '../core/symbols';
-import { DATA_DIR, ensureDataDir } from '../core/paths';
 
-export const FILLS_FILE = path.join(DATA_DIR, 'fills.jsonl');
 
 let _ephemeral = false;
 
@@ -65,10 +62,9 @@ function identify(execId: string): { base: string; revision: number } {
  */
 export function readFills(opts: { symbol?: string; since?: Date } = {}): Fill[] {
   if (_ephemeral) return [];
-  importJsonLines('fill', FILLS_FILE);
   const byBase = new Map<string, { revision: number; order: number; fill: Fill }>();
   let order = 0;
-  for (const fill of readRecords<Fill>('fill')) {
+  for (const fill of readRecords<Fill>('fills')) {
     const { base, revision } = identify(fill.execId);
     const existing = byBase.get(base);
     // `>=` and not `>`: a re-append of the same revision is the ordinary case (two
@@ -131,7 +127,7 @@ export function recordFills(fills: Fill[]): number {
 
   if (!_ephemeral) {
     transaction(() => {
-      for (const fill of fresh) appendRecord('fill', fill.execId, fill.at, fill);
+      for (const fill of fresh) appendRecord('fills', fill.execId, fill.at, fill);
     });
   }
 

@@ -30,7 +30,7 @@ import {
   isAtMaxPositions,
 } from './riskManager';
 import { automationLevel } from '../core/automation';
-import { createProposal } from '../core/proposals';
+import { createAction } from '../core/actions';
 import { config } from '../core/config';
 import { hasRiskProfile } from '../policy/riskProfiles';
 import { assessEntryRisk, entryLimitPrice, type RiskAssessment } from './riskBudget';
@@ -338,12 +338,12 @@ export interface ValidatedEntry {
 
 export type SubmittedEntry = { status: 'submitted'; orderId: string; qty: number };
 
-export type QueuedAction = { status: import('../state/state').ProposalStatus; proposalId: string; automatic: boolean };
+export type QueuedAction = { status: import('../state/state').ActionStatus; actionId: string; automatic: boolean };
 
 /**
  * The guard chain, unchanged from before the automation split — every `reject()` call below
  * is the same rule, same order, same message, whether the action ends up executed immediately
- * or held as a proposal for a human to decide.
+ * or held as an action for a human to decide.
  */
 export async function validateEntry(signal: SignalResult, qty: number, approvedMaxQty = qty): Promise<ValidatedEntry> {
   const { symbol, stopLoss, takeProfit, atr } = signal;
@@ -381,7 +381,7 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   const quotes = await collectPrices([symbol], getPolicy().triggers.maxQuoteAgeMs);
   const quote = quotes.get(symbol);
   if (!quote || !isPresent(quote) || quote.stale) reject('quote_unavailable', 'A fresh price is required before entry');
-  if (Math.abs(quote.value / price - 1) > 0.01) reject('price_changed', 'Price moved more than 1%; request a fresh proposal');
+  if (Math.abs(quote.value / price - 1) > 0.01) reject('price_changed', 'Price moved more than 1%; request a fresh action');
   // A limit order uses this ceiling, so the sizing checks bound actual entry notional.
   price = entryLimitPrice(price, quote.value);
   if (stopLoss >= quote.value || takeProfit <= price) reject('invalid_levels', 'Stop/target must bracket the current price');
@@ -519,11 +519,11 @@ export async function actEntry(v: ValidatedEntry, clientOrderId?: string): Promi
 export async function enterPosition(signal: SignalResult, qty: number, eventId?: string): Promise<QueuedAction> {
   const validated = await validateEntry(signal, qty);
   const automatic = automationLevel('entry') === 'auto';
-  const proposal = createProposal({ kind: 'entry', symbol: validated.symbol, venue: config.venue,
+  const action = createAction({ kind: 'entry', symbol: validated.symbol, venue: config.venue,
     automatic, params: { signal, qty, maxQty: validated.regimeQty, price: signal.price,
       stopLoss: signal.stopLoss, takeProfit: signal.takeProfit, riskAssessment: validated.riskAssessment }, reason: signal.reason, eventId,
     timeoutMs: getPolicy().automation.timeoutMs });
-  return { status: proposal.status, proposalId: proposal.id, automatic: proposal.automatic ?? false };
+  return { status: action.status, actionId: action.id, automatic: action.automatic ?? false };
 }
 
 /**
@@ -731,19 +731,19 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
 
 /**
  * When the automation level for `exit` is `manual`, this validates and then STOPS — it creates
- * a proposal and returns `pending` immediately, WITHOUT cancelling the resting stop/take-profit
- * pair or touching the venue. A human's `approve <id>` is picked up by `proposalExecutor.ts`'s
- * `sweepProposals()` on a later tick, which re-validates against the position as it stands at
+ * an action and returns `pending` immediately, WITHOUT cancelling the resting stop/take-profit
+ * pair or touching the venue. A human's `approve <id>` is picked up by `actionExecutor.ts`'s
+ * `sweepActions()` on a later tick, which re-validates against the position as it stands at
  * that moment and only then calls `actExit` — the point in the code where cancellation happens,
  * unchanged from before this split.
  */
 export async function exitPosition(symbol: string, reason: string, qty?: number, eventId?: string): Promise<QueuedAction> {
   const validated = await validateExit(symbol, qty);
   const automatic = automationLevel('exit') === 'auto';
-  const proposal = createProposal({ kind: 'exit', symbol, venue: config.venue, reason, eventId, automatic,
+  const action = createAction({ kind: 'exit', symbol, venue: config.venue, reason, eventId, automatic,
     params: { qty: validated.sellQty, price: validated.price, pnl: validated.pnl },
     timeoutMs: getPolicy().automation.timeoutMs });
-  return { status: proposal.status, proposalId: proposal.id, automatic: proposal.automatic ?? false };
+  return { status: action.status, actionId: action.id, automatic: action.automatic ?? false };
 }
 
 function guardedBroker() { assertExecutionOwner(); return broker; }

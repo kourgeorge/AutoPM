@@ -4,7 +4,7 @@ export { validateAnnotation, actAnnotation } from '../strategy/annotation';
 export type { AnnotateInput, AnnotationValidation } from '../strategy/annotation';
 import { ToolRegistry } from '../agents/toolRegistry';
 import { agentContext } from '../core/agentContext';
-import { listCommands } from '../core/commands';
+import { listRequests } from '../core/requests';
 import { broker } from '../broker';
 import { BrokerRejection } from '../broker/errors';
 import {
@@ -18,7 +18,7 @@ import { dailyLossStatus } from '../strategy/riskManager';
 import { etNow } from '../core/time';
 import { ackEvent, getPendingEvents, type AckDisposition } from '../features/eventBus';
 import { automationLevel } from '../core/automation';
-import { createProposal, getOpenProposals, getAllProposals } from '../core/proposals';
+import { createAction, getOpenActions, getAllActions } from '../core/actions';
 import { config } from '../core/config';
 
 import { RESEARCH_TOOL_DEFINITIONS, executeResearchTool } from './researchTools';
@@ -60,12 +60,24 @@ import { decision, readDecisions, recordDecision } from '../journal/journal';
 import { recordLesson, listLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
-import { openedAtFromFills } from '../review/fillsLedger';
+import { openedAtFromFills } from '../review/fills';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy } from '../policy/load';
 import { logger } from '../core/logger';
 import type { ToolDefinition, SignalResult } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
+
+/**
+ * Every exit names why it is selling. On 2026-10-06 a scheduled review sold ABBV and PLTR
+ * with the reason "no exit thesis change; retaining the managed position" — a hold sentence
+ * on a sell, credited to an operator who had asked for nothing. The basis makes the decision
+ * explicit, and the two checks below refuse the exact shapes that incident took.
+ */
+const EXIT_BASES = ['stop_hit', 'target_hit', 'thesis_broken', 'risk_reduction', 'operator_request'] as const;
+type ExitBasis = typeof EXIT_BASES[number];
+
+/** Phrases that say the position is being kept. Narrow on purpose: a refusal costs one rewrite. */
+const HOLD_LANGUAGE = /\bretain(s|ed|ing)?\b|\bno exit\b|\b(keep|keeping|continue|continuing|remain|remaining) (to )?hold(ing)?\b|\bthesis (is |remains |still )?intact\b/i;
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -79,7 +91,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     }, required: ['symbol', 'price', 'stopLoss', 'takeProfit'] },
   },
   { name: 'get_lessons', description: 'Read the latest active, evidence-linked advisory lessons.', input_schema: { type: 'object', properties: {}, required: [] } },
-  { name: 'get_commands', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked action IDs. Read get_proposals for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
+  { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked action IDs. Read get_actions for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
   {
     name: 'get_market_status',
     description: 'Get current market status: open/closed, ET time, and minutes until next open or close.',
@@ -102,7 +114,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_entry',
-    description: "Queue a whole-share long equity entry under the active strategy. ok:true is a queue receipt. An automatic or human-approved action is executed separately using an IOC limit buy; fills and broker protection are reconciled later. Inspect get_proposals before reporting any fill or stop as confirmed.",
+    description: "Queue a whole-share long equity entry under the active strategy. ok:true is a queue receipt. An automatic or human-approved action is executed separately using an IOC limit buy; fills and broker protection are reconciled later. Inspect get_actions before reporting any fill or stop as confirmed.",
     input_schema: {
       type: 'object',
       properties: {
@@ -112,10 +124,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
         stopLoss: { type: 'number', description: 'Absolute stop-loss price. A real sell stop is placed at the venue at this level, so choose it as a price you are content to be sold at unattended, not as a rough marker.' },
         takeProfit: { type: 'number', description: 'Absolute take-profit price.' },
         atr: { type: 'number', description: 'ATR at entry. Recorded as the baseline the stop was sized against.' },
-        reason: { type: 'string', description: 'One-sentence reason for the entry.' },
+        reason: { type: 'string', description: 'Why you are buying now: the setup and the measured numbers behind it (signals, levels), in one or two sentences.' },
+        invalidation: { type: 'string', description: 'What would make you exit besides the stop and target: the condition that would mean the reason above is no longer true. Later exits are judged against this.' },
         eventId: { type: 'string', description: 'Optional — the MACHINE EVENTS id this entry answers, verbatim. Links the decision to what prompted it.' },
       },
-      required: ['symbol', 'qty', 'price', 'stopLoss', 'takeProfit', 'atr', 'reason'],
+      required: ['symbol', 'qty', 'price', 'stopLoss', 'takeProfit', 'atr', 'reason', 'invalidation'],
     },
   },
   {
@@ -135,16 +148,21 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_exit',
-    description: "Queue an exit from a managed position. Omit qty to request the whole holding, or provide whole shares to sell part. Existing protection stays until the executor attempts the exit. Inspect proposal status for approval, submission and fills.",
+    description: "Queue an exit from a managed position — this SELLS. To keep a position, do not call this; record the hold with ack_event instead. Omit qty to request the whole holding, or provide whole shares to sell part. Existing protection stays until the executor attempts the exit. Inspect action status for approval, submission and fills.",
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string' },
-        reason: { type: 'string', description: 'Reason for exiting the position.' },
+        basis: {
+          type: 'string',
+          enum: [...EXIT_BASES],
+          description: 'Why you are selling now. stop_hit / target_hit = the price reached the recorded level; thesis_broken = what the entry relied on is no longer true; risk_reduction = cutting exposure for a portfolio or risk reason; operator_request = the operator explicitly asked for this exit. A scheduled review is not an operator request.',
+        },
+        reason: { type: 'string', description: 'One or two sentences: what changed since the last hold, with the numbers that show it. Must describe a sell, not a hold.' },
         qty: { type: 'number', description: 'Optional — shares to sell. Must be a whole number no greater than the position held. Omit to close the whole position.' },
         eventId: { type: 'string', description: 'Optional — the MACHINE EVENTS id this exit answers, verbatim. Links the decision to what prompted it.' },
       },
-      required: ['symbol', 'reason'],
+      required: ['symbol', 'basis', 'reason'],
     },
   },
   {
@@ -153,25 +171,25 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
-    name: 'get_proposals',
+    name: 'get_actions',
     description: "Read automatic and manual actions and their authoritative parameters, statuses, and broker results. Only pending actions await a human decision. approved waits for execution; submitted/partial await fills; unknown needs broker review. No model can approve or reject an action.",
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string', description: 'Optional — filter to one symbol.' },
-        includeDecided: { type: 'boolean', description: 'Include already-decided proposals (approved/rejected/expired/executed/failed), not just ones still open. Default false — only pending and approved-not-yet-executed.' },
+        includeDecided: { type: 'boolean', description: 'Include already-decided actions (approved/rejected/expired/executed/failed), not just ones still open. Default false — only pending and approved-not-yet-executed.' },
       },
       required: [],
     },
   },
   {
     name: 'ack_event',
-    description: "Record how an incident is being handled. acting requires an existing proposalId linked to this event; the incident remains open until that action succeeds. Acknowledging a critical or urgent incident records observation without resolving it. ignoring requires a reason and explicitly declines action.",
+    description: "Record how an incident is being handled. acting requires an existing actionId linked to this event; the incident remains open until that action succeeds. Acknowledging a critical or urgent incident records observation without resolving it. ignoring requires a reason and explicitly declines action.",
     input_schema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'The event id, verbatim from MACHINE EVENTS or get_pending_events.' },
-        proposalId: { type: 'string', description: 'Required for acting: an existing proposal linked to this event.' },
+        actionId: { type: 'string', description: 'Required for acting: an existing action linked to this event.' },
         disposition: {
           type: 'string',
           enum: ['acting', 'acknowledged', 'ignoring'],
@@ -339,7 +357,7 @@ async function dispatchTraderTool(
     switch (name) {
       case 'sleep': return JSON.stringify({ ok: true, sleepMs: Number(input.minutes) * 60000 });
       case 'get_lessons': return JSON.stringify(listLessons(20, true));
-      case 'get_commands': return JSON.stringify(listCommands());
+      case 'get_requests': return JSON.stringify(listRequests());
       case 'get_market_status':   return await toolGetMarketStatus();
       case 'get_account':         return await toolGetAccount();
       case 'get_positions':       return await toolGetPositions();
@@ -356,7 +374,7 @@ async function dispatchTraderTool(
       case 'annotate_position':   return await toolAnnotatePosition(input);
       case 'execute_exit':        return await toolExecuteExit(input);
       case 'get_pending_events':  return toolGetPendingEvents();
-      case 'get_proposals':       return toolGetProposals(input);
+      case 'get_actions':       return toolGetActions(input);
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
       case 'get_scorecard':       return toolGetScorecard(input);
@@ -954,9 +972,9 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
 
 
 
-  // Nothing is recorded or moved yet — `proposalExecutor.ts` re-validates from these exact
+  // Nothing is recorded or moved yet — `actionExecutor.ts` re-validates from these exact
   // raw inputs and calls `actAnnotation` itself once a human decides.
-  const proposal = createProposal({
+  const action = createAction({
     kind: stopManual || !targetManual ? 'stop_adjust' : 'target_adjust',
     automatic: !stopManual && !targetManual,
     symbol: validated.symbol,
@@ -966,17 +984,23 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     timeoutMs: getPolicy().automation.timeoutMs,
   });
   return JSON.stringify({
-    ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(proposal.status), status: proposal.status, proposalId: proposal.id,
+    ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(action.status), status: action.status, actionId: action.id,
     symbol: validated.symbol, stopLoss: validated.stopLoss, takeProfit: validated.takeProfit,
-    note: `Adjustment queued as ${proposal.id}. ${proposal.automatic ? 'Automatic execution is enabled.' : 'Human approval is required.'} Broker confirmation will be reported separately.`,
+    note: `Adjustment queued as ${action.id}. ${action.automatic ? 'Automatic execution is enabled.' : 'Human approval is required.'} Broker confirmation will be reported separately.`,
   });
 }
 
 async function toolExecuteEntry(input: Record<string, unknown>): Promise<string> {
-  const { symbol, qty, price, stopLoss, takeProfit, atr, reason, eventId } = input as {
+  const { symbol, qty, price, stopLoss, takeProfit, atr, eventId } = input as {
     symbol: string; qty: number; price: number; stopLoss: number; takeProfit: number;
-    atr: number; reason: string; eventId?: string;
+    atr: number; eventId?: string;
   };
+  const why = String(input.reason ?? '').trim();
+  const invalidation = String(input.invalidation ?? '').trim();
+  if (why.length < 20) return JSON.stringify({ ok: false, error: 'reason must say, in a sentence, why you are buying now and what measured evidence supports it.' });
+  if (invalidation.length < 10) return JSON.stringify({ ok: false, error: 'invalidation is required: the condition that would mean the entry reason is no longer true.' });
+  // One string so the journal, RECENT DECISIONS and the concierge all carry both halves.
+  const reason = `${why} Invalidated if: ${invalidation}`;
   try {
     const result = await enterPosition({ symbol, signal: 'buy', price, stopLoss, takeProfit, atr, reason }, qty, resolveEventId(eventId, symbol) ?? undefined);
     return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Action queued. Read its status to distinguish approval, submission, and fills.' });
@@ -984,7 +1008,16 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
 }
 
 async function toolExecuteExit(input: Record<string, unknown>): Promise<string> {
-  const { symbol, reason, qty, eventId } = input as { symbol: string; reason: string; qty?: number; eventId?: string };
+  const { symbol, basis, qty, eventId } = input as { symbol: string; basis?: ExitBasis; qty?: number; eventId?: string };
+  const stated = String(input.reason ?? '').trim();
+  const refuse = (error: string) => JSON.stringify({ ok: false, error });
+  if (!basis || !EXIT_BASES.includes(basis)) return refuse(`basis is required: one of ${EXIT_BASES.join(', ')}.`);
+  if (stated.length < 20) return refuse('reason must say, in a sentence, what changed since the last hold.');
+  if (HOLD_LANGUAGE.test(stated)) return refuse('reason describes keeping the position, but execute_exit sells it. If you mean to hold, do not exit — record the hold with ack_event. If you mean to sell, state why.');
+  if (basis === 'operator_request' && (agentContext.getStore()?.actorId ?? 'system') === 'system') {
+    return refuse('operator_request needs an instruction from the operator. This cycle is a scheduled review; choose the basis that actually applies, or hold.');
+  }
+  const reason = `${basis.replace('_', ' ')}: ${stated}`;
   try {
     const result = await exitPosition(symbol, reason, qty, resolveEventId(eventId, symbol) ?? undefined);
     return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Exit queued. Existing protection is preserved until execution.' });
@@ -992,13 +1025,13 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
 }
 
 
-function toolGetProposals(input: Record<string, unknown>): string {
+function toolGetActions(input: Record<string, unknown>): string {
   const { symbol, includeDecided } = input as { symbol?: string; includeDecided?: boolean };
-  const all = includeDecided ? getAllProposals() : getOpenProposals();
+  const all = includeDecided ? getAllActions() : getOpenActions();
   const filtered = symbol ? all.filter(p => sameSymbol(p.symbol, symbol)) : all;
   return JSON.stringify({
     count: filtered.length,
-    proposals: filtered.map(p => ({
+    actions: filtered.map(p => ({
       id: p.id,
       kind: p.kind,
       symbol: p.symbol,
@@ -1008,8 +1041,7 @@ function toolGetProposals(input: Record<string, unknown>): string {
       createdAt: p.createdAt,
       expiresAt: p.expiresAt,
       automatic: p.automatic,
-      accountId: p.accountId,
-      commandId: p.commandId,
+      requestId: p.requestId,
       requestedBy: p.requestedBy,
       decidedBy: p.decidedBy,
       rejectReason: p.rejectReason,
@@ -1054,8 +1086,8 @@ function resolveAckId(id: string): { id: string; symbol: string | null; correcte
 }
 
 function toolAckEvent(input: Record<string, unknown>): string {
-  const { id: givenId, disposition, note, proposalId } = input as {
-    id: string; disposition: AckDisposition; note?: string; proposalId?: string;
+  const { id: givenId, disposition, note, actionId } = input as {
+    id: string; disposition: AckDisposition; note?: string; actionId?: string;
   };
   // Resolved before the ack: `ackEvent` deletes from `pending`, so afterwards there is no
   // event left to ask which symbol it was about.
@@ -1074,7 +1106,7 @@ function toolAckEvent(input: Record<string, unknown>): string {
   }
   const { id, symbol, corrected } = resolved;
 
-  if (!ackEvent(id, disposition, note, proposalId)) {
+  if (!ackEvent(id, disposition, note, actionId)) {
     return JSON.stringify({ ok: false, error: 'unknown or already-acked event id' });
   }
 
@@ -1115,8 +1147,21 @@ function toolAckEvent(input: Record<string, unknown>): string {
 function toolGetJournal(input: Record<string, unknown>): string {
   const symbol = input.symbol as string | undefined;
   const limit = (input.limit as number | undefined) ?? 20;
-  const records = readDecisions({ symbol, limit });
-  return JSON.stringify({ count: records.length, decisions: records });
+  // Null fields dropped: most of a hold record is nulls, and they cost the room below.
+  const records = readDecisions({ symbol, limit })
+    .map(r => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== null)));
+  // Oldest first, and the turn runner cuts an oversized result from the END — which is the
+  // newest decision, the one a "why did we sell" question is about. So trim from the front
+  // here, inside that bound, and say how much was trimmed.
+  const BUDGET = 9000;
+  let size = 0, start = records.length;
+  while (start > 0 && size + JSON.stringify(records[start - 1]).length + 1 <= BUDGET) size += JSON.stringify(records[--start]).length + 1;
+  const kept = records.slice(start);
+  return JSON.stringify({
+    count: kept.length,
+    ...(start > 0 ? { omittedOlder: start, note: `The ${start} oldest of ${records.length} records were left out to fit; pass symbol or a smaller limit to see them.` } : {}),
+    decisions: kept,
+  });
 }
 
 /**

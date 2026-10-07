@@ -1,8 +1,8 @@
 import { runtimeContract } from './runtimeContract';
 import { ToolRegistry } from './toolRegistry';
-import { runTurn, compactMessages } from './turnRunner';
-import { enqueueCommand, pendingCommands, updateCommand, migrateChatQueue, type AgentCommand } from '../core/commands';
-import { getOpenProposals } from '../core/proposals';
+import { runAgentLoop, compactMessages } from './agentLoop';
+import { enqueueRequest, pendingRequests, updateRequest, getRequest, type AgentRequest } from '../core/requests';
+import { getOpenActions } from '../core/actions';
 import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
 /**
@@ -15,7 +15,7 @@ import { summarizeStrategy } from '../policy/summary';
  * The trader never talks to the user directly — that's this agent's job.
  */
 
-import { readValue, saveValue } from '../core/storage';
+import { readRecord, listRecords } from '../core/storage';
 import { createModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
@@ -41,9 +41,9 @@ import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
  */
 const SHARED_WITH_TRADER = [
   'get_account',
-  'get_commands',
+  'get_requests',
   'get_lessons',
-  'get_proposals',
+  'get_actions',
   'get_positions',
   'get_open_orders',
   'get_market_status',
@@ -80,7 +80,7 @@ function sharedTools(): ToolDefinition[] {
   });
 }
 
-/** Read helpers and proposal/relay tools owned by the concierge. */
+/** Read helpers and action/relay tools owned by the concierge. */
 const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   {
     name: 'get_strategy_settings',
@@ -93,8 +93,17 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'get_request_trace',
+    description: "Read what an agent actually did for one request: who started it, the text the model wrote, and every tool call in order with its inputs and a short result. Take the requestId from an action or from get_requests. Use it to answer why an entry or exit happened — the action's reason is the model's own words, and this shows whether anything in the turn supports them.",
+    input_schema: {
+      type: 'object',
+      properties: { requestId: { type: 'string', description: 'The request id, verbatim.' } },
+      required: ['requestId'],
+    },
+  },
+  {
     name: 'send_to_trader',
-    description: 'Queue an operator instruction for the trader and return its durable request ID and actual status. Paused traders keep the request queued; busy traders handle it in a later cycle. Use get_commands and get_proposals for outcomes.',
+    description: 'Queue an operator instruction for the trader and return its durable request ID and actual status. Paused traders keep the request queued; busy traders handle it in a later cycle. Use get_requests and get_actions for outcomes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -133,6 +142,54 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   },
 ];
 
+/** Tools that change something. Their full inputs and results are what the trace is for. */
+const ACTION_TOOLS = new Set(['execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'send_to_trader', 'sleep']);
+
+/**
+ * The stored turn, flattened to what was said and done. The opening context message is left
+ * out (it is the whole cycle snapshot); the request text stands in for it.
+ */
+/**
+ * The chat so far: each chat turn starts from the one before it, so the latest earlier
+ * turn in agentTurn.jsonl already holds the whole conversation.
+ */
+function previousChat(currentId: string): ChatMessage[] {
+  for (const { id } of listRecords<AgentRequest>('requests', { where: c => c.role === 'concierge' && c.id !== currentId, desc: true })) {
+    const turn = readRecord<{ messages: ChatMessage[] }>('transcripts', id);
+    if (turn?.messages.length) return turn.messages;
+  }
+  return [];
+}
+
+function requestTrace(requestId: string): string {
+  const command = getRequest(requestId);
+  if (!command) return JSON.stringify({ ok: false, error: `No request with id ${requestId}. Read get_requests or an action's requestId.` });
+  const clip = (s: unknown, n: number) => { const t = typeof s === 'string' ? s : JSON.stringify(s); return t.length > n ? t.slice(0, n) + '…' : t; };
+  const steps: Record<string, unknown>[] = [];
+  const turn = readRecord<{ messages: ChatMessage[] }>('transcripts', requestId);
+  if (turn) {
+    const results = new Map<string, string>();
+    for (const m of turn.messages) for (const b of m.content) if (b.type === 'tool_result') results.set(b.tool_use_id, b.content);
+    for (const m of turn.messages.slice(1)) {
+      if (m.role !== 'assistant') continue;
+      for (const b of m.content) {
+        if (b.type === 'text' && b.text.trim()) steps.push({ wrote: clip(b.text, 1500) });
+        if (b.type === 'tool_use') {
+          const full = ACTION_TOOLS.has(b.name);
+          steps.push({ call: b.name, input: full ? b.input : clip(b.input, 200), result: clip(results.get(b.id) ?? 'no result recorded', full ? 600 : 160) });
+        }
+      }
+    }
+  }
+  const wroteText = steps.some(s => 'wrote' in s);
+  return JSON.stringify({
+    command: { id: command.id, agent: command.role, startedBy: command.actorId === 'system' ? 'scheduler (no operator instruction)' : command.actorId,
+      request: command.text, status: command.status, result: command.result, actionIds: command.actionIds },
+    ...(wroteText ? {} : { note: 'The model wrote no text in this request; the only reasons it gave are the tool inputs below.' }),
+    steps: steps.slice(-60),
+  });
+}
+
 const CONCIERGE_TOOLS: ToolDefinition[] = [
   ...sharedTools(),
   ...CONCIERGE_OWN_TOOLS,
@@ -153,11 +210,12 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
  */
 const SYSTEM_PROMPT = `You are AutoTrade's account concierge.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
-Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_commands and get_proposals for the outcome.
-You cannot place trades, approve proposals, adopt holdings, or activate strategy changes.
+Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_actions for the outcome.
+You cannot place trades, approve actions, adopt holdings, or activate strategy changes.
 For pause/resume and approvals, direct the operator to the account controls.
-A one-off instruction goes to the trader. A lasting settings change is a proposal for review in Strategy settings.
-get_state shows pause, account and outstanding actions. get_journal explains decisions; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
+A one-off instruction goes to the trader. A lasting settings change is an action for review in Strategy settings.
+To explain why a position was entered or exited, read get_actions for that symbol (includeDecided), then get_request_trace with the action's requestId: say who started the request, the stated reason, and whether the turn shows evidence for it. If the recorded reason contradicts the action — a hold sentence on a sell, "operator-directed" when the scheduler started it, or no reason at all — say so plainly; do not present it as a deliberate decision.
+get_state shows pause, account and outstanding actions. get_journal explains decisions, newest kept when trimmed; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
 Read get_strategy_settings afresh before describing current settings or suggesting a change. Its summary is the presentation baseline; use its correctly scaled values, not remembered defaults or old conversation results.
 For a general settings question, lead with the saved profile, then group risk controls, investment limits and approvals into short labeled lines or bullets. Include the allowed symbols in a full overview. Answer a narrow question using just the relevant settings. Avoid raw JSON, YAML keys, revision hashes and Markdown tables; the account chat displays plain text.
 Explain risk per trade as planned loss at the stop and position size as money invested. Name volatility as an annualized estimate, reward:risk as planned upside versus downside, and blank controls as not configured. A daily loss threshold halts new entries; it does not guarantee losses cannot exceed it. Distinguish alerts from entry limits and saved settings from actual holdings or trading status.
@@ -176,15 +234,14 @@ export class ConciergeAgent {
 
   constructor(private readonly wake: (msg: string) => unknown) {}
 
-  handleMessage(userText: string, actorId = 'operator'): AgentCommand {
+  handleMessage(userText: string, actorId = 'operator'): AgentRequest {
     if (this.stopped) throw new Error('The service is stopping');
-    const command = enqueueCommand('concierge', userText, actorId);
+    const command = enqueueRequest('concierge', userText, actorId);
     this.resumeQueue();
     return command;
   }
 
   resumeQueue(): void {
-    migrateChatQueue();
     if (!this.active && !this.stopped) {
       this.active = this.drain().finally(() => { this.active = null; });
     }
@@ -195,24 +252,23 @@ export class ConciergeAgent {
   }
   private async drain(): Promise<void> {
     while (!this.stopped) {
-      const command = pendingCommands('concierge')[0];
+      const command = pendingRequests('concierge')[0];
       if (!command) return;
-      updateCommand(command.id, { status: 'running' });
+      updateRequest(command.id, { status: 'running' });
       ui.setConciergeActivity({ state: 'thinking' });
       try {
-        const turn = await runTurn({
-          context: { role: 'concierge', commandId: command.id, actorId: command.actorId },
+        const turn = await runAgentLoop({
+          context: { role: 'concierge', requestId: command.id, actorId: command.actorId },
           provider: this.provider, registry: this.registry, systemPrompt: runtimeContract() + "\n\n" + SYSTEM_PROMPT,
-          messages: async () => [...compactMessages(readValue<ChatMessage[]>('conversation') ?? [], 24000),
+          messages: async () => [...compactMessages(previousChat(command.id), 24000),
             { role: 'user', content: [{ type: 'text', text: command.text }] }],
           maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
         });
-        saveValue('conversation', compactMessages(turn.messages, 40000));
         const result = turn.error ?? (turn.text || 'Request processed. Check linked actions for execution status.');
-        updateCommand(command.id, { status: turn.status, result });
+        updateRequest(command.id, { status: turn.status, result });
         if (turn.status === 'interrupted') return;
       } catch (err: any) {
-        updateCommand(command.id, { status: 'failed', result: err.message });
+        updateRequest(command.id, { status: 'failed', result: err.message });
       } finally { ui.setConciergeActivity({ state: 'idle' }); }
     }
   }
@@ -232,7 +288,7 @@ export class ConciergeAgent {
         paused: state.paused,
         accountId: state.accountId,
         strategyHash: getPolicyHash(),
-        actions: getOpenProposals(),
+        actions: getOpenActions(),
         startOfDayEquity: state.startOfDayEquity,
         lastResetDate: state.lastResetDate,
         watchlist: getPolicy().strategy.watchlist,
@@ -247,6 +303,8 @@ export class ConciergeAgent {
         return JSON.stringify({ error: `PLAYBOOK.md failed to render: ${err.message}` });
       }
     }
+
+    if (name === 'get_request_trace') return requestTrace(String(input.requestId ?? ''));
 
     if (name === 'send_to_trader') {
       const message = input.message as string;

@@ -98,11 +98,11 @@ export interface EventRow {
 }
 
 /**
- * Structural subset of `core/proposals.ts`'s `Proposal` — same reasoning as `EventRow` above:
+ * Structural subset of `core/actions.ts`'s `Action` — same reasoning as `EventRow` above:
  * this file must stay import-free of `state/state.ts`, so the shape is copied, and
- * `getOpenProposals()`'s real return value satisfies it directly.
+ * `getOpenActions()`'s real return value satisfies it directly.
  */
-export interface ProposalRow {
+export interface ActionRow {
   id: string;
   kind: string;
   symbol: string;
@@ -172,8 +172,8 @@ export interface DashboardModel {
   events: EventRow[];
   /** Tail of the durable event log, oldest-first — see `src/features/eventLog.ts`. */
   eventLog: EventRow[];
-  /** Every proposal currently in the store — see `src/core/proposals.ts`'s `getAllProposals()`. */
-  proposals: ProposalRow[];
+  /** Every action currently in the store — see `src/core/actions.ts`'s `getAllActions()`. */
+  actions: ActionRow[];
 }
 
 // ── Small internal helpers ────────────────────────────────────────────────────
@@ -908,7 +908,7 @@ function eventRow(m: DashboardModel, f: Fmt, e: EventRow, width: number): string
   return packRow(f, width, cols);
 }
 
-// ── Proposals ─────────────────────────────────────────────────────────────────
+// ── Actions ─────────────────────────────────────────────────────────────────
 
 const PROPOSAL_KIND_W = 12;
 const PROPOSAL_SYM_W = 6;
@@ -917,16 +917,16 @@ const PROPOSAL_AGE_W = 9;
 const PROPOSAL_HEADLINE_MIN = 10;
 
 /** Only `pending`/`approved` are still waiting on anything — everything else is history. */
-export function isOpenProposal(p: ProposalRow): boolean {
+export function isOpenAction(p: ActionRow): boolean {
   return ['pending','approved','executing','submitted','partial','unknown'].includes(p.status);
 }
 
 /** Soonest deadline first — that is the one an operator is about to miss. */
-function sortedProposals(proposals: ProposalRow[]): ProposalRow[] {
-  return [...proposals].sort((a, b) => a.expiresAt - b.expiresAt);
+function sortedActions(actions: ActionRow[]): ActionRow[] {
+  return [...actions].sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
-function proposalColor(status: string): string {
+function actionColor(status: string): string {
   switch (status) {
     case 'pending':
       return 'yellow-fg';
@@ -943,7 +943,7 @@ function proposalColor(status: string): string {
 }
 
 /** Same reasoning as `planEventColumns`: the headline has no width of its own, so this runs first. */
-function planProposalColumns(width: number): { headlineW: number; sym: boolean; kind: boolean; age: boolean } {
+function planActionColumns(width: number): { headlineW: number; sym: boolean; kind: boolean; age: boolean } {
   const candidates: Array<{ key: 'sym' | 'kind' | 'age'; w: number }> = [
     { key: 'sym', w: PROPOSAL_SYM_W },
     { key: 'kind', w: PROPOSAL_KIND_W },
@@ -960,8 +960,8 @@ function planProposalColumns(width: number): { headlineW: number; sym: boolean; 
   return { headlineW: Math.max(PROPOSAL_HEADLINE_MIN, width - trailingW), ...show };
 }
 
-function proposalLegend(width: number): Col[] {
-  const plan = planProposalColumns(width);
+function actionLegend(width: number): Col[] {
+  const plan = planActionColumns(width);
   const legend: Col[] = [{ text: '', w: plan.headlineW }];
   if (plan.sym) legend.push({ text: 'sym', w: PROPOSAL_SYM_W, right: true });
   if (plan.kind) legend.push({ text: 'kind', w: PROPOSAL_KIND_W, right: true });
@@ -969,17 +969,17 @@ function proposalLegend(width: number): Col[] {
   return legend;
 }
 
-function proposalRow(m: DashboardModel, f: Fmt, p: ProposalRow, width: number): string {
+function actionRow(m: DashboardModel, f: Fmt, p: ActionRow, width: number): string {
   const g = m.glyphs;
-  const plan = planProposalColumns(width);
-  const color = proposalColor(p.status);
+  const plan = planActionColumns(width);
+  const color = actionColor(p.status);
 
   const cols: Col[] = [{ text: `[${p.id}] ${p.status} — ${p.reason}`, w: plan.headlineW, color }];
   if (plan.sym) cols.push({ text: p.symbol, w: PROPOSAL_SYM_W, color: 'bold' });
   if (plan.kind) cols.push({ text: p.kind.replace(/_/g, ' '), w: PROPOSAL_KIND_W, color: 'gray-fg' });
   if (plan.age) {
     const remainingMs = p.expiresAt - m.now;
-    const text = !isOpenProposal(p) ? g.dash : remainingMs > 0 ? f.duration(remainingMs) : 'due';
+    const text = !isOpenAction(p) ? g.dash : remainingMs > 0 ? f.duration(remainingMs) : 'due';
     cols.push({ text, w: PROPOSAL_AGE_W, right: true, color: 'gray-fg' });
   }
   return packRow(f, width, cols);
@@ -993,7 +993,7 @@ function proposalRow(m: DashboardModel, f: Fmt, p: ProposalRow, width: number): 
  * PROPOSALS is a human's own queue — the only thing on this panel that only a human can move —
  * so it is drawn first and, unlike OPEN/RECENT ACTIVITY, costs nothing when empty: under the
  * default policy every action is `auto` and this store stays empty, so the panel looks exactly
- * like it did before proposals existed.
+ * like it did before actions existed.
  *
  * OPEN is the live event registry (`getPendingEvents()`) filtered to `needsAttention` — an inbox
  * holds what needs a human, not every event that happens to be pending. RECENT ACTIVITY is venue
@@ -1008,14 +1008,14 @@ export function renderEventsPanel(m: DashboardModel, width: number, height: numb
   if (width <= 0 || height <= 0) return [];
   const f = makeFormat(m.glyphs);
 
-  const proposals = sortedProposals(m.proposals);
+  const actions = sortedActions(m.actions);
   const lines: string[] = [];
 
-  if (proposals.length > 0 && height >= 2) {
-    const budget = Math.min(1 + proposals.length, height);
-    lines.push(sectionHeader(f, width, 'PROPOSALS', proposals.length, proposalLegend(width)));
+  if (actions.length > 0 && height >= 2) {
+    const budget = Math.min(1 + actions.length, height);
+    lines.push(sectionHeader(f, width, 'PROPOSALS', actions.length, actionLegend(width)));
     lines.push(
-      ...listBody(f, width, budget - 1, proposals, (p, w) => proposalRow(m, f, p, w), 'nothing pending'),
+      ...listBody(f, width, budget - 1, actions, (p, w) => actionRow(m, f, p, w), 'nothing pending'),
     );
     if (height - lines.length >= 3) lines.push(' '.repeat(width));
   }
@@ -1171,6 +1171,7 @@ export function renderStatus(m: DashboardModel, width: number, panelHint: string
     // Keyboard hints last on purpose: `joinChunks` drops from the right, so on a narrow
     // terminal the lane states survive and the hints — which an operator needs once — go first.
     { text: 'Enter send' },
+    { text: '/ commands' },
     { text: `${g.up}/${g.down} history` },
     { text: 'Esc clear' },
   ]);

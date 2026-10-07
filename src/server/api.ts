@@ -1,10 +1,9 @@
-import { enqueueCommand, listCommands as listAgentCommands, type AgentCommand } from '../core/commands';
+import { enqueueRequest, listRequests, type AgentRequest } from '../core/requests';
 import { listLessons, reviewLesson } from '../journal/lessons';
-/** Account-scoped browser and operator API. One database and broker account per worker. */
+/** Local dashboard and operator API. Listens on this computer only; there is one user, so no login. */
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { authenticate, login, logout, sessionCookie, users, type Principal } from './auth';
 import { modelUsage } from '../core/modelBudget';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
@@ -14,13 +13,13 @@ import { broker } from '../broker';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
 import { assertExecutionOwner } from '../core/runtime';
 import { confirmProtection } from '../strategy/protectionIntent';
-import { sweepProposals } from '../strategy/proposalExecutor';
+import { sweepActions } from '../strategy/actionExecutor';
 import http from 'http';
 import { URL } from 'url';
 import { config } from '../core/config';
 import { logger } from '../core/logger';
 import { automationSummary } from '../core/automation';
-import { getAllProposals, getOpenProposals } from '../core/proposals';
+import { getAllActions, getOpenActions } from '../core/actions';
 import { getLastTick } from '../features/lastTick';
 import { scorecard } from '../review/metrics';
 import type { Trader } from '../agents/trader';
@@ -32,8 +31,8 @@ const MAX_FEED_LIMIT = 1000;
 const DEFAULT_FEED_LIMIT = 200;
 /** Keeps proxies and load balancers from closing an idle event stream. */
 const SSE_HEARTBEAT_MS = 25_000;
-/** A token shorter than this is almost certainly a placeholder someone forgot to replace. */
-const MIN_TOKEN_LENGTH = 24;
+/** Every request is made by the one local user. */
+const OPERATOR = 'operator';
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {
@@ -44,7 +43,6 @@ class HttpError extends Error {
 type Handler = (ctx: Ctx) => unknown | Promise<unknown>;
 
 interface Ctx {
-  principal: Principal;
   req: http.IncomingMessage;
   res: http.ServerResponse;
   url: URL;
@@ -57,14 +55,12 @@ interface Route {
   pattern: RegExp;
   keys: string[];
   handler: Handler;
-  /** Only `/health` is open; everything else needs the token. */
-  open?: boolean;
 }
 
 export interface ApiServerDeps {
   ui: HeadlessUI;
   trader: Trader;
-  messageService?: (text: string, actor: string) => AgentCommand;
+  messageService?: (text: string, actor: string) => AgentRequest;
 }
 
 export interface ApiServer {
@@ -73,30 +69,13 @@ export interface ApiServer {
 }
 
 /**
- * Start the API, or return null (with a log line saying why) when credentials are missing.
- * throws for configuration errors; headless startup requires an enabled API.
+ * Start the API on 127.0.0.1. The Host check stops a web page from reaching it through a
+ * DNS name that points here; the Origin check stops another site from posting to it.
  */
-export function startApiServer(deps: ApiServerDeps): ApiServer | null {
-  const { token, host, port, corsOrigin } = config.api;
-  if (!token && Object.keys(users()).length === 0) {
-    logger.warn('[API] API_TOKEN is not set — the HTTP API is OFF. Set it to approve trades and read status remotely.');
-    return null;
-  }
-  if ((token && token.length < MIN_TOKEN_LENGTH) || (config.api.viewerToken && config.api.viewerToken.length < MIN_TOKEN_LENGTH)) {
-    logger.error(`[API] API_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters — refusing to start the HTTP API. Generate one with: openssl rand -hex 32`);
-    return null;
-  }
-
+export function startApiServer(deps: ApiServerDeps): ApiServer {
+  const { port } = config.api;
   const routes = buildRoutes(deps);
   const streams = new Set<http.ServerResponse>();
-  const buckets = new Map<string, { until: number; count: number }>();
-  function rateLimit(key: string, limit: number): boolean {
-    const now = Date.now();
-    for (const [id, bucket] of buckets) if (bucket.until <= now) buckets.delete(id);
-    if (!buckets.has(key) && buckets.size >= 10000) return false;
-    const bucket = buckets.get(key) ?? { until: now + 60000, count: 0 };
-    bucket.count++; buckets.set(key, bucket); return bucket.count <= limit;
-  }
 
   const server = http.createServer((req, res) => {
     void handle(req, res).catch((err) => {
@@ -107,63 +86,25 @@ export function startApiServer(deps: ApiServerDeps): ApiServer | null {
   });
 
   async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    if (corsOrigin) {
-      res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-      res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Last-Event-ID');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    }
+    const bound = (server.address() as { port: number }).port;
+    const origins = [`http://127.0.0.1:${bound}`, `http://localhost:${bound}`];
+    if (!origins.includes('http://' + (req.headers.host ?? ''))) { sendJson(res, 403, { error: `Open the dashboard at http://127.0.0.1:${bound}` }); return; }
+    if (req.method !== 'GET' && req.headers.origin && !origins.includes(req.headers.origin)) { sendJson(res, 403, { error: 'Wrong origin' }); return; }
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer');
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204).end();
-      return;
-    }
-
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (req.method === 'GET' && ['/', '/dashboard.js', '/dashboard.css'].includes(url.pathname)) {
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
       res.writeHead(200, { 'Content-Type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8' });
       res.end(fs.readFileSync(path.join(__dirname, '../../web', file))); return;
     }
-    if (url.pathname === '/api/login' && req.method === 'POST') {
-      if (!rateLimit('login:' + req.socket.remoteAddress, 10)) { sendJson(res, 429, { error: 'Too many login attempts; try again in a minute' }); return; }
-      if (req.headers.origin && req.headers.origin !== config.api.publicOrigin) { sendJson(res, 403, { error: 'Wrong origin' }); return; }
-      try {
-        const body = await readJsonBody(req);
-        if (typeof body.username !== 'string' || typeof body.password !== 'string' || body.password.length > 256) throw new HttpError(400, 'Username and password are required');
-        const result = await login(body.username, body.password);
-        if (!result) { sendJson(res, 401, { error: 'Invalid username or password' }); return; }
-        res.setHeader('Set-Cookie', sessionCookie(result.token));
-        sendJson(res, 200, { user: result.user, csrf: result.csrf });
-      } catch (err: any) { if (err instanceof HttpError) sendJson(res, err.status, { error: err.message }); else throw err; }
-      return;
-    }
     const match = matchRoute(routes, req.method ?? 'GET', url.pathname);
     if (!match) {
       sendJson(res, 404, { error: `no route ${req.method} ${url.pathname}` });
       return;
     }
-    const principal = authenticate(req);
-    if (!match.route.open && !principal) {
-      res.setHeader('WWW-Authenticate', 'Bearer');
-      sendJson(res, 401, { error: 'Sign in to continue' }); return;
-    }
-    if (!rateLimit('request:' + (principal?.name ?? req.socket.remoteAddress), 240)) {
-      sendJson(res, 429, { error: 'Request limit reached; try again in a minute' }); return;
-    }
-    if (req.method === 'POST' && principal) {
-      if (principal.csrf && (req.headers['x-csrf-token'] !== principal.csrf || (req.headers.origin && req.headers.origin !== config.api.publicOrigin))) {
-        sendJson(res, 403, { error: 'Invalid request origin or CSRF token' }); return;
-      }
-      if (principal.role === 'viewer' && url.pathname !== '/api/logout') { sendJson(res, 403, { error: 'Viewer access is read-only' }); return; }
-      if ((url.pathname === '/api/strategy' || url.pathname.includes('/adopt') || url.pathname.includes('/confirm-protection') || url.pathname.startsWith('/api/lessons/')) && principal.role !== 'admin') {
-        sendJson(res, 403, { error: 'Administrator access required' }); return;
-      }
-    }
-
     // The stream holds its response open, so it is handled here rather than as a JSON route.
     if (url.pathname === '/api/stream') {
       if (streams.size >= 50) { sendJson(res, 429, { error: 'Too many open streams' }); return; }
@@ -173,7 +114,6 @@ export function startApiServer(deps: ApiServerDeps): ApiServer | null {
 
     try {
       const result = await match.route.handler({
-        principal: principal ?? { name: 'anonymous', role: 'viewer' },
         req,
         res,
         url,
@@ -193,8 +133,8 @@ export function startApiServer(deps: ApiServerDeps): ApiServer | null {
     logger.error(`[API] server error: ${err.message}`);
     throw err;
   });
-  server.listen(port, host, () => {
-    logger.info(`[API] listening on http://${host}:${port}${corsOrigin ? ` (browser origin ${corsOrigin})` : ''}`);
+  server.listen(port, '127.0.0.1', () => {
+    logger.info(`[API] dashboard at http://127.0.0.1:${(server.address() as { port: number }).port}`);
   });
 
   return {
@@ -212,7 +152,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer | null {
 
 function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
   const routes: Route[] = [];
-  const add = (method: string, path: string, handler: Handler, open = false): void => {
+  const add = (method: string, path: string, handler: Handler): void => {
     const keys: string[] = [];
     const pattern = new RegExp(
       '^' + path.replace(/:([a-zA-Z]+)/g, (_, k) => {
@@ -220,20 +160,8 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
         return '([^/]+)';
       }) + '$',
     );
-    routes.push({ method, pattern, keys, handler, open });
+    routes.push({ method, pattern, keys, handler });
   };
-
-  add('GET', '/health', () => {
-    const tick = getLastTick();
-    return { ok: true, uptimeSec: Math.round(process.uptime()), lastTickAt: tick?.tickAt ?? null };
-  }, true);
-
-  add('GET', '/ready', ({ res }) => {
-    const status = serviceStatus(); res.statusCode = status.ready ? 200 : 503;
-    return { ready: status.ready };
-  }, true);
-  add('GET', '/api/session', ({ principal }) => ({ user: { name: principal.name, role: principal.role }, csrf: principal.csrf }));
-  add('POST', '/api/logout', ({ principal, res }) => { logout(principal); res.setHeader('Set-Cookie', sessionCookie('')); return { ok: true }; });
 
   add('GET', '/api/status', () => {
     const snap = ui.snapshot();
@@ -249,7 +177,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
       account: tick?.account ?? null,
       portfolio: tick?.portfolio ?? null,
       positionCount: tick && !tick.positionsStale ? Object.keys(tick.positions).length : null,
-      openProposals: getOpenProposals().length,
+      openActions: getOpenActions().length,
       pendingEvents: snap.events.length,
       policyVersion: tick?.policyVersion ?? null,
       lastTickAt: tick?.tickAt ?? null,
@@ -274,30 +202,30 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     };
   });
 
-  add('GET', '/api/proposals', ({ url }) => {
+  add('GET', '/api/actions', ({ url }) => {
     const status = url.searchParams.get('status') ?? 'open';
     if (status !== 'open' && status !== 'all') throw new HttpError(400, 'status must be "open" or "all"');
-    const list = status === 'open' ? getOpenProposals() : getAllProposals();
-    return { proposals: [...list].sort((a, b) => b.createdAt - a.createdAt) };
+    const list = status === 'open' ? getOpenActions() : getAllActions();
+    return { actions: [...list].sort((a, b) => b.createdAt - a.createdAt) };
   });
 
-  const decide = (decision: 'approve' | 'reject'): Handler => async ({ params, body, principal }) => {
+  const decide = (decision: 'approve' | 'reject'): Handler => async ({ params, body }) => {
     const reason = decision === 'reject' ? optionalString((await body()).reason, 'reason') : undefined;
     try {
-      ui.decide(decision, params.id, reason, principal.name);
+      ui.decide(decision, params.id, reason, OPERATOR);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      // `proposals.ts` throws plain Errors; tell "not found" apart from "already decided".
-      throw new HttpError(/no such proposal/.test(msg) ? 404 : 409, msg);
+      // `actions.ts` throws plain Errors; tell "not found" apart from "already decided".
+      throw new HttpError(/no such action/.test(msg) ? 404 : 409, msg);
     }
-    return { proposal: getAllProposals().find((p) => p.id === params.id) };
+    return { action: getAllActions().find((p) => p.id === params.id) };
   };
-  add('POST', '/api/proposals/:id/approve', decide('approve'));
-  add('POST', '/api/proposals/:id/reject', decide('reject'));
+  add('POST', '/api/actions/:id/approve', decide('approve'));
+  add('POST', '/api/actions/:id/reject', decide('reject'));
 
-  add('GET', '/api/notifications', () => ({ notifications: readRecords('notification', 100) }));
+  add('GET', '/api/notifications', () => ({ notifications: readRecords('notifications', 100) }));
   add('GET', '/api/history/:kind', ({ params, url }) => {
-    if (!['decision','fill','proposal','operator','strategy','notification'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
+    if (!['journal','fills','action-history','operator-commands','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
     const after = parseNonNegativeInt(url.searchParams.get('after'), 0, 'after');
     const limit = Math.min(parseNonNegativeInt(url.searchParams.get('limit'), 50, 'limit'), 100);
     return { entries: readRecordPage(params.kind, after, limit) };
@@ -326,47 +254,47 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
   add('GET', '/api/stream', () => undefined);
 
   add('GET', '/api/commands', () => ({
-    commands: ui.listCommands().map((c) => ({ name: c.name, aliases: c.aliases ?? [], args: c.args ?? null, help: c.help })),
+    commands: ui.listCommands().filter((c) => c.api)
+      .map((c) => ({ name: c.name, aliases: c.aliases ?? [], args: c.args ?? null, help: c.help })),
   }));
 
-  add('POST', '/api/commands/:name', async ({ params, body, principal }) => {
-    if (!['pause','resume','cycle'].includes(params.name)) throw new HttpError(400, 'Use pause, resume, or cycle');
-    appendRecord('operator', crypto.randomUUID(), new Date().toISOString(), { actorId: principal.name, action: params.name });
+  add('POST', '/api/commands/:name', async ({ params, body }) => {
+    const name = params.name.toLowerCase();
+    const command = ui.listCommands().find((c) => c.api && (c.name === name || c.aliases?.includes(name)));
+    if (!command) throw new HttpError(404, `Unknown or unavailable command /${params.name}. Type /help for the list.`);
     const args = optionalString((await body()).args, 'args') ?? '';
-    const result = await ui.runCommand(params.name, args);
-    if (!result.ok && result.output.length === 0 && /^Unknown command/.test(result.error ?? '')) {
-      throw new HttpError(404, result.error!);
-    }
-    return result;
+    if (args.length > 4000) throw new HttpError(400, 'Command arguments must be at most 4000 characters');
+    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { actorId: OPERATOR, action: command.name, args });
+    return ui.runCommand(command.name, args);
   });
 
-  add('GET', '/api/agent-commands', () => ({ commands: listAgentCommands() }));
+  add('GET', '/api/agent-commands', () => ({ commands: listRequests() }));
   add('GET', '/api/lessons', () => ({ lessons: listLessons() }));
-  add('POST', '/api/lessons/:id', async ({ body, params, principal }) => {
+  add('POST', '/api/lessons/:id', async ({ body, params }) => {
     const input = await body();
-    try { return reviewLesson(params.id, String(input.text ?? ''), input.active as boolean, principal.name); }
+    try { return reviewLesson(params.id, String(input.text ?? ''), input.active as boolean); }
     catch (err: any) { throw new HttpError(400, err.message); }
   });
-  add('POST', '/api/messages', async ({ body, principal }) => {
+  add('POST', '/api/messages', async ({ body }) => {
     const text = optionalString((await body()).text, 'text');
     if (!text?.trim()) throw new HttpError(400, 'text is required');
     if (text.length > 4000) throw new HttpError(400, 'Messages must be at most 4000 characters');
     if (/^\s*(\/|approve\b|reject\b)/i.test(text)) throw new HttpError(400, 'Use the explicit account controls for commands and approvals');
-    const command = messageService ? messageService(text, principal.name) : enqueueCommand('concierge', text, principal.name);
-    return { accepted: true, commandId: command.id, status: command.status };
+    const command = messageService ? messageService(text, OPERATOR) : enqueueRequest('concierge', text, OPERATOR);
+    return { accepted: true, requestId: command.id, status: command.status };
   });
 
   add('GET', '/api/strategy', () => getPolicySnapshot());
-  add('POST', '/api/strategy', async ({ body, principal }) => {
+  add('POST', '/api/strategy', async ({ body }) => {
     const input = await body();
-    try { return saveStrategy(input.policy, String(input.expectedHash ?? ''), principal.name, input.playbook as string | undefined); }
+    try { return saveStrategy(input.policy, String(input.expectedHash ?? ''), OPERATOR, input.playbook as string | undefined); }
     catch (err: any) { throw new HttpError(/changed/.test(err.message) ? 409 : 400, err.message); }
   });
   add('GET', '/api/orders', () => {
     const tick = getLastTick();
     return { available: !!tick && !tick.ordersStale, lastTickAt: tick?.tickAt, orders: tick && !tick.ordersStale ? tick.orders : null };
   });
-  add('POST', '/api/positions/:symbol/adopt', async ({ params, body, principal }) => {
+  add('POST', '/api/positions/:symbol/adopt', async ({ params, body }) => {
     const input = await body(), symbol = canonicalSymbol(params.symbol), stop = Number(input.stop), target = input.target == null ? undefined : Number(input.target);
     if ([stop, target].some(level => level != null && Math.abs(level * 100 - Math.round(level * 100)) > 1e-8)) throw new HttpError(400, 'Stop and target prices must use whole cents');
     if (isCryptoSymbol(symbol) || !(stop > 0) || !Number.isFinite(stop) || (target != null && (!Number.isFinite(target) || target <= stop))) throw new HttpError(400, 'Provide valid equity stop and target prices');
@@ -379,17 +307,17 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     assertExecutionOwner();
     transaction(() => {
       openPositionSnapshot({ symbol, entryPrice: held.avgCost, stopLevel: stop, takeProfitLevel: target });
-      appendRecord('operator', crypto.randomUUID(), new Date().toISOString(), { actorId: principal.name, action: 'adopt', symbol, stop, target, qty: held.qty });
+      appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { actorId: OPERATOR, action: 'adopt', symbol, stop, target, qty: held.qty });
     });
     return { managed: true, protection: 'Waiting for broker confirmation' };
   });
-  add('POST', '/api/positions/:symbol/confirm-protection', async ({ params, body, principal }) => {
+  add('POST', '/api/positions/:symbol/confirm-protection', async ({ params, body }) => {
     const input = await body();
-    try { await confirmProtection(params.symbol, String(input.stopOrderId ?? ''), input.targetOrderId as string | undefined, principal.name); }
+    try { await confirmProtection(params.symbol, String(input.stopOrderId ?? ''), input.targetOrderId as string | undefined, OPERATOR); }
     catch (err: any) { throw new HttpError(409, err.message); }
     return { ok: true, note: 'Protection verified. Trading remains paused until resumed.' };
   });
-  add('POST', '/api/reconcile', async () => { await sweepProposals(); return serviceStatus(); });
+  add('POST', '/api/reconcile', async () => { await sweepActions(); return serviceStatus(); });
   return routes;
 }
 
@@ -410,7 +338,6 @@ function openStream(
   });
 
   const send = (e: FeedEntry): void => {
-    if (!authenticate(req)) { res.end(); return; }
     if (!res.write(`id: ${e.seq}\nevent: feed\ndata: ${JSON.stringify(e)}\n\n`)) res.end();
   };
 
@@ -428,7 +355,7 @@ function openStream(
     res.write(`event: tick\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
   });
   const heartbeat = setInterval(() => {
-    if (!authenticate(req) || !res.write(': keep-alive\n\n')) res.end();
+    if (!res.write(': keep-alive\n\n')) res.end();
   }, SSE_HEARTBEAT_MS);
   heartbeat.unref();
   streams.add(res);

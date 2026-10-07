@@ -5,7 +5,7 @@ import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { getState, patchPositionSnapshot, updateState } from '../state/state';
 import { broker } from '../broker';
 import { assertExecutionOwner } from '../core/runtime';
-import { getOpenProposals, transitionProposal } from '../core/proposals';
+import { getOpenActions, transitionAction } from '../core/actions';
 
 interface ProtectionIntent {
   id: string; symbol: string; at: string; stop: number; target?: number;
@@ -17,7 +17,7 @@ export function protectionIntents(): Record<string, ProtectionIntent> {
 function save(intent: ProtectionIntent): void {
   transaction(() => {
     saveValue('protectionIntents', { ...protectionIntents(), [canonicalSymbol(intent.symbol)]: intent });
-    appendRecord('protection', crypto.randomUUID(), new Date().toISOString(), intent);
+    appendRecord('stop-requests', crypto.randomUUID(), new Date().toISOString(), intent);
   });
 }
 
@@ -43,7 +43,7 @@ export async function protect<T>(symbol: string, stop: number, target: number | 
 
 /** A human can relink a confirmed broker stop after reviewing an interrupted request. */
 export async function confirmProtection(symbol: string, stopId: string, targetId: string | undefined, actorId: string): Promise<void> {
-  const adjustment = getOpenProposals().find(p => p.status === 'unknown' && ['stop_adjust','target_adjust'].includes(p.kind) && sameSymbol(p.symbol, symbol));
+  const adjustment = getOpenActions().find(p => p.status === 'unknown' && ['stop_adjust','target_adjust'].includes(p.kind) && sameSymbol(p.symbol, symbol));
   const intent = protectionIntents()[canonicalSymbol(symbol)] ?? (adjustment ? {
     id: adjustment.id, symbol, at: new Date(adjustment.createdAt).toISOString(),
     stop: Number(adjustment.params.stopLoss), target: getState().positionSnapshots[canonicalSymbol(symbol)]?.takeProfitLevel,
@@ -63,7 +63,7 @@ export async function confirmProtection(symbol: string, stopId: string, targetId
   transaction(() => {
     patchPositionSnapshot(symbol, { stopOrderId: stop.id, takeProfitOrderId: target?.id, stopLevel: intent.stop, takeProfitLevel: intent.target });
     save({ ...intent, status: 'confirmed', error: undefined });
-    if (adjustment && Number(adjustment.params.stopLoss) === intent.stop) transitionProposal(adjustment.id, 'executed', { actorId, result: {} });
-    appendRecord('operator', crypto.randomUUID(), new Date().toISOString(), { action: 'confirm_protection', symbol, actorId, stopId, targetId });
+    if (adjustment && Number(adjustment.params.stopLoss) === intent.stop) transitionAction(adjustment.id, 'executed', { actorId, result: {} });
+    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { action: 'confirm_protection', symbol, actorId, stopId, targetId });
   });
 }

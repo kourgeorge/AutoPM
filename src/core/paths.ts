@@ -1,4 +1,4 @@
-/** Every worker owns one private DATA_DIR; the account identity is verified at startup. */
+/** All account data lives in `data/`. `DATA_DIR` exists only so tests can use a temporary folder. */
 import fs from 'fs';
 import path from 'path';
 import * as dotenv from 'dotenv';
