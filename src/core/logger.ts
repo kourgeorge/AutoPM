@@ -108,7 +108,9 @@ function summarizeResult(tool: string, raw: string): string {
       case 'run_idea_agent':
         return Array.isArray(r.ideas) ? `${r.ideas.length} idea(s): ${r.ideas.map((i: any) => i.symbol).join(', ')}` : 'no ideas';
       case 'web_search':
-        return Array.isArray(r) ? `${r.length} results` : formatResult(r);
+        return Array.isArray(r?.results) ? (r.error ? `FAILED: ${r.error}` : `${r.results.length} results`) : formatResult(r);
+      case 'get_ticker_news':
+        return r?.symbols ? Object.entries(r.symbols).map(([s, v]: [string, any]) => `${s}: ${v.error ? 'unavailable' : v.news.length}`).join(', ') : formatResult(r);
       case 'search_news':
         return Array.isArray(r) ? `${r.length} articles` : formatResult(r);
       case 'get_sec_filing_summary':

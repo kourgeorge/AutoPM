@@ -1,5 +1,5 @@
 import { Bar } from '../core/types';
-import { isCryptoSymbol } from '../core/symbols';
+import { cryptoPair, isCryptoSymbol, sameSymbol } from '../core/symbols';
 
 // yahoo-finance2 v4 requires instantiation
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -175,4 +175,56 @@ export async function getBarsRaw(
     throw new Error(`${symbol}: chart returned no usable bars (${interval})`);
   }
   return bars;
+}
+
+export interface NewsItem {
+  title: string;
+  publisher: string | null;
+  url: string | null;
+  publishedAt: string | null;
+  relatedTickers: string[];
+}
+
+/** A symbol in Yahoo's spelling: crypto as `BTC-USD`, equities unchanged. */
+function yahooSymbol(symbol: string): string {
+  return isCryptoSymbol(symbol) ? cryptoPair(symbol).replace('/', '-') : symbol.toUpperCase();
+}
+
+/**
+ * Keep the stories Yahoo tags with `symbol`, newest first, in a plain shape.
+ *
+ * Yahoo's search endpoint answers a ticker query with general market stories too (a
+ * "Stock market today" piece comes back for AAPL), so an item counts only when the ticker is
+ * in its `relatedTickers`. Compared with `sameSymbol` so `BTC-USD` matches `BTC/USD`.
+ */
+export function shapeYahooNews(symbol: string, raw: any[], limit: number): NewsItem[] {
+  return raw
+    .filter(n => typeof n?.title === 'string' && Array.isArray(n.relatedTickers)
+      && n.relatedTickers.some((t: unknown) => typeof t === 'string' && sameSymbol(t, symbol)))
+    .map(n => {
+      const t = n.providerPublishTime;
+      const at = t instanceof Date ? t : typeof t === 'number' ? new Date(t * 1000) : typeof t === 'string' ? new Date(t) : null;
+      return {
+        title: n.title,
+        publisher: typeof n.publisher === 'string' ? n.publisher : null,
+        url: typeof n.link === 'string' ? n.link : null,
+        publishedAt: at && Number.isFinite(at.getTime()) ? at.toISOString() : null,
+        relatedTickers: n.relatedTickers.filter((x: unknown) => typeof x === 'string'),
+      };
+    })
+    .sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''))
+    .slice(0, limit);
+}
+
+/**
+ * Recent news stories for one ticker, THROWING on failure. An empty array means Yahoo had
+ * nothing tagged with the ticker — not that the call failed.
+ *
+ * validateResult:false for the reason in `getQuoteRaw`.
+ */
+export async function getNewsRaw(symbol: string, limit: number): Promise<NewsItem[]> {
+  const ySymbol = yahooSymbol(symbol);
+  // Over-fetch: the relatedTickers filter drops the general market stories.
+  const r = await yf.search(ySymbol, { quotesCount: 0, newsCount: Math.min(50, limit * 2) }, { validateResult: false }) as any;
+  return shapeYahooNews(ySymbol, Array.isArray(r?.news) ? r.news : [], limit);
 }
