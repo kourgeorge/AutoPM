@@ -137,6 +137,8 @@ test('a settings explanation reaches the account conversation without a trader h
   assert.match(command.result, /0.5% of equity at the planned stop/);
   assert.match(command.result, /Human approval|human approval/);
   assert.ok(storage.readActivity(0, 100).some(entry => entry.kind === 'reply' && entry.text.includes(command.result)));
+  commands.updateRequest(commands.enqueueRequest('trader', 'Review', 'system').id, { status: 'completed', result: 'Review completed; no trade action was queued.' });
+  assert.ok(!storage.readActivity(0, 1000).some(entry => entry.kind === 'reply' && /no trade action/.test(entry.text)), 'trader results are not chat replies');
   assert.equal(policy.getPolicyHash(), hash);
   assert.equal(commands.pendingRequests('trader').length, 0);
 });

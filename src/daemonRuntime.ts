@@ -81,7 +81,11 @@ function decisionToActivityRow(r: DecisionRecord): EventRow {
 
 }
 
-if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => { if (entry.kind === 'reply') ui.reply(entry.text); });
+// Concierge replies go to the chat; trader results (core/requests.ts) go to the log pane.
+if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => {
+  if (entry.kind === 'reply') ui.reply(entry.text);
+  else if (entry.kind === 'log' && entry.text.startsWith('[Trader] ')) ui.log(entry.level ?? 'INFO', entry.text);
+});
 
 const trader = new Trader();
 const concierge = new ConciergeAgent(msg => trader.wake(msg));
