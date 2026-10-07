@@ -10,7 +10,7 @@
  * in `core/config.ts`, which throws at import time when `AI_API_KEY` is missing.
  */
 import * as dotenv from 'dotenv';
-import type { Cycle, Environment, EventRow, Lane, ProposalRow, TickSnapshot } from './dashboard';
+import type { Cycle, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
 
 // Needed here because `ui.ts` is the FIRST import in `daemon.ts`, before anything else has
 // loaded `.env` — and `HEADLESS` may be set there. Idempotent.
@@ -36,6 +36,8 @@ export interface SlashCommand {
   /** Shown after the name in `/help`, e.g. `[days]`. */
   args?: string;
   help: string;
+  /** Available through the authenticated operator API; local commands stay private by default. */
+  api?: boolean;
   run: (args: string) => void | Promise<void>;
 }
 
@@ -59,7 +61,7 @@ export interface OperatorUI {
   alert(msg: string): void;
   setTick(tick: TickSnapshot): void;
   setEvents(events: EventRow[], eventLog: EventRow[]): void;
-  setProposals(proposals: ProposalRow[]): void;
+  setActions(actions: ActionRow[]): void;
   setEnvironment(env: Environment): void;
   setVenueOpen(open: boolean | null): void;
   setTraderActivity(lane: Lane): void;

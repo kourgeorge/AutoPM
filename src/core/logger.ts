@@ -98,9 +98,9 @@ function summarizeResult(tool: string, raw: string): string {
       case 'get_macro_indicators':
         return `SPY ${r.spy?.change1dPct > 0 ? '+' : ''}${r.spy?.change1dPct?.toFixed(2)}%, VIX ${r.vix?.level?.toFixed(1)}`;
       case 'execute_entry':
-        return r.pending ? `queued ${r.symbol} (${r.proposalId}) — ${r.automatic ? 'automatic execution' : 'awaiting approval'}` : r.ok ? `submitted ${r.symbol}` : `BLOCKED: ${r.error}`;
+        return r.pending ? `queued ${r.symbol} (${r.actionId}) — ${r.automatic ? 'automatic execution' : 'awaiting approval'}` : r.ok ? `submitted ${r.symbol}` : `BLOCKED: ${r.error}`;
       case 'execute_exit':
-        return r.pending ? `exit queued for ${r.symbol} (${r.proposalId})` : r.ok ? `exit submitted for ${r.symbol}` : `FAILED: ${r.error}`;
+        return r.pending ? `exit queued for ${r.symbol} (${r.actionId})` : r.ok ? `exit submitted for ${r.symbol}` : `FAILED: ${r.error}`;
       case 'run_monitor_agent':
         return `${r.symbol}: ${r.action?.toUpperCase()} — ${r.reason}`;
       case 'run_research_agent':

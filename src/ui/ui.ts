@@ -14,7 +14,7 @@
 import * as blessed from 'blessed';
 import { InputEditor } from './inputEditor';
 import {
-  isOpenProposal,
+  isOpenAction,
   needsAttention,
   POS_ROW_COLS,
   renderEventsPanel,
@@ -26,10 +26,10 @@ import {
   type Environment,
   type EventRow,
   type Lane,
-  type ProposalRow,
+  type ActionRow,
   type TickSnapshot,
 } from './dashboard';
-import { decideProposal } from '../core/proposals';
+import { decideAction } from '../core/actions';
 import { escapeTags, plainWidth, wrapPlain } from './format';
 import { makeGlyphs, type Glyphs } from './glyphs';
 import { DECIDE_COMMAND, HEADLESS, type OperatorUI, type SlashCommand } from './surface';
@@ -234,7 +234,7 @@ class TerminalUI implements OperatorUI {
   private eventsAvailable = true;
   private events: EventRow[] = [];
   private eventLog: EventRow[] = [];
-  private proposals: ProposalRow[] = [];
+  private actions: ActionRow[] = [];
   private tick: TickSnapshot | null = null;
   private venueOpen: boolean | null = null;
   private env: Environment = { broker: '', venue: '', provider: '', model: '' };
@@ -409,7 +409,7 @@ class TerminalUI implements OperatorUI {
 
     this.input.onSubmit((line) => {
       this.appendUserMessage(line);
-      // Matched HERE, before anything reaches the concierge: the decision to act on a proposal
+      // Matched HERE, before anything reaches the concierge: the decision to act on an action
       // must not pass through a language model, and the concierge has no decide tool precisely
       // so it cannot answer on the operator's behalf. Anything that doesn't match the command
       // syntax falls through to the conversation exactly as it always did.
@@ -421,6 +421,7 @@ class TerminalUI implements OperatorUI {
     });
 
     this.registerBuiltinCommands();
+    this.input.setCommands(() => this.commandOrder);
 
     // Scroll log with Page Up/Down even when input is focused
     this.input.el.key('pageup',   () => { this.logBox.scroll(-this.logBox.height as number); this.screen.render(); });
@@ -572,9 +573,9 @@ class TerminalUI implements OperatorUI {
     this.paint();
   }
 
-  /** Pushed every tick from `daemon.ts`, next to `setEvents` — see `core/proposals.ts`. */
-  setProposals(proposals: ProposalRow[]): void {
-    this.proposals = proposals;
+  /** Pushed every tick from `daemon.ts`, next to `setEvents` — see `core/actions.ts`. */
+  setActions(actions: ActionRow[]): void {
+    this.actions = actions;
     this.paint();
   }
 
@@ -712,13 +713,13 @@ class TerminalUI implements OperatorUI {
     this.registerCommand({
       name: 'approve',
       args: '<id>',
-      help: 'Approve a pending proposal.',
+      help: 'Approve a pending action.',
       run: (args) => this.decideFromCommand('approve', args),
     });
     this.registerCommand({
       name: 'reject',
       args: '<id> [reason]',
-      help: 'Reject a pending proposal.',
+      help: 'Reject a pending action.',
       run: (args) => this.decideFromCommand('reject', args),
     });
   }
@@ -733,14 +734,14 @@ class TerminalUI implements OperatorUI {
   }
 
   /**
-   * Resolve one `approve <id>` / `reject <id> [reason]` command against the live proposal
+   * Resolve one `approve <id>` / `reject <id> [reason]` command against the live action
    * store. A synchronous state mutation, not a promise settle — creation and decision are
-   * fully decoupled, and `strategy/proposalExecutor.ts` picks up an `approved` proposal on its
+   * fully decoupled, and `strategy/actionExecutor.ts` picks up an `approved` action on its
    * own next tick, independent of whatever this process does next.
    */
   private decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
     try {
-      const p = decideProposal(id, decision, 'human', reason?.trim() || undefined);
+      const p = decideAction(id, decision, 'human', reason?.trim() || undefined);
       this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
     } catch (err: any) {
       this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
@@ -1013,7 +1014,7 @@ class TerminalUI implements OperatorUI {
       glyphs: this.glyphs,
       events: this.events,
       eventLog: this.eventLog,
-      proposals: this.proposals,
+      actions: this.actions,
     };
   }
 
@@ -1021,10 +1022,10 @@ class TerminalUI implements OperatorUI {
     const f2 = this.panelEnabled
       ? (this.mode === 'off' ? 'F2 panel (needs a bigger window)' : 'F2 panel off')
       : 'F2 panel on';
-    // Proposals lead the count: a proposal is the one thing on this panel that ONLY a human can
+    // Actions lead the count: an action is the one thing on this panel that ONLY a human can
     // move, so it is the more urgent reason to open the inbox.
-    const openProposals = this.proposals.filter(isOpenProposal).length;
-    const unacked = openProposals + this.events.filter(needsAttention).length;
+    const openActions = this.actions.filter(isOpenAction).length;
+    const unacked = openActions + this.events.filter(needsAttention).length;
     const f3 = !this.eventsAvailable
       ? 'F3 inbox (needs a taller window)'
       : this.mainView === 'events' ? 'F3 log' : unacked > 0 ? `F3 inbox (${unacked}!)` : 'F3 inbox';

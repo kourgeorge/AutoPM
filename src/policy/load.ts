@@ -1,13 +1,12 @@
 /**
  * L0 — the policy loader.
  *
- * Parses data/policy/policy.yaml, validates it against its own `immutable` ceilings,
+ * Parses the active strategy, validates it against its own `immutable` ceilings,
  * hashes the raw text, and holds it in memory. Edits are hot-reloaded.
  *
- * The project ships a read-only default at policy/default.yaml. On first run,
- * if no live policy exists yet, it is copied to data/policy/policy.yaml. All
- * subsequent reads and writes go through data/policy/ — which is gitignored so
- * user edits and version history are never committed.
+ * The active strategy is data/db/trade-settings.json: the risk settings and the playbook
+ * the trader reads, saved together. A new account seeds it from data/policy/policy.yaml if the operator supplied one, otherwise
+ * from the shipped read-only default at policy/default.yaml.
  *
  * Failure semantics differ deliberately by phase:
  *  - the FIRST load throws. There is nothing to fall back to, so a broken policy
@@ -17,7 +16,8 @@
  */
 
 import crypto from 'crypto';
-import { readValue, saveValue, transaction, appendRecord } from '../core/storage';
+import { transaction, appendRecord, isEphemeralStorage } from '../core/storage';
+import { writeFileAtomic } from '../core/fsAtomic';
 import { dump as dumpYaml } from 'js-yaml';
 import fs from 'fs';
 import path from 'path';
@@ -45,17 +45,35 @@ export const TEMPLATE_FILE = path.join(DATA_DIR, 'policy', 'PLAYBOOK.md');
 /** Live (user-managed) policy and its history — inside the gitignored data directory. */
 export const DATA_POLICY_DIR = path.join(DATA_DIR, 'policy');
 export const POLICY_FILE = path.join(DATA_POLICY_DIR, 'policy.yaml');
-export const HISTORY_DIR = path.join(DATA_POLICY_DIR, 'history');
 
-/** Ensure data/policy/policy.yaml exists, seeding from the project default if not. */
-function ensureLivePolicy(): void {
-  fs.mkdirSync(DATA_POLICY_DIR, { recursive: true });
-  if (!fs.existsSync(TEMPLATE_FILE)) fs.copyFileSync(SHIPPED_TEMPLATE_FILE, TEMPLATE_FILE);
-  if (!fs.existsSync(POLICY_FILE)) {
-    fs.mkdirSync(DATA_POLICY_DIR, { recursive: true });
-    fs.copyFileSync(DEFAULT_POLICY_FILE, POLICY_FILE);
-    logger.info(`[Policy] Seeded data/policy/policy.yaml from policy/default.yaml`);
-  }
+/**
+ * An operator-supplied policy file is optional. Without one, a new account starts from the
+ * shipped default; after the first load the active strategy lives in storage.
+ */
+function policyFile(): string { return fs.existsSync(POLICY_FILE) ? POLICY_FILE : DEFAULT_POLICY_FILE; }
+function playbookFile(): string { return fs.existsSync(TEMPLATE_FILE) ? TEMPLATE_FILE : SHIPPED_TEMPLATE_FILE; }
+
+/**
+ * Risk settings and playbook together: one file, one revision.
+ * On disk: {"settings": {...}, "playbook": "..."}. In memory the settings travel as YAML
+ * text, which is what the parser, the hash and the strategy history all take.
+ */
+interface TradeSettings { text: string; playbook: string }
+const TRADE_SETTINGS_FILE = path.join(DATA_DIR, 'db', 'trade-settings.json');
+let ephemeralTradeSettings: TradeSettings | undefined;   // replay harness only
+
+function readTradeSettings(): TradeSettings | undefined {
+  if (isEphemeralStorage()) return ephemeralTradeSettings;
+  if (!fs.existsSync(TRADE_SETTINGS_FILE)) return undefined;
+  const file = JSON.parse(fs.readFileSync(TRADE_SETTINGS_FILE, 'utf8'));
+  if (!file?.settings || typeof file.playbook !== 'string') throw new Error(`${TRADE_SETTINGS_FILE} must contain "settings" and "playbook"`);
+  return { text: dumpYaml(file.settings, { lineWidth: -1 }), playbook: file.playbook };
+}
+
+function writeTradeSettings(settings: TradeSettings): void {
+  if (isEphemeralStorage()) { ephemeralTradeSettings = settings; return; }
+  fs.mkdirSync(path.dirname(TRADE_SETTINGS_FILE), { recursive: true });
+  writeFileAtomic(TRADE_SETTINGS_FILE, JSON.stringify({ settings: parseYaml(settings.text), playbook: settings.playbook }, null, 2) + '\n');
 }
 
 let _policy: Policy | null = null;
@@ -392,13 +410,12 @@ export function parsePolicy(text: string, source = POLICY_FILE): PolicyLoadResul
 
 /** First load. Throws — there is no previous policy to keep. */
 export function loadPolicy(): Policy {
-  ensureLivePolicy();
   const text = readPolicyText();
   const result = parsePolicy(text);
   if (!result.ok) {
     throw new Error(`Invalid policy at ${POLICY_FILE}:\n  - ${result.errors.join('\n  - ')}`);
   }
-  if (!readValue('activeStrategy')) saveValue('activeStrategy', { text, playbook: fs.readFileSync(TEMPLATE_FILE, 'utf8') });
+  if (!readTradeSettings()) writeTradeSettings({ text, playbook: fs.readFileSync(playbookFile(), 'utf8') });
   _policy = result.policy;
   _meta = result.meta;
   logger.info(`[Policy] Loaded v${result.meta.version} (${result.meta.hash})`);
@@ -444,7 +461,7 @@ export function useEphemeralPolicy(policy: Policy): void {
 
 /** Raw yaml text of the active policy file. Used by mutate.ts and history snapshots. */
 export function readPolicyText(): string {
-  return readValue<{ text: string }>('activeStrategy')?.text ?? fs.readFileSync(POLICY_FILE, 'utf8');
+  return readTradeSettings()?.text ?? fs.readFileSync(policyFile(), 'utf8');
 }
 
 /** Full effective strategy identity, including the per-account pinned playbook. */
@@ -461,7 +478,7 @@ export function getPolicySnapshot() {
 }
 
 export function readPlaybook(): string {
-  return readValue<{ playbook: string }>('activeStrategy')?.playbook ?? fs.readFileSync(fs.existsSync(TEMPLATE_FILE) ? TEMPLATE_FILE : SHIPPED_TEMPLATE_FILE, 'utf8');
+  return readTradeSettings()?.playbook ?? fs.readFileSync(playbookFile(), 'utf8');
 }
 
 /** Atomically activate settings, pinned prose, and audit history as one revision. */
@@ -478,12 +495,13 @@ export function saveStrategy(settings: unknown, expectedHash: string, actorId: s
   // Lazy import avoids the renderer/loader module cycle during startup.
   require('./render').renderTemplate(playbook, parsed.policy);
   transaction(() => {
-    const persisted = readValue<{ text: string; playbook: string }>('activeStrategy');
+    const persisted = readTradeSettings();
     const active = persisted ? parsePolicy(persisted.text) : null;
     const actualHash = active?.ok ? crypto.createHash('sha256').update(JSON.stringify(active.policy)).update(persisted!.playbook).digest('hex') : getPolicyHash();
     if (!expectedHash || expectedHash !== actualHash) throw new Error('Strategy changed; reload before saving');
-    appendRecord('strategy', crypto.randomUUID(), new Date().toISOString(), { actorId, before: persisted, after: { text, playbook } });
-    saveValue('activeStrategy', { text, playbook });
+    appendRecord('strategy-changes', crypto.randomUUID(), new Date().toISOString(), { actorId, before: persisted, after: { text, playbook } });
+    // Last, so a failed write rolls the history record back with it.
+    writeTradeSettings({ text, playbook });
   });
   _policy = parsed.policy; _meta = parsed.meta;
   return getPolicySnapshot();

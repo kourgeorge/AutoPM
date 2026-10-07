@@ -114,10 +114,10 @@ export interface ImmutablePolicy {
   maxGrossExposurePctCeiling: number;
 }
 
-/** `auto` — the machine acts immediately. `manual` — a proposal is created and a human decides. */
+/** `auto` — the machine acts immediately. `manual` — an action is created and a human decides. */
 export type AutomationLevel = 'auto' | 'manual';
 
-/** One level per action kind the gate covers — see `ProposalKind` in `state/state.ts`. */
+/** One level per action kind the gate covers — see `ActionKind` in `state/state.ts`. */
 export interface AutomationLevels {
   /** `execute_entry` — new capital committed. */
   entry: AutomationLevel;
@@ -129,12 +129,12 @@ export interface AutomationLevels {
   targetAdjust: AutomationLevel;
 }
 
-/** What an unanswered proposal settles as. */
+/** What an unanswered action settles as. */
 export type AutomationTimeout = 'deny' | 'allow';
 
 /**
  * The automation gate: for each action kind, does the machine act or does a human decide via a
- * proposal (`core/proposals.ts`)?
+ * action (`core/actions.ts`)?
  *
  * The level applies uniformly on paper and live — there is no venue-based exemption.
  *
@@ -145,7 +145,7 @@ export type AutomationTimeout = 'deny' | 'allow';
  */
 export interface AutomationPolicy {
   level: AutomationLevels;
-  /** How long a pending proposal waits for a human before settling as `onTimeout`. */
+  /** How long a pending action waits for a human before settling as `onTimeout`. */
   timeoutMs: number;
   onTimeout: AutomationTimeout;
 }

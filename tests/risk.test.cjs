@@ -4,7 +4,7 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const { test, after } = require('node:test');
 Object.assign(process.env, { DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'autotrade-risk-')),
-  ACCOUNT_ID: '', BROKER: 'alpaca', HEADLESS: '1', AI_PROVIDER: 'ollama', AI_API_KEY: 'test',
+  BROKER: 'alpaca', HEADLESS: '1', AI_PROVIDER: 'ollama', AI_API_KEY: 'test',
   ALPACA_KEY_ID: 'test', ALPACA_SECRET_KEY: 'test', ALPACA_BASE_URL: 'https://paper-api.alpaca.markets' });
 require('ts-node/register');
 const denyNetwork = () => { throw new Error('Unexpected network access in risk test'); };
@@ -227,7 +227,7 @@ test('historical simulation shares risk sizing and discloses unsupported targetl
   } finally { source.getHistoricalBars = original; }
 });
 
-test('live planning and execution enforce the same risk constraints and record the proposal assessment', async () => {
+test('live planning and execution enforce the same risk constraints and record the action assessment', async () => {
   const orders = require('../src/strategy/orderManager'), riskData = require('../src/strategy/riskData');
   const prices = require('../src/collect/priceSource'), source = require('../src/collect/barSource');
   const fundamentals = require('../src/collect/fundamentals'), regime = require('../src/macro/regime');
@@ -239,7 +239,7 @@ test('live planning and execution enforce the same risk constraints and record t
   const signal = { symbol: 'AAPL', signal: 'buy', price: 100, stopLoss: 95, takeProfit: 115, atr: 2, reason: 'Supported test setup' };
   try {
     loader.useEphemeralPolicy(p);
-    state.updateState({ paused: false, dailyLossHalted: false, startOfDayEquity: 100000, accountId: 'alpaca:paper:test', positionSnapshots: {}, proposals: {} });
+    state.updateState({ paused: false, dailyLossHalted: false, startOfDayEquity: 100000, accountId: 'alpaca:paper:test', positionSnapshots: {} });
     broker.isMarketOpen = async () => true;
     broker.getAccountInfo = async () => ({ equity: 100000, buyingPower: 100000, cash: 100000 });
     broker.getPositions = async () => [];
@@ -258,7 +258,7 @@ test('live planning and execution enforce the same risk constraints and record t
     await assert.rejects(() => orders.validateEntry(signal, plan.maxQty + 1), e => e.rule === 'risk_per_trade');
     await assert.rejects(() => orders.validateEntry({ ...signal, takeProfit: 110 }, 1), e => e.rule === 'reward_risk_too_low');
     const queued = await orders.enterPosition(signal, plan.maxQty);
-    assert.equal(state.getState().proposals[queued.proposalId].params.riskAssessment.plannedLoss, plan.plannedLoss);
+    assert.equal(require('../src/core/actions').getAction(queued.actionId).params.riskAssessment.plannedLoss, plan.plannedLoss);
     const held = [{ symbol: 'MSFT', qty: 400, marketValue: 40000 }];
     broker.getPositions = async () => held;
     loader.useEphemeralPolicy(policy({ riskPerTradePct: 1, targetVolatilityPct: 10, maxSectorWeightPct: 100, earningsBlackoutDays: 0 }));

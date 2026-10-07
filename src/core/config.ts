@@ -37,7 +37,6 @@ const IBKR_PORT = parseInt(process.env.IBKR_PORT ?? '7497'); // 7497=paper TWS, 
  * model id, it belongs here.
  */
 export const config = {
-  expectedAccount: process.env.ACCOUNT_ID?.trim() ?? '',
   requestTimeoutMs: 15_000,
   /**
    * Active EXECUTION venue — orders, positions, account, fills. Set BROKER=ibkr to switch;
@@ -96,30 +95,13 @@ export const config = {
     maxToolRounds: parseInt(process.env.AI_MAX_TOOL_ROUNDS ?? '10'),
   },
 
-  /**
-   * The operator HTTP API (`server/api.ts`). Started only under `HEADLESS=1`, and only when a
-   * token is set — an API that can approve trades is never opened without one.
-   *
-   * Binds to localhost by default: put a TLS-terminating reverse proxy (Caddy, nginx, the
-   * platform's load balancer) in front rather than exposing plain HTTP. Set `API_HOST=0.0.0.0`
-   * only inside a container whose port is published to that proxy alone.
-   */
+  /** The local dashboard (`server/api.ts`), started under `HEADLESS=1` on 127.0.0.1 only. */
   api: {
-    token: process.env.API_TOKEN?.trim() ?? '',
-    publicOrigin: process.env.API_PUBLIC_ORIGIN?.trim() || 'http://127.0.0.1:8787',
-    viewerToken: process.env.API_VIEWER_TOKEN?.trim() ?? '',
-    host: process.env.API_HOST?.trim() || '127.0.0.1',
     port: parseInt(process.env.API_PORT ?? '8787'),
-    /** Exact origin allowed to call from a browser, e.g. `https://app.example.com`. Unset = none. */
-    corsOrigin: process.env.API_CORS_ORIGIN?.trim() || null,
   },
 } as const;
 
 if (!['alpaca', 'ibkr'].includes(config.broker)) throw new Error('BROKER must be alpaca or ibkr');
 for (const [key, value, maximum] of [['API_PORT', config.api.port, 65535], ['IBKR_PORT', config.ibkr.port, 65535], ['AI_MAX_TOKENS', config.ai.maxTokensPerTurn, 16384], ['AI_MAX_TOOL_ROUNDS', config.ai.maxToolRounds, 20]] as const) {
   if (!Number.isInteger(value) || value < 1 || value > maximum) throw new Error(`${key} is outside its supported range`);
-}
-const publicUrl = new URL(config.api.publicOrigin);
-if (publicUrl.origin !== config.api.publicOrigin || (!['127.0.0.1', 'localhost', '[::1]'].includes(publicUrl.hostname) && publicUrl.protocol !== 'https:')) {
-  throw new Error('API_PUBLIC_ORIGIN must be an exact HTTPS origin (HTTP is allowed for localhost)');
 }

@@ -1,4 +1,4 @@
-import { subscribeFeed } from '../core/storage';
+import { subscribeActivity } from '../core/storage';
 /**
  * The UI with no screen — for running the bot on a server.
  *
@@ -6,7 +6,7 @@ import { subscribeFeed } from '../core/storage';
  * `TerminalUI`, but instead of painting it:
  *
  *   - prints every log line to stdout as plain text, so `docker logs` / journald hold it;
- *   - keeps the latest dashboard state (tick, proposals, lanes, ...) for the API to read;
+ *   - keeps the latest dashboard state (tick, actions, lanes, ...) for the API to read;
  *   - keeps a bounded FEED of everything a terminal operator would have seen in the log box —
  *     log lines, replies, charts, alerts, and the operator's own messages — numbered, so a
  *     web client can ask for "everything after #N" or stream it live.
@@ -19,10 +19,10 @@ import { subscribeFeed } from '../core/storage';
  * still exits on its own.
  */
 import { notifyAccount } from '../core/notifications';
-import { appendFeed, readFeed } from '../core/storage';
+import { appendActivity, readActivity } from '../core/storage';
 import { AsyncLocalStorage } from 'async_hooks';
-import { decideProposal } from '../core/proposals';
-import type { Cycle, Environment, EventRow, Lane, ProposalRow, TickSnapshot } from './dashboard';
+import { decideAction } from '../core/actions';
+import type { Cycle, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
 import { DECIDE_COMMAND, type LogLevel, type OperatorUI, type SlashCommand } from './surface';
 
 /** Enough for a few hours of a busy session; older entries are dropped from the front. */
@@ -52,7 +52,7 @@ export interface HeadlessSnapshot {
   tick: TickSnapshot | null;
   events: EventRow[];
   activity: EventRow[];
-  proposals: ProposalRow[];
+  actions: ActionRow[];
 }
 
 export interface CommandResult {
@@ -86,7 +86,7 @@ export class HeadlessUI implements OperatorUI {
     tick: null,
     events: [],
     activity: [],
-    proposals: [],
+    actions: [],
   };
 
   constructor() {
@@ -94,7 +94,8 @@ export class HeadlessUI implements OperatorUI {
       name: 'help',
       aliases: ['?', 'commands'],
       help: 'List every command.',
-      run: () => this.reply(this.listCommands()
+      api: true,
+      run: () => this.reply(this.listCommands().filter((c) => c.api)
         .map((c) => `/${c.name}${c.args ? ` ${c.args}` : ''} — ${c.help}`)
         .join('\n')),
     });
@@ -157,8 +158,8 @@ export class HeadlessUI implements OperatorUI {
     this.state.activity = eventLog;
   }
 
-  setProposals(proposals: ProposalRow[]): void {
-    this.state.proposals = proposals;
+  setActions(actions: ActionRow[]): void {
+    this.state.actions = actions;
   }
 
   setEnvironment(env: Environment): void {
@@ -201,12 +202,12 @@ export class HeadlessUI implements OperatorUI {
 
   /** Entries with `seq > after`, oldest first, at most `limit` of them. */
   feedAfter(after: number, limit: number): FeedEntry[] {
-    return limit > 0 ? readFeed<FeedEntry>(after, limit) : [];
+    return limit > 0 ? readActivity<FeedEntry>(after, limit) : [];
   }
 
   /** Called for every new feed entry. Returns an unsubscribe function. */
   subscribe(listener: (entry: FeedEntry) => void): () => void {
-    return subscribeFeed(listener);
+    return subscribeActivity(listener);
   }
 
   /** Called after every scheduler tick. Returns an unsubscribe function. */
@@ -260,13 +261,13 @@ export class HeadlessUI implements OperatorUI {
   }
 
   /**
-   * Same as the terminal's `approve`/`reject`: a synchronous state change on the proposal store.
-   * `strategy/proposalExecutor.ts` picks an approved proposal up on its own next tick.
+   * Same as the terminal's `approve`/`reject`: a synchronous state change on the action store.
+   * `strategy/actionExecutor.ts` picks an approved action up on its own next tick.
    * Throws on an unknown id or an illegal transition so the API can answer with an error.
    */
   decide(decision: 'approve' | 'reject', id: string, reason?: string, actorId = 'operator'): void {
     try {
-      const p = decideProposal(id, decision, 'human', reason?.trim() || undefined, actorId);
+      const p = decideAction(id, decision, 'human', reason?.trim() || undefined, actorId);
       this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
     } catch (err: any) {
       this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
@@ -278,7 +279,7 @@ export class HeadlessUI implements OperatorUI {
 
   private push(kind: FeedKind, text: string, level?: LogLevel): FeedEntry {
     const payload = { at: new Date().toISOString(), kind, text, ...(level ? { level } : {}) };
-    const entry: FeedEntry = { ...payload, seq: appendFeed(payload) };
+    const entry: FeedEntry = { ...payload, seq: appendActivity(payload) };
     if (level) entry.level = level;
     this.feed.push(entry);
     if (this.feed.length > FEED_CAPACITY) this.feed.splice(0, this.feed.length - FEED_CAPACITY);

@@ -21,7 +21,7 @@ import { assertExecutionOwner } from '../core/runtime';
  */
 
 import { broker } from '../broker';
-import { getOpenProposals } from '../core/proposals';
+import { getOpenActions } from '../core/actions';
 import type { OcoRequest, OpenOrder, OrderRequest, Position } from '../broker/IBroker';
 import { logger } from '../core/logger';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
@@ -573,7 +573,7 @@ export async function sweepStops(): Promise<void> {
   }
 
   // An unconfirmed exit owns its reservation until reconciliation establishes the outcome.
-  const exiting = new Set(getOpenProposals().filter(p => ['executing','submitted','partial','unknown'].includes(p.status)).map(p => canonicalSymbol(p.symbol)));
+  const exiting = new Set(getOpenActions().filter(p => ['executing','submitted','partial','unknown'].includes(p.status)).map(p => canonicalSymbol(p.symbol)));
   for (const [key, intent] of Object.entries(protectionIntents())) if (intent.status !== 'confirmed') exiting.add(key);
   positions = positions.filter(p => !exiting.has(canonicalSymbol(p.symbol)));
 

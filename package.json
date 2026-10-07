@@ -17,8 +17,6 @@
     "dev:headless": "HEADLESS=1 ts-node src/daemon.ts",
     "start:headless": "HEADLESS=1 node dist/daemon.js",
     "test": "node --test tests/*.test.cjs",
-    "user": "ts-node src/scripts/user.ts",
-    "backup": "ts-node src/scripts/backup.ts",
     "import:fills": "ts-node src/scripts/importFills.ts",
     "verify:isolated": "node scripts/verify-isolated.cjs",
     "test:browser": "node --test tests/browser.check.cjs"

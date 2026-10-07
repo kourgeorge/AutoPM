@@ -34,10 +34,10 @@
 import type { Policy } from '../policy/types';
 import { getState, updateState } from '../state/state';
 import type { TickData } from './compute';
-import { appendEventLog } from './eventLog';
-import { appendRecord, readValue, saveValue, transaction } from '../core/storage';
-import { getProposal } from '../core/proposals';
-import { agentContext, assertAgentActive, recordToolEffect } from '../core/agentContext';
+import { appendAlertLog, recordAlertHandling } from './alertLog';
+import { readValue, saveValue, transaction } from '../core/storage';
+import { getAction } from '../core/actions';
+import { agentContext, assertAgentActive, recordToolResult } from '../core/agentContext';
 
 export type EventKind =
   | 'stop_breach'
@@ -177,10 +177,10 @@ export interface TriggerEvent {
   cooldownKey: string;
   suggestedAction: SuggestedAction | null;
 
-  proposalId?: string;
+  actionId?: string;
   needsReview?: boolean;
   handledBy?: string;
-  commandId?: string;
+  requestId?: string;
   handling?: 'observed' | 'action_pending' | 'declined' | 'resolved';
   ackedAt: string | null;
   ackDisposition: AckDisposition | null;
@@ -254,41 +254,41 @@ export function getPendingEvents(): TriggerEvent[] {
   hydrateRegistry();
   let dirty = false;
   for (const event of pending.values()) {
-    if (event.handling !== 'action_pending' || !event.proposalId) continue;
-    const action = getProposal(event.proposalId);
+    if (event.handling !== 'action_pending' || !event.actionId) continue;
+    const action = getAction(event.actionId);
     let changed = false;
     const incomplete = action?.status === 'executed' && action.kind === 'exit' && (action.result?.filledQty ?? 0) < (action.result?.qty ?? Infinity);
     if (action?.status === 'executed' && !incomplete) {
       event.handling = 'resolved'; event.ackedAt = new Date().toISOString(); pending.delete(event.id); changed = true;
     } else if (incomplete || !action || ['failed','expired','rejected','unknown'].includes(action.status)) {
       event.handling = 'observed'; event.ackedAt = null; event.ackDisposition = null;
-      event.ackNote = `Action ${event.proposalId} ${action?.status ?? 'missing'}; review required`; event.proposalId = undefined; event.needsReview = true; changed = true;
+      event.ackNote = `Action ${event.actionId} ${action?.status ?? 'missing'}; review required`; event.actionId = undefined; event.needsReview = true; changed = true;
     }
-    if (changed) { dirty = true; appendRecord('eventHandling', event.id + ':' + (event.handling ?? '') + ':' + Date.now(), new Date().toISOString(), event); }
+    if (changed) { dirty = true; recordAlertHandling(event); }
   }
   if (dirty) persistRegistry();
   return [...pending.values()];
 }
-export function ackEvent(id: string, disposition: AckDisposition = 'acknowledged', note?: string, proposalId?: string): boolean {
+export function ackEvent(id: string, disposition: AckDisposition = 'acknowledged', note?: string, actionId?: string): boolean {
   hydrateRegistry(); assertAgentActive();
   if (!['acting','acknowledged','ignoring'].includes(disposition)) throw new Error('Invalid event disposition');
   const event = pending.get(id);
   if (!event) return false;
   if (disposition === 'ignoring' && !note?.trim()) throw new Error('Declining an incident requires a reason');
   if (disposition === 'acting') {
-    const p = proposalId ? getProposal(proposalId) : undefined;
-    if (!p || p.eventId !== id || ['failed','expired','rejected','unknown'].includes(p.status)) throw new Error('acting requires a valid proposalId linked to this event');
+    const p = actionId ? getAction(actionId) : undefined;
+    if (!p || p.eventId !== id || ['failed','expired','rejected','unknown'].includes(p.status)) throw new Error('acting requires a valid actionId linked to this event');
   }
   return transaction(() => {
-    event.ackDisposition = disposition; event.ackNote = note ?? null; event.proposalId = proposalId;
-    event.handledBy = agentContext.getStore()?.actorId ?? 'system'; event.commandId = agentContext.getStore()?.commandId;
+    event.ackDisposition = disposition; event.ackNote = note ?? null; event.actionId = actionId;
+    event.handledBy = agentContext.getStore()?.actorId ?? 'system'; event.requestId = agentContext.getStore()?.requestId;
     event.handling = disposition === 'acting' ? 'action_pending' : disposition === 'ignoring' ? 'declined' : 'observed';
     const closed = disposition === 'ignoring' || (disposition === 'acknowledged' && !wakesTrader(event));
     event.ackedAt = closed ? new Date().toISOString() : null;
     if (closed) pending.delete(id);
     persistRegistry();
-    appendRecord('eventHandling', id + ':' + Date.now(), new Date().toISOString(), event);
-    recordToolEffect({ ok: true, id, disposition, handling: event.handling, proposalId });
+    recordAlertHandling(event);
+    recordToolResult({ ok: true, id, disposition, handling: event.handling, actionId });
     return true;
   });
 }
@@ -446,7 +446,7 @@ function enqueue(event: TriggerEvent, tick?: TickState): void {
 
   pending.set(event.id, event);
   live.set(event.cooldownKey, event);
-  appendEventLog(event);
+  appendAlertLog(event);
 
   // Bound the queue. Oldest first, so a neglected backlog cannot crowd out the event
   // that just fired.
@@ -550,7 +550,7 @@ export function processHits(
         if (cleared) {
           for (const incident of pending.values()) if (incident.cooldownKey === key) {
             incident.handling = 'resolved'; incident.ackedAt = firedAt; pending.delete(incident.id);
-            appendRecord('eventHandling', incident.id + ':resolved:' + firedAt, firedAt, incident);
+            recordAlertHandling(incident);
           }
           const event = resolveEvent(cleared, hit, firedAt, policy.version);
           enqueue(event, tick);

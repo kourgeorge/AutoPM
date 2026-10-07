@@ -1,4 +1,4 @@
-import { subscribeFeed } from './core/storage';
+import { subscribeActivity } from './core/storage';
 import { ui } from './ui/ui';
 import { attachUI } from './core/logger';
 import { Trader } from './agents/trader';
@@ -14,7 +14,7 @@ import { reconcileOnStartup } from './review/reconcile';
 import { DATA_DIR } from './core/paths';
 import { config } from './core/config';
 import { automationLevel, automationSummary } from './core/automation';
-import { getOpenProposals } from './core/proposals';
+import { getOpenActions } from './core/actions';
 import type { EventRow } from './ui/dashboard';
 import { getMarketStatusSnapshot } from './tools/traderTools';
 import { registerOperatorCommands } from './core/operatorCommands';
@@ -36,8 +36,8 @@ logger.info(`[Boot] data dir: ${DATA_DIR}`);
 // Announced, not left to be discovered by an order that stops dead. `config.venue` is derived
 // from the endpoint (see resolveVenue), so this line and the gate read the same truth. Unlike
 // the old approval gate, there is no channel to wire up here: a human decides a pending
-// proposal by typing `approve <id>`/`reject <id>` straight into the UI, which reads and writes
-// the proposal store (`core/proposals.ts`) directly.
+// action by typing `approve <id>`/`reject <id>` straight into the UI, which reads and writes
+// the action store (`core/actions.ts`) directly.
 logger.info(`[Boot] automation: ${automationSummary()}`);
 
 /**
@@ -81,7 +81,7 @@ function decisionToActivityRow(r: DecisionRecord): EventRow {
 
 }
 
-if (!(ui instanceof HeadlessUI)) subscribeFeed(entry => { if (entry.kind === 'reply') ui.reply(entry.text); });
+if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => { if (entry.kind === 'reply') ui.reply(entry.text); });
 
 const trader = new Trader();
 const concierge = new ConciergeAgent(msg => trader.wake(msg));
@@ -90,11 +90,10 @@ const concierge = new ConciergeAgent(msg => trader.wake(msg));
 ui.onMessage((msg) => concierge.handleMessage(msg));
 registerOperatorCommands(trader);
 
-// Headless (`HEADLESS=1`) means a server with no keyboard: the HTTP API is how an operator
-// reaches the same commands, approvals and chat. Started after the commands are registered so
-// `/api/commands` lists them all from the first request.
+// Headless (`HEADLESS=1`) swaps the terminal for the browser dashboard: the same commands,
+// approvals and chat. Started after the commands are registered so `/api/commands` lists
+// them all from the first request.
 const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, messageService: (text, actor) => concierge.handleMessage(text, actor) }) : null;
-if (ui instanceof HeadlessUI && !api) throw new Error('Headless startup requires a provisioned user or valid API_TOKEN');
 
 // L2 — the deterministic tick loop, and the ONLY path that wakes anyone. Machine wakes
 // carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a
@@ -113,7 +112,7 @@ const scheduler = new FeatureScheduler({
     ui.setTick(data);
     const activity = readDecisions({ limit: 20, filter: isTradeAction }).map(decisionToActivityRow);
     ui.setEvents(getPendingEvents(), activity);
-    ui.setProposals(getOpenProposals());
+    ui.setActions(getOpenActions());
     pushEnvironment(); // policy may have been reloaded since the last tick
   },
 });

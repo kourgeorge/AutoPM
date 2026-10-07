@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { broker } from '../broker';
-import { getState, getPositionSnapshot, upsertPositionSnapshot, type Proposal } from '../state/state';
+import { getState, getPositionSnapshot, upsertPositionSnapshot, type Action } from '../state/state';
 import { sameSymbol, isCryptoSymbol } from '../core/symbols';
 import { canTighten, canLowerTakeProfit, moveStopTo, moveOcoTo } from './stopOrders';
 import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
@@ -30,8 +30,8 @@ export type AnnotationValidation =
 /**
  * Everything `toolAnnotatePosition` knows once the position, price and tighten-only checks
  * have passed. Pure — reads the broker/state but writes nothing, so it is safe for
- * `proposalExecutor.ts` to re-run from scratch against whatever the position looks like by
- * the time a human decides, not against what it looked like when the proposal was created.
+ * `actionExecutor.ts` to re-run from scratch against whatever the position looks like by
+ * the time a human decides, not against what it looked like when the action was created.
  */
 export async function validateAnnotation(input: AnnotateInput): Promise<AnnotationValidation> {
   if (getState().paused) return { ok: false, response: JSON.stringify({ error: 'Trading is paused' }) };
@@ -138,14 +138,14 @@ export async function validateAnnotation(input: AnnotateInput): Promise<Annotati
  * approved: recording a tighter stop that is then rejected would misreport what this system
  * believes protects the position, which is the reason this is a separate function at all.
  */
-export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true }>, proposal?: Proposal): Promise<string> {
-  const id = proposal ? 'action-' + proposal.id : crypto.randomUUID();
+export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true }>, action?: Action): Promise<string> {
+  const id = action ? 'action-' + action.id : crypto.randomUUID();
   const old = getPositionSnapshot(v.symbol);
   if (!old) throw new Error('Position is no longer managed');
   transaction(() => {
     recordDecision(decision('adjustment', 'trader', {
       symbol: v.symbol, rationale: v.thesis, intendedStop: v.stopLoss, intendedTarget: v.takeProfit,
-      proposalId: proposal?.id, commandId: proposal?.commandId, actorId: proposal?.requestedBy,
+      actionId: action?.id, requestId: action?.requestId, actorId: action?.requestedBy,
       orderStatus: 'executing', protectionStatus: 'pending',
     }), id);
     upsertPositionSnapshot(v.symbol, { stopLevel: v.stopLoss,

@@ -13,7 +13,7 @@
 
 import { broker } from '../broker';
 import { logger } from '../core/logger';
-import { openedAtFromFills, readFills, recordFills } from './fillsLedger';
+import { openedAtFromFills, readFills, recordFills } from './fills';
 import { getState, patchPositionSnapshot } from '../state/state';
 
 /**

@@ -1,8 +1,8 @@
 import { withAccountRead } from '../core/accountRead';
 import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
-import { runTurn } from './turnRunner';
-import { enqueueCommand, pendingCommands, updateCommand, getCommand } from '../core/commands';
+import { runAgentLoop } from './agentLoop';
+import { enqueueRequest, pendingRequests, updateRequest, getRequest } from '../core/requests';
 import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
 import { createModelProvider } from '../core/modelProvider';
@@ -16,7 +16,7 @@ import { getState, updateState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
-import { getOpenProposals, refreshCommandOutcome } from '../core/proposals';
+import { getOpenActions, refreshRequestOutcome } from '../core/actions';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
 import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
@@ -63,11 +63,11 @@ export class Trader {
   pause(): void { updateState({ paused: true }); this.controller.abort(); }
   resume(): void { updateState({ paused: false }); this.wakeUp?.(); }
   get status(): { paused: boolean; cycles: number } { return { paused: this.paused, cycles: this.cycleCount }; }
-  wake(message?: string): { commandId?: string; status: string } {
-    const command = message ? enqueueCommand('trader', message) : undefined;
-    if (this.paused) return { commandId: command?.id, status: 'queued_paused' };
+  wake(message?: string): { requestId?: string; status: string } {
+    const command = message ? enqueueRequest('trader', message) : undefined;
+    if (this.paused) return { requestId: command?.id, status: 'queued_paused' };
     if (this.wakeUp) this.wakeUp(); else this.wakePending = true;
-    return { commandId: command?.id, status: 'queued' };
+    return { requestId: command?.id, status: 'queued' };
   }
   private async loop(): Promise<void> {
     while (this.running) {
@@ -86,7 +86,7 @@ export class Trader {
       } catch (err: any) { logger.error('[Trader] ' + err.message); }
       if (!this.running) break;
       if (this.paused) continue;
-      if (this.wakePending || (!this.paused && pendingCommands('trader').length)) { this.wakePending = false; continue; }
+      if (this.wakePending || (!this.paused && pendingRequests('trader').length)) { this.wakePending = false; continue; }
       ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
       await this.interruptibleSleep(sleepMs);
     }
@@ -99,21 +99,23 @@ export class Trader {
     });
   }
   private async runCycle(): Promise<{ sleepMs: number; inTokens: number; outTokens: number }> {
-    const command = pendingCommands('trader')[0] ?? enqueueCommand('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
+    const command = pendingRequests('trader')[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
     const hash = getPolicyHash();
     this.controller = new AbortController();
-    updateCommand(command.id, { status: 'running' });
-    const turn = await runTurn({
-      context: { role: 'trader', commandId: command.id, actorId: command.actorId },
+    updateRequest(command.id, { status: 'running' });
+    const turn = await runAgentLoop({
+      context: { role: 'trader', requestId: command.id, actorId: command.actorId },
       provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), [command.text]) }] }],
+      // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
+      // what let a routine review describe two unrequested sells as "operator-directed".
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
       maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
-    const actions = getCommand(command.id)?.actionIds ?? [];
-    updateCommand(command.id, { status: turn.status === 'completed' && actions.length ? 'waiting' : turn.status,
+    const actions = getRequest(command.id)?.actionIds ?? [];
+    updateRequest(command.id, { status: turn.status === 'completed' && actions.length ? 'waiting' : turn.status,
       result: turn.error ?? (actions.length ? `Actions queued: ${actions.join(', ')}. Execution outcomes are reported separately.` : turn.text || 'Review completed; no trade action was queued.') });
-    if (turn.status === 'completed' && actions.length) refreshCommandOutcome(command.id);
+    if (turn.status === 'completed' && actions.length) refreshRequestOutcome(command.id);
     return { sleepMs: turn.sleepMs ?? DEFAULT_SLEEP_MS, inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }
@@ -462,24 +464,24 @@ function buildMachineEvents(): string {
 }
 
 /**
- * Proposals the automation policy is holding for a human to decide, and any that a human has
+ * Actions the automation policy is holding for a human to decide, and any that a human has
  * already decided but the executor hasn't gotten to yet. Read-only for the trader — there is no
  * tool to approve or reject one, on purpose, so this block exists only to make what is already
  * waiting visible across cycle boundaries, not to invite the model to act on it.
  */
-function buildPendingProposals(): string {
-  const proposals = getOpenProposals();
-  if (proposals.length === 0) return '';
+function buildPendingActions(): string {
+  const actions = getOpenActions();
+  if (actions.length === 0) return '';
 
-  const lines = [`=== PENDING PROPOSALS (${proposals.length}) ===`];
+  const lines = [`=== PENDING PROPOSALS (${actions.length}) ===`];
 
-  for (const p of proposals) {
+  for (const p of actions) {
     const remainingMs = p.expiresAt - Date.now();
     const remaining = remainingMs > 0 ? `expires in ${Math.round(remainingMs / 60_000)}m` : 'past expiry, awaiting sweep';
     lines.push(`[${p.id}] ${p.status.toUpperCase()} ${p.kind} ${p.symbol} — ${p.reason} (${remaining})`);
   }
 
-  lines.push('Only PENDING actions await human approval. Automatic, submitted, partial and unknown actions have their own execution states. get_proposals provides details and confirmed outcomes.');
+  lines.push('Only PENDING actions await human approval. Automatic, submitted, partial and unknown actions have their own execution states. get_actions provides details and confirmed outcomes.');
   lines.push('=== END PENDING PROPOSALS ===');
   return lines.join('\n');
 }
@@ -636,6 +638,9 @@ async function renderCycleContext(
     pendingMessages.forEach(m => lines.push(`> ${m}`));
     lines.push('=== END OPERATOR INSTRUCTIONS ===');
     lines.push('Act on these instructions as part of this cycle.');
+  } else {
+    lines.push('');
+    lines.push('Scheduled review — no operator instruction this cycle. Nothing here asks you to change a position; enter or exit only for a reason you can state from the data below.');
   }
 
   // First, before any of the standing bookkeeping: the events are the reason this cycle
@@ -644,8 +649,8 @@ async function renderCycleContext(
   const eventCtx = buildMachineEvents();
   if (eventCtx) { lines.push(eventCtx); lines.push(''); }
 
-  const proposalCtx = buildPendingProposals();
-  if (proposalCtx) { lines.push(proposalCtx); lines.push(''); }
+  const actionCtx = buildPendingActions();
+  if (actionCtx) { lines.push(actionCtx); lines.push(''); }
 
   lines.push(await buildAccountStatus());
 

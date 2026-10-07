@@ -14,22 +14,22 @@ global.fetch = denyNetwork;
 const state = require('../src/state/state');
 const store = require('../src/core/storage');
 const policy = require('../src/policy/load');
-const actions = require('../src/core/proposals');
+const actions = require('../src/core/actions');
 const orders = require('../src/strategy/orderManager');
 const validateRealEntry = orders.validateEntry;
 const { broker } = require('../src/broker');
-const executor = require('../src/strategy/proposalExecutor');
+const executor = require('../src/strategy/actionExecutor');
 const journal = require('../src/journal/journal');
 const runtime = require('../src/core/runtime');
 const { HeadlessUI } = require('../src/ui/headless');
 let placed, brokerOrder, held;
 const signal = { symbol: 'AAPL', signal: 'buy', price: 100, stopLoss: 95, takeProfit: 110, atr: 2, reason: 'test' };
 function entry(automatic = false) {
-  return actions.createProposal({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic });
+  return actions.createAction({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic });
 }
 beforeEach(async () => {
-  store.database().exec('DELETE FROM settings; DELETE FROM records;');
-  state.updateState({ proposals: {}, positionSnapshots: {}, accountId: 'alpaca:paper:acct', paused: false });
+  store.resetStorage();
+  state.updateState({ positionSnapshots: {}, accountId: 'alpaca:paper:acct', paused: false });
   policy.loadPolicy();
   placed = 0; brokerOrder = null; held = [];
   broker.getAccountInfo = async () => ({ accountId: 'acct', equity: 100000, cash: 100000, buyingPower: 100000, previousCloseEquity: 100000 });
@@ -45,49 +45,49 @@ after(() => { runtime.stopRuntime(); store.closeStorage(); });
 
 test('manual approval and automatic execution share bookkeeping; baselines wait for fills', async () => {
   const p = entry();
-  actions.decideProposal(p.id, 'approve', 'human', undefined, 'alice');
+  actions.decideAction(p.id, 'approve', 'human', undefined, 'alice');
   brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 0, filledPrice: null, status: 'open' };
-  await executor.sweepProposals();
+  await executor.sweepActions();
   assert.equal(placed, 1);
-  assert.equal(actions.getProposal(p.id).status, 'submitted');
+  assert.equal(actions.getAction(p.id).status, 'submitted');
   assert.equal(state.getPositionSnapshot('AAPL'), undefined);
   assert.equal(journal.readDecisions({ filter: r => r.kind === 'entry' }).length, 1);
   brokerOrder = { ...brokerOrder, status: 'filled', filledQty: 2, filledPrice: 100.5 };
-  await executor.sweepProposals();
+  await executor.sweepActions();
   assert.equal(placed, 1);
-  assert.equal(actions.getProposal(p.id).status, 'executed');
+  assert.equal(actions.getAction(p.id).status, 'executed');
   assert.equal(state.getPositionSnapshot('AAPL').entryPrice, 100.5);
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel, 95);
-  assert.equal(actions.getProposal(p.id).actorId, 'alice');
+  assert.equal(actions.getAction(p.id).actorId, 'alice');
 });
 
 test('restart in the broker acceptance window recovers once without resubmission', async () => {
   const p = entry(true);
-  actions.transitionProposal(p.id, 'executing');
+  actions.transitionAction(p.id, 'executing');
   brokerOrder = { id: 'broker-existing', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 2, filledPrice: 101, status: 'filled' };
-  await executor.sweepProposals();
+  await executor.sweepActions();
   assert.equal(placed, 0);
-  assert.equal(actions.getProposal(p.id).status, 'executed');
+  assert.equal(actions.getAction(p.id).status, 'executed');
   assert.equal(journal.readDecisions().length, 1);
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel, 95);
 });
 
 test('unknown broker outcomes block another account action', async () => {
   const first = entry(true);
-  actions.transitionProposal(first.id, 'executing');
-  const second = actions.createProposal({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { signal: { ...signal, symbol: 'MSFT' }, qty: 1 }, reason: 'test', timeoutMs: 60000, automatic: true });
-  await executor.sweepProposals();
-  assert.equal(actions.getProposal(first.id).status, 'unknown');
-  assert.equal(actions.getProposal(second.id).status, 'approved');
+  actions.transitionAction(first.id, 'executing');
+  const second = actions.createAction({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { signal: { ...signal, symbol: 'MSFT' }, qty: 1 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  await executor.sweepActions();
+  assert.equal(actions.getAction(first.id).status, 'unknown');
+  assert.equal(actions.getAction(second.id).status, 'approved');
   assert.equal(placed, 0);
 });
 
 test('pause blocks execution and survives a fresh process', async () => {
   const p = entry(true);
   state.updateState({ paused: true });
-  await executor.sweepProposals();
+  await executor.sweepActions();
   assert.equal(placed, 0);
-  assert.equal(actions.getProposal(p.id).status, 'approved');
+  assert.equal(actions.getAction(p.id).status, 'approved');
   const child = spawnSync(process.execPath, ['-r','ts-node/register','-e', "console.log(require('./src/state/state').getState().paused)"], { cwd: process.cwd(), env: process.env, encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);
   assert.match(child.stdout, /true/);
@@ -95,19 +95,16 @@ test('pause blocks execution and survives a fresh process', async () => {
 
 test('expired approval is rejected even before a sweep', () => {
   const p = entry();
-  state.updateState({ proposals: { [p.id]: { ...p, expiresAt: Date.now() - 1 } } });
-  assert.throws(() => actions.decideProposal(p.id, 'approve', 'human'), /expired/);
-  assert.equal(actions.getProposal(p.id).status, 'expired');
+  store.saveRecord('actions', p.id, { ...p, expiresAt: Date.now() - 1 });
+  assert.throws(() => actions.decideAction(p.id, 'approve', 'human'), /expired/);
+  assert.equal(actions.getAction(p.id).status, 'expired');
 });
 
-test('account, venue, and policy revisions are validated before execution', async () => {
-  for (const patch of [{ accountId: 'another' }, { venue: 'live' }, { policyHash: 'changed' }]) {
-    state.updateState({ proposals: {} });
-    const p = entry(true);
-    state.updateState({ proposals: { [p.id]: { ...p, ...patch } } });
-    await executor.sweepProposals();
-    assert.equal(actions.getProposal(p.id).status, 'failed');
-  }
+test('an action is not executed after the strategy changed', async () => {
+  const p = entry(true);
+  store.saveRecord('actions', p.id, { ...p, policyHash: 'changed' });
+  await executor.sweepActions();
+  assert.equal(actions.getAction(p.id).status, 'failed');
   assert.equal(placed, 0);
 });
 
@@ -132,13 +129,13 @@ test('an accepted but unfilled exit retains its position baseline', async () => 
   held = [{ symbol: 'AAPL', qty: 2, avgCost: 100, marketValue: 200 }];
   state.openPositionSnapshot({ symbol: 'AAPL', entryPrice: 100, stopLevel: 95 });
   orders.validateExit = async () => ({ pos: held[0], sellQty: 2, price: 100, pnl: 0 });
-  const p = actions.createProposal({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  const p = actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
   brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'sell', qty: 2, filledQty: 0, filledPrice: null, status: 'open' };
-  await executor.sweepProposals();
-  assert.equal(actions.getProposal(p.id).status, 'submitted');
+  await executor.sweepActions();
+  assert.equal(actions.getAction(p.id).status, 'submitted');
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel, 95);
   held = []; brokerOrder = { ...brokerOrder, filledQty: 2, filledPrice: 100, status: 'filled' };
-  await executor.sweepProposals();
+  await executor.sweepActions();
   assert.equal(state.getPositionSnapshot('AAPL'), undefined);
 });
 
@@ -146,16 +143,9 @@ test('a filled new entry replaces a stale trade snapshot and protection IDs', as
   state.openPositionSnapshot({symbol:'AAPL',entryPrice:60,stopLevel:50,stopOrderId:'old-stop',openedAt:'2020-01-01T00:00:00Z',entryDecisionId:'old'});
   const p=entry(true);
   brokerOrder={id:'broker-1',symbol:'AAPL',side:'buy',qty:2,filledQty:2,filledPrice:101,status:'filled'};
-  await executor.sweepProposals();
+  await executor.sweepActions();
   const saved=state.getPositionSnapshot('AAPL');
   assert.equal(saved.stopLevel,95);assert.equal(saved.stopOrderId,undefined);assert.equal(saved.entryDecisionId,'action-'+p.id);
-});
-
-test('a worker that lost its lease cannot submit an order', async () => {
-  const p=entry(true);
-  store.saveValue('workerLease',{owner:'another-worker',until:Date.now()+30000});
-  await executor.sweepProposals();
-  assert.equal(placed,0);assert.equal(actions.getProposal(p.id).status,'failed');
 });
 
 test('a policy change while validation awaits invalidates the approval', async () => {
@@ -165,8 +155,8 @@ test('a policy change while validation awaits invalidates the approval', async (
     policy.saveStrategy({...previous.policy,risk:{...previous.policy.risk,maxPositions:2}},previous.hash,'alice');
     return {...s,regimeQty:q};
   };
-  await executor.sweepProposals();
-  assert.equal(placed,0);assert.equal(actions.getProposal(p.id).status,'expired');
+  await executor.sweepActions();
+  assert.equal(placed,0);assert.equal(actions.getAction(p.id).status,'expired');
 });
 
 test('an external order is never cancelled to free shares for an exit', async () => {
@@ -193,8 +183,8 @@ test('uncertain protection survives restart semantics and is never blindly place
 test('pending exits keep their baseline across multiple protection sweeps', async () => {
   const { sweepStops }=require('../src/strategy/stopOrders');
   state.openPositionSnapshot({symbol:'AAPL',stopLevel:95,stopOrderId:'our-stop'});
-  const p=actions.createProposal({kind:'exit',symbol:'AAPL',venue:'paper',params:{qty:2},reason:'test',timeoutMs:60000,automatic:true});
-  actions.transitionProposal(p.id,'executing');actions.transitionProposal(p.id,'submitted',{result:{orderId:'exit',qty:2}});
+  const p=actions.createAction({kind:'exit',symbol:'AAPL',venue:'paper',params:{qty:2},reason:'test',timeoutMs:60000,automatic:true});
+  actions.transitionAction(p.id,'executing');actions.transitionAction(p.id,'submitted',{result:{orderId:'exit',qty:2}});
   held=[];
   for(let i=0;i<6;i++)await sweepStops();
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel,95);

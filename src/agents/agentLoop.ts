@@ -7,14 +7,14 @@ import type { ToolRegistry } from './toolRegistry';
 import { logger } from '../core/logger';
 
 export type TurnStatus = 'completed' | 'waiting' | 'interrupted' | 'failed';
-export interface TurnRecord {
+export interface Transcript {
   id: string; messages: ChatMessage[]; rounds: number; status: TurnStatus | 'running';
   inTokens: number; outTokens: number; text: string; error?: string; sleepMs?: number;
   revision?: string;
   responseStopReason?: string;
 }
 type ToolCall = Extract<ContentBlock, { type: 'tool_use' }>;
-interface Attempt { name: string; input: unknown; result?: string }
+interface ToolCallRecord { name: string; input: unknown; result?: string }
 const errorResult = (error: string) => JSON.stringify({ ok: false, error });
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
@@ -56,20 +56,20 @@ export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessag
   return messages;
 }
 
-export async function runTurn(opts: {
+export async function runAgentLoop(opts: {
   context: AgentContext; provider: ModelProvider; registry: ToolRegistry; systemPrompt: string;
   messages: () => Promise<ChatMessage[]>; maxRounds: number; maxTokens: number;
   signal?: AbortSignal; beforeTool?: () => void;
   revision?: string;
-}): Promise<TurnRecord> {
-  const id = opts.context.commandId;
-  let run = readRecord<TurnRecord>('agentTurn', id);
+}): Promise<Transcript> {
+  const id = opts.context.requestId;
+  let run = readRecord<Transcript>('transcripts', id);
   if (run && ['completed','waiting','failed'].includes(run.status)) return run;
   const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(120000)]);
   const context = { ...opts.context, signal };
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
-  const checkpoint = () => saveRecord('agentTurn', id, current);
+  const checkpoint = () => saveRecord('transcripts', id, current);
   return agentContext.run(context, async () => {
     try {
       signal.throwIfAborted();
@@ -94,15 +94,15 @@ export async function runTurn(opts: {
           let finish = false;
           for (const [index, call] of calls.entries()) {
             signal.throwIfAborted(); opts.beforeTool?.();
-            const attemptId = `${id}:${current.rounds}:${index}`;
-            const saved = readRecord<Attempt>('toolAttempt', attemptId);
-            if (saved && (saved.name !== call.name || JSON.stringify(saved.input) !== JSON.stringify(call.input))) throw new Error('Saved tool identity mismatch');
-            let result = saved?.result ?? readRecord<string>('toolEffect', attemptId);
+            const toolCallId = `${id}:${current.rounds}:${index}`;
+            const saved = readRecord<ToolCallRecord>('tool-calls', toolCallId);
+            if (saved?.name !== undefined && (saved.name !== call.name || JSON.stringify(saved.input) !== JSON.stringify(call.input))) throw new Error('Saved tool identity mismatch');
+            let result = saved?.result;
             if (result === undefined) {
-              saveRecord('toolAttempt', attemptId, { commandId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, startedAt: new Date().toISOString() });
+              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, startedAt: new Date().toISOString() });
               result = finish ? errorResult('Turn has ended; this call was not executed')
-                : await abortable(agentContext.run({ ...context, attemptId }, () => opts.registry.execute(call.name, call.input)), signal);
-              saveRecord('toolAttempt', attemptId, { commandId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result: boundedResult(result), finishedAt: new Date().toISOString() });
+                : await abortable(agentContext.run({ ...context, toolCallId }, () => opts.registry.execute(call.name, call.input)), signal);
+              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result: boundedResult(result), finishedAt: new Date().toISOString() });
               logger.tool(context.role, call.name, result, call.input);
             }
             results.push({ type: 'tool_result', tool_use_id: call.id, content: boundedResult(result) });

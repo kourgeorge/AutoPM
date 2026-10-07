@@ -9,7 +9,7 @@
 import { ui } from '../ui/ui';
 import type { Trader } from '../agents/trader';
 import { getLastTick } from '../features/lastTick';
-import { getOpenProposals } from './proposals';
+import { getOpenActions } from './actions';
 import { automationSummary } from './automation';
 import { readLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
@@ -51,8 +51,9 @@ function parseCount(args: string, fallback: number | undefined): number | undefi
 export function registerOperatorCommands(trader: Trader): void {
   ui.registerCommand({
     name: 'status',
+    api: true,
     aliases: ['s'],
-    help: 'Account, market hours, trader state and open proposals.',
+    help: 'Account, market hours, trader state and open actions.',
     run: async () => {
       const tick = getLastTick();
       const t = trader.status;
@@ -78,14 +79,15 @@ export function registerOperatorCommands(trader: Trader): void {
       } catch (err: any) {
         lines.push(`Market     unknown — broker clock check failed: ${err.message}`);
       }
-      const open = getOpenProposals();
-      lines.push(`Proposals  ${open.length} waiting${open.length ? ' — /proposals to list them' : ''}`);
+      const open = getOpenActions();
+      lines.push(`Actions  ${open.length} waiting${open.length ? ' — /actions to list them' : ''}`);
       ui.reply(lines.join('\n'));
     },
   });
 
   ui.registerCommand({
     name: 'positions',
+    api: true,
     aliases: ['pos'],
     help: 'Every open position with stop, target and P&L.',
     run: () => {
@@ -116,6 +118,7 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'pause',
+    api: true,
     help: 'Pause queued trading actions and new trader cycles. Existing broker orders stay active.',
     run: () => {
       if (trader.status.paused) return ui.reply('The trader is already paused.');
@@ -126,6 +129,7 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'resume',
+    api: true,
     help: 'Start trader cycles again after /pause.',
     run: () => {
       if (!trader.status.paused) return ui.reply('The trader is not paused.');
@@ -136,6 +140,7 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'cycle',
+    api: true,
     aliases: ['wake'],
     help: 'Run a trader cycle now instead of waiting for the next one.',
     run: () => {
@@ -145,11 +150,12 @@ export function registerOperatorCommands(trader: Trader): void {
   });
 
   ui.registerCommand({
-    name: 'proposals',
+    name: 'actions',
+    api: true,
     help: 'Trades waiting for your approve/reject.',
     run: () => {
-      const open = getOpenProposals();
-      if (open.length === 0) return ui.reply('No proposals waiting.');
+      const open = getOpenActions();
+      if (open.length === 0) return ui.reply('No actions waiting.');
       const now = Date.now();
       ui.reply(open.map((p) => {
         const mins = Math.max(0, Math.round((p.expiresAt - now) / 60_000));
@@ -160,6 +166,7 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'lessons',
+    api: true,
     args: '[n]',
     help: `The last n lessons from LESSONS.md (default ${DEFAULT_LESSONS}).`,
     run: (args) => {
@@ -174,6 +181,7 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'scorecard',
+    api: true,
     aliases: ['score'],
     args: '[days]',
     help: 'Results of closed trades, all time or over the last N days.',
@@ -203,12 +211,14 @@ export function registerOperatorCommands(trader: Trader): void {
 
   ui.registerCommand({
     name: 'policy',
+    api: true,
     help: 'The live policy settings file (policy.yaml).',
     run: () => ui.reply(readPolicyText().trimEnd()),
   });
 
   ui.registerCommand({
     name: 'playbook',
+    api: true,
     help: 'The trading rules (PLAYBOOK.md) with live policy values filled in.',
     run: () => ui.reply(renderPolicy().trimEnd()),
   });

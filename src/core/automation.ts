@@ -2,16 +2,16 @@
 import { config } from './config';
 import { getPolicy } from '../policy/load';
 import type { AutomationLevel, AutomationLevels, AutomationPolicy } from '../policy/types';
-import type { ProposalKind } from '../state/state';
+import type { ActionKind } from '../state/state';
 
-const LEVEL_KEY: Record<ProposalKind, keyof AutomationLevels> = {
+const LEVEL_KEY: Record<ActionKind, keyof AutomationLevels> = {
   entry: 'entry',
   exit: 'exit',
   stop_adjust: 'stopAdjust',
   target_adjust: 'targetAdjust',
 };
 
-const ALL_KINDS: readonly ProposalKind[] = ['entry', 'exit', 'stop_adjust', 'target_adjust'];
+const ALL_KINDS: readonly ActionKind[] = ['entry', 'exit', 'stop_adjust', 'target_adjust'];
 
 /**
  * Does this queued action need human approval?
@@ -21,7 +21,7 @@ const ALL_KINDS: readonly ProposalKind[] = ['entry', 'exit', 'stop_adjust', 'tar
  * reason.
  */
 export function automationLevel(
-  action: ProposalKind,
+  action: ActionKind,
   automation: AutomationPolicy = getPolicy().automation,
 ): AutomationLevel {
   return automation.level[LEVEL_KEY[action]];

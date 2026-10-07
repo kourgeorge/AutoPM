@@ -19,7 +19,7 @@ import { logger } from '../core/logger';
 import { readDecisions } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 import type { Fill } from '../broker/IBroker';
-import { readFills } from './fillsLedger';
+import { readFills } from './fills';
 
 export interface TradeOutcome {
   symbol: string;

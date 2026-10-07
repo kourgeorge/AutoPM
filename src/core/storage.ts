@@ -1,150 +1,225 @@
+/**
+ * Account storage as plain files:
+ *
+ *   DATA_DIR/db/settings.json    account information: the bound broker account
+ *   DATA_DIR/db/state.json       the app's temporary state (positions' stops, alerts, chat, usage, …)
+ *   DATA_DIR/db/<kind>.jsonl     one line per record write: {"seq","id","at","value"}
+ *
+ * A record update appends a new line with the same id; the last line for an id wins, and
+ * superseded lines are dropped the next time the file is loaded.
+ *
+ * Everything is held in memory and written through at the end of each transaction. A
+ * transaction that throws is undone in memory and never reaches disk.
+ */
 import fs from 'fs';
 import path from 'path';
 import { DATA_DIR, ensureDataDir } from './paths';
+import { writeFileAtomic } from './fsAtomic';
 
-interface Statement {
-  run(...args: any[]): { lastInsertRowid: number | bigint; changes: number | bigint };
-  get(...args: any[]): any;
-  all(...args: any[]): any[];
-}
-interface Database {
-  exec(sql: string): void;
-  prepare(sql: string): Statement;
-  close(): void;
-}
+interface Row { seq: number; id: string; at: string; json: string }
 
-let db: Database | undefined;
-let depth = 0;
-let failure: string | null = null;
+const DB_DIR = path.join(DATA_DIR, 'db');
+const SETTINGS_FILE = path.join(DB_DIR, 'settings.json');
+const STATE_FILE = path.join(DB_DIR, 'state.json');
+const SETTINGS_KEYS = new Set(['account']);   // every other key is state
+const fileFor = (key: string) => SETTINGS_KEYS.has(key) ? SETTINGS_FILE : STATE_FILE;
+const recordFile = (kind: string) => path.join(DB_DIR, kind + '.jsonl');
+const lineFor = (r: Row) => `{"seq":${r.seq},"id":${JSON.stringify(r.id)},"at":${JSON.stringify(r.at)},"value":${r.json}}\n`;
+
+let opened = false;
 let ephemeral = false;
-const memory = new Map<string, unknown>();
-const feedListeners = new Set<(entry: any) => void>();
+let depth = 0;
+let nextSeq = 1;
+let values: Record<string, unknown> = {};
+const kinds = new Map<string, Map<string, Row>>();   // insertion order = seq order
+let dirtyFiles = new Set<string>();
+let lines: Array<{ kind: string; line: string }> = [];
+let undo: Array<() => void> = [];
 let committed: Array<() => void> = [];
-export function subscribeFeed(listener: (entry: any) => void): () => void {
-  feedListeners.add(listener); return () => feedListeners.delete(listener);
+const activityListeners = new Set<(entry: any) => void>();
+
+export function subscribeActivity(listener: (entry: any) => void): () => void {
+  activityListeners.add(listener); return () => activityListeners.delete(listener);
 }
 
-/** One database per account worker. Writes are durable before returning. */
-export function database(): Database {
-  if (db) return db;
-  ensureDataDir();
-  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (file: string) => Database };
-  db = new DatabaseSync(ephemeral ? ':memory:' : path.join(DATA_DIR, 'autotrade.sqlite'));
-  if (!ephemeral) fs.chmodSync(path.join(DATA_DIR, 'autotrade.sqlite'), 0o600);
-  db.exec(`
-    PRAGMA journal_mode=WAL;
-    PRAGMA synchronous=FULL;
-    PRAGMA busy_timeout=5000;
-    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS records (
-      seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, id TEXT NOT NULL,
-      at TEXT NOT NULL, value TEXT NOT NULL, UNIQUE(kind, id)
-    );
-    CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq);
-  `);
-  return db;
+function open(): void {
+  if (opened) return;
+  opened = true;
+  if (ephemeral) return;
+  ensureDataDir(DB_DIR);
+  for (const file of [SETTINGS_FILE, STATE_FILE]) if (fs.existsSync(file)) Object.assign(values, JSON.parse(fs.readFileSync(file, 'utf8')));
+  for (const name of fs.readdirSync(DB_DIR)) {
+    if (!name.endsWith('.jsonl')) continue;
+    const kind = name.slice(0, -6);
+    const rows = new Map<string, Row>();
+    const text = fs.readFileSync(recordFile(kind), 'utf8').split('\n').filter(l => l.trim());
+    text.forEach((line, i) => {
+      let e: any;
+      try { e = JSON.parse(line); }
+      catch { throw new Error(`${recordFile(kind)} line ${i + 1} is not valid JSON; repair or remove it before starting.`); }
+      if (e.deleted) rows.delete(e.id);
+      else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, json: JSON.stringify(e.value) });
+      if (e.seq >= nextSeq) nextSeq = e.seq + 1;
+    });
+    const sorted = new Map([...rows.values()].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]));
+    kinds.set(kind, sorted);
+    // Drop superseded lines so files do not grow with every update.
+    if (text.length > sorted.size) writeFileAtomic(recordFile(kind), [...sorted.values()].map(lineFor).join(''));
+  }
+}
+
+function rowsOf(kind: string): Map<string, Row> {
+  let rows = kinds.get(kind);
+  if (!rows) { rows = new Map(); kinds.set(kind, rows); }
+  return rows;
+}
+
+function put(kind: string, row: Row): void {
+  const rows = rowsOf(kind);
+  const old = rows.get(row.id);
+  rows.set(row.id, row);   // replacing a key keeps its position, so seq order holds
+  lines.push({ kind, line: lineFor(row) });
+  undo.push(() => { if (old) rows.set(old.id, old); else rows.delete(row.id); });
 }
 
 export function transaction<T>(fn: () => T): T {
-  if (ephemeral || depth) return fn();
-  const d = database();
-  d.exec('BEGIN IMMEDIATE');
+  open();
+  if (depth) return fn();
   depth++;
   let result!: T;
   try {
     result = fn();
-    d.exec('COMMIT');
-    failure = null;
   } catch (err) {
-    d.exec('ROLLBACK');
-    committed = [];
-    failure = err instanceof Error ? err.message : String(err);
+    for (const step of undo.reverse()) step();
+    lines = []; undo = []; committed = []; dirtyFiles = new Set();
     throw err;
   } finally { depth--; }
+  if (!ephemeral) {
+    for (const { kind, line } of lines) fs.appendFileSync(recordFile(kind), line, { mode: 0o600 });
+    for (const file of dirtyFiles) {
+      const own = Object.fromEntries(Object.entries(values).filter(([key]) => fileFor(key) === file));
+      writeFileAtomic(file, JSON.stringify(own, null, 2) + '\n');
+    }
+  }
+  lines = []; undo = []; dirtyFiles = new Set();
   const callbacks = committed; committed = [];
   for (const callback of callbacks) { try { callback(); } catch { /* Views cannot roll back committed data. */ } }
   return result;
 }
 
 export function readValue<T>(key: string): T | undefined {
-  if (ephemeral) return memory.get(key) as T | undefined;
-  const row = database().prepare('SELECT value FROM settings WHERE key = ?').get(key);
-  return row ? JSON.parse(row.value) : undefined;
+  open();
+  return key in values ? structuredClone(values[key]) as T : undefined;
 }
 
 export function saveValue(key: string, value: unknown): void {
-  if (ephemeral) { memory.set(key, structuredClone(value)); return; }
-  transaction(() => database().prepare(
-    'INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-  ).run(key, JSON.stringify(value)));
-}
-
-export function appendRecord(kind: string, id: string, at: string, value: unknown): number {
-  return transaction(() => {
-    const result = database().prepare('INSERT OR IGNORE INTO records(kind,id,at,value) VALUES(?,?,?,?)')
-      .run(kind, id, at, JSON.stringify(value));
-    return Number(result.lastInsertRowid);
+  transaction(() => {
+    const had = key in values, old = values[key];
+    values[key] = structuredClone(value ?? null);
+    dirtyFiles.add(fileFor(key));
+    undo.push(() => { if (had) values[key] = old; else delete values[key]; });
   });
 }
 
-export function readRecords<T>(kind: string, limit?: number, after = 0): T[] {
-  const rows = limit === undefined
-    ? database().prepare('SELECT value FROM records WHERE kind=? AND seq>? ORDER BY seq').all(kind, after)
-    : database().prepare('SELECT value FROM (SELECT seq,value FROM records WHERE kind=? AND seq>? ORDER BY seq DESC LIMIT ?) ORDER BY seq')
-      .all(kind, after, limit);
-  return rows.map(row => JSON.parse(row.value));
+export function deleteValue(key: string): void {
+  transaction(() => {
+    if (!(key in values)) return;
+    const old = values[key];
+    delete values[key];
+    dirtyFiles.add(fileFor(key));
+    undo.push(() => { values[key] = old; });
+  });
+}
+
+/** Insert a record; an existing id is left untouched. Returns the record's seq. */
+export function appendRecord(kind: string, id: string, at: string, value: unknown): number {
+  return transaction(() => {
+    const existing = rowsOf(kind).get(id);
+    if (existing) return existing.seq;
+    const seq = nextSeq++;
+    put(kind, { seq, id, at, json: JSON.stringify(value) ?? 'null' });
+    return seq;
+  });
+}
+
+/** Insert or replace by id. A replaced record keeps its original seq and time. */
+export function saveRecord(kind: string, id: string, value: unknown): void {
+  transaction(() => {
+    const old = rowsOf(kind).get(id);
+    put(kind, { seq: old?.seq ?? nextSeq++, id, at: old?.at ?? new Date().toISOString(), json: JSON.stringify(value) ?? 'null' });
+  });
+}
+
+export function deleteRecord(kind: string, id: string): void {
+  transaction(() => {
+    const rows = rowsOf(kind), old = rows.get(id);
+    if (!old) return;
+    rows.delete(id);
+    lines.push({ kind, line: JSON.stringify({ seq: old.seq, id, deleted: true }) + '\n' });
+    // Re-inserting would move it to the end, so rebuild the order.
+    undo.push(() => { kinds.set(kind, new Map([...rows.values(), old].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]))); });
+  });
 }
 
 export function readRecord<T>(kind: string, id: string): T | undefined {
-  const row = database().prepare('SELECT value FROM records WHERE kind=? AND id=?').get(kind, id);
-  return row ? JSON.parse(row.value) : undefined;
+  open();
+  const row = kinds.get(kind)?.get(id);
+  return row ? JSON.parse(row.json) : undefined;
 }
 
-export function saveRecord(kind: string, id: string, value: unknown): void {
-  transaction(() => database().prepare('INSERT INTO records(kind,id,at,value) VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value')
-    .run(kind, id, new Date().toISOString(), JSON.stringify(value)));
+/** All records of a kind, oldest first; `limit` keeps the newest N, `after` skips seq ≤ it. */
+export function readRecords<T>(kind: string, limit?: number, after = 0): T[] {
+  open();
+  if (limit === 0) return [];
+  const rows = [...(kinds.get(kind)?.values() ?? [])].filter(r => r.seq > after);
+  return (limit === undefined ? rows : rows.slice(-limit)).map(r => JSON.parse(r.json));
 }
 
-/** Import once, in a transaction. Leave original files untouched for backup/inspection. */
-export function importJsonLines(kind: string, file: string): void {
-  const key = 'import:' + kind;
-  if (readValue(key)) return;
-  transaction(() => {
-    if (fs.existsSync(file)) {
-      const lines = fs.readFileSync(file, 'utf8').split('\n').filter(line => line.trim());
-      lines.forEach((line, i) => {
-        let value: any;
-        try { value = JSON.parse(line); }
-        catch { throw new Error(`Cannot import ${file}, line ${i + 1}: invalid JSON. Restore or repair this record before starting.`); }
-        appendRecord(kind, value.execId ?? value.id ?? `legacy-${i}`, value.at ?? '', value);
-      });
-    }
-    saveValue(key, true);
-  });
+/** Query one kind: `where` filters parsed values, `desc` reads newest first, `limit` caps matches. */
+export function listRecords<T>(kind: string, opts: { where?: (value: T) => boolean; desc?: boolean; limit?: number } = {}):
+  Array<{ seq: number; id: string; at: string; value: T }> {
+  open();
+  const rows = [...(kinds.get(kind)?.values() ?? [])];
+  if (opts.desc) rows.reverse();
+  const out: Array<{ seq: number; id: string; at: string; value: T }> = [];
+  for (const r of rows) {
+    if (opts.limit !== undefined && out.length >= opts.limit) break;
+    const value = JSON.parse(r.json) as T;
+    if (!opts.where || opts.where(value)) out.push({ seq: r.seq, id: r.id, at: r.at, value });
+  }
+  return out;
 }
 
-export function storageHealth(): { ok: boolean; error: string | null } {
-  return { ok: failure === null, error: failure };
+export function readRecordPage<T>(kind: string, after: number, limit: number): T[] {
+  open();
+  return [...(kinds.get(kind)?.values() ?? [])].filter(r => r.seq > after).slice(0, limit)
+    .map(r => ({ ...JSON.parse(r.json), seq: r.seq }));
 }
 
+/** Forget the in-memory copy; the next call reloads from disk. */
 export function closeStorage(): void {
-  db?.close();
-  db = undefined;
+  opened = false; values = {}; kinds.clear(); nextSeq = 1;
+  lines = []; undo = []; committed = []; depth = 0; dirtyFiles = new Set();
 }
 
-/** The replay harness never opens or migrates the operator's database. */
-export function useEphemeralStorage(): void { if (!ephemeral) { closeStorage(); ephemeral = true; } }
+/** Erase every setting and record — for tests that need a clean account. */
+export function resetStorage(): void {
+  closeStorage();
+  if (!ephemeral) fs.rmSync(DB_DIR, { recursive: true, force: true });
+}
 
-export function appendFeed(value: { at: string; kind: string; text: string; level?: string }): number {
-  const seq = appendRecord('feed', require('crypto').randomUUID(), value.at, value);
-  const publish = () => { for (const listener of feedListeners) { try { listener({ ...value, seq }); } catch {} } };
+/** The replay harness never reads or writes the operator's data. */
+export function useEphemeralStorage(): void { if (!ephemeral) { closeStorage(); ephemeral = true; } }
+export function isEphemeralStorage(): boolean { return ephemeral; }
+/** Replay only: start a scenario with no actions left over from the previous one. */
+export function forgetEphemeralRecords(kind: string): void { if (ephemeral) kinds.delete(kind); }
+
+export function appendActivity(value: { at: string; kind: string; text: string; level?: string }): number {
+  const seq = appendRecord('activity', require('crypto').randomUUID(), value.at, value);
+  const publish = () => { for (const listener of activityListeners) { try { listener({ ...value, seq }); } catch {} } };
   if (depth) committed.push(publish); else publish();
   return seq;
 }
-export function readFeed<T>(after: number, limit: number): T[] {
-  return readRecordPage<T>('feed', after, limit);
-}
-export function readRecordPage<T>(kind: string, after: number, limit: number): T[] {
-  return database().prepare('SELECT seq,value FROM records WHERE kind=? AND seq>? ORDER BY seq LIMIT ?')
-    .all(kind, after, limit).map(row => ({ ...JSON.parse(row.value), seq: Number(row.seq) }));
+export function readActivity<T>(after: number, limit: number): T[] {
+  return readRecordPage<T>('activity', after, limit);
 }

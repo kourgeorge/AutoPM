@@ -24,11 +24,11 @@ model.createModelProvider = () => ({ chat: async () => { throw new Error('Set au
 const traderTools = from('tools/traderTools');
 const chartTools = from('tools/chartTools');
 const orders = from('strategy/orderManager');
-const proposals = from('core/proposals');
+const actions = from('core/actions');
 const journal = from('journal/journal');
 const lessons = from('journal/lessons');
 const events = from('features/eventBus');
-const eventLog = from('features/eventLog');
+const eventLog = from('features/alertLog');
 const { ui } = from('ui/ui');
 const { ConciergeAgent } = from('agents/concierge');
 const { Trader, buildCycleContext } = from('agents/trader');
@@ -45,15 +45,15 @@ const { broker } = from('broker');
 broker.getAccountInfo = traderTools.getAccountSnapshot;
 broker.getPositions = async () => [];
 broker.getOpenOrders = async () => [];
-const commands = from('core/commands');
+const commands = from('core/requests');
 const { agentContext } = from('core/agentContext');
-const { runTurn, compactMessages } = from('agents/turnRunner');
+const { runAgentLoop, compactMessages } = from('agents/agentLoop');
 const { ToolRegistry } = from('agents/toolRegistry');
 const textResponse = () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'Done' }], usage: { inputTokens: 1, outputTokens: 1 } });
 const toolResponse = calls => ({ stopReason: 'tool_use', content: calls.map(([name, input], index) => ({ type: 'tool_use', id: 'audit-' + index, name, input })), usage: { inputTokens: 1, outputTokens: 1 } });
 beforeEach(() => {
-  storage.database().exec('DELETE FROM settings; DELETE FROM records;');
-  state.updateState({ proposals: {}, positionSnapshots: {}, accountId: 'alpaca:paper:audit', paused: false });
+  storage.resetStorage();
+  state.updateState({ positionSnapshots: {}, accountId: 'alpaca:paper:audit', paused: false });
   policy.loadPolicy();
   events.resetEventRegistry();
 });
@@ -99,13 +99,13 @@ test('concierge risk-profile suggestions remain separate from the saved settings
   const concierge = new ConciergeAgent(() => assert.fail('Settings questions must not wake the trader'));
   const hash = policy.getPolicyHash();
   const values = { riskPerTradePct: 0.25, targetVolatilityPct: 8, minRewardRisk: 2.5, maxSectorWeightPct: 20 };
-  const proposal = JSON.parse(await concierge.executeTool('update_trading_settings', values));
-  assert.deepEqual(proposal.proposedSettings, values);
-  assert.match(proposal.note, /not changed/);
+  const action = JSON.parse(await concierge.executeTool('update_trading_settings', values));
+  assert.deepEqual(action.proposedSettings, values);
+  assert.match(action.note, /not changed/);
   assert.equal(policy.getPolicyHash(), hash);
   assert.equal(JSON.parse(await concierge.executeTool('get_strategy_settings', {})).risk.riskPerTradePctOfEquity, 0.5);
   assert.equal(JSON.parse(await concierge.executeTool('update_trading_settings', { riskPerTradePct: 50 })).ok, false);
-  assert.equal(commands.pendingCommands('trader').length, 0);
+  assert.equal(commands.pendingRequests('trader').length, 0);
 });
 
 test('a settings explanation reaches the account conversation without a trader handoff', async () => {
@@ -124,14 +124,14 @@ test('a settings explanation reaches the account conversation without a trader h
   const hash = policy.getPolicyHash();
   const receipt = concierge.handleMessage('Explain my strategy settings clearly', 'alice');
   await concierge.active;
-  const command = commands.getCommand(receipt.id);
+  const command = commands.getRequest(receipt.id);
   assert.equal(command.status, 'completed');
   assert.match(command.result, /Saved strategy: Balanced/);
   assert.match(command.result, /0.5% of equity at the planned stop/);
   assert.match(command.result, /Human approval|human approval/);
-  assert.ok(storage.readFeed(0, 100).some(entry => entry.kind === 'reply' && entry.text.includes(command.result)));
+  assert.ok(storage.readActivity(0, 100).some(entry => entry.kind === 'reply' && entry.text.includes(command.result)));
   assert.equal(policy.getPolicyHash(), hash);
-  assert.equal(commands.pendingCommands('trader').length, 0);
+  assert.equal(commands.pendingRequests('trader').length, 0);
 });
 
 test('a failed chart returns a paired error and the concierge can answer the next message', async () => {
@@ -151,13 +151,15 @@ test('a failed chart returns a paired error and the concierge can answer the nex
   try {
     const first = concierge.handleMessage('Review AAPL and chart it', 'alice');
     await concierge.active;
-    assert.equal(commands.getCommand(first.id).status, 'completed');
-    assert.equal(commands.pendingCommands('trader')[0].actorId, 'alice');
+    assert.equal(commands.getRequest(first.id).status, 'completed');
+    assert.equal(commands.pendingRequests('trader')[0].actorId, 'alice');
     const second = concierge.handleMessage('What happened?', 'bob');
     await concierge.active;
-    assert.equal(commands.getCommand(second.id).status, 'completed');
-    const history = storage.readValue('conversation');
-    assert.deepEqual(history, compactMessages(history));
+    assert.equal(commands.getRequest(second.id).status, 'completed');
+    // The second chat continues from the first chat's saved turn.
+    const firstTurn = storage.readRecord('transcripts', first.id).messages, secondTurn = storage.readRecord('transcripts', second.id).messages;
+    assert.deepEqual(secondTurn.slice(0, firstTurn.length), compactMessages(firstTurn, 24000));
+    assert.match(JSON.stringify(secondTurn.at(-2) ?? secondTurn.at(-1)), /What happened\?/);
   } finally { chartTools.executeChartTool = realChart; }
 });
 
@@ -166,11 +168,11 @@ test('failed trader requests remain durable with their instruction and explicit 
   const receipt = trader.wake('Review AAPL now');
   trader.provider = { chat: async () => { throw new Error('Model unavailable'); } };
   await trader.runCycle();
-  const command = commands.getCommand(receipt.commandId);
+  const command = commands.getRequest(receipt.requestId);
   assert.equal(command.text, 'Review AAPL now');
   assert.equal(command.status, 'failed');
   assert.match(command.result, /Model unavailable/);
-  assert.equal(storage.readRecord('agentTurn', command.id).status, 'failed');
+  assert.equal(storage.readRecord('transcripts', command.id).status, 'failed');
 });
 
 test('sleep rejects later calls and truncated model output executes no tools', async () => {
@@ -179,11 +181,11 @@ test('sleep rejects later calls and truncated model output executes no tools', a
   const receipt = trader.wake('Review');
   await trader.runCycle();
   assert.equal(lessons.readLessons().length, 0);
-  const turn = storage.readRecord('agentTurn', receipt.commandId);
+  const turn = storage.readRecord('transcripts', receipt.requestId);
   assert.match(turn.messages.at(-1).content[1].content, /not executed/);
   let executed = 0;
   const registry = new ToolRegistry([{ name: 'write', description: 'test', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { executed++; return '{}'; });
-  const result = await runTurn({ context: { commandId: 'truncated', actorId: 'test', role: 'trader' }, registry,
+  const result = await runAgentLoop({ context: { requestId: 'truncated', actorId: 'test', role: 'trader' }, registry,
     provider: { chat: async () => ({ ...toolResponse([['write', {}]]), stopReason: 'max_tokens' }) },
     systemPrompt: '', messages: async () => [], maxRounds: 2, maxTokens: 100 });
   assert.equal(result.status, 'failed'); assert.equal(executed, 0);
@@ -194,16 +196,16 @@ test('critical observation remains open and acting requires a linked action', as
   const hit = { symbol: 'AAPL', cooldownKey: 'audit:stop', severity: 'critical', headline: 'Below stop', evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } };
   const [event] = events.processHits('stop_breach', [hit], p, tick);
   const bad = JSON.parse(await traderTools.executeTraderTool('ack_event', { id: event.id, disposition: 'acting' }));
-  assert.match(bad.error, /proposalId/);
+  assert.match(bad.error, /actionId/);
   events.ackEvent(event.id, 'acknowledged', 'Observed');
   assert.equal(events.getPendingEvents().length, 1);
-  const action = proposals.createProposal({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'Below stop', params: { qty: 2 }, eventId: event.id, automatic: true, timeoutMs: 60000 });
+  const action = actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'Below stop', params: { qty: 2 }, eventId: event.id, automatic: true, timeoutMs: 60000 });
   events.ackEvent(event.id, 'acting', 'Exit queued', action.id);
   assert.equal(events.getPendingEvents()[0].handling, 'action_pending');
-  proposals.transitionProposal(action.id, 'failed', { result: { error: 'Cannot execute' } });
+  actions.transitionAction(action.id, 'failed', { result: { error: 'Cannot execute' } });
   assert.equal(events.getPendingEvents()[0].handling, 'observed');
   assert.equal(events.getPendingEvents()[0].ackedAt, null);
-  assert.ok(storage.readRecords('eventHandling').length >= 2);
+  assert.equal(storage.readRecords('alerts').find(e => e.id === event.id).handling, 'observed', 'event.jsonl records the handling');
 });
 
 test('pending urgent incidents and handling survive registry restart', () => {
@@ -215,7 +217,7 @@ test('pending urgent incidents and handling survive registry restart', () => {
   events.ackEvent(event.id, 'ignoring', 'Operator deliberately accepts this condition');
   events.resetEventRegistry(true);
   assert.deepEqual(events.getPendingEvents(), []);
-  assert.equal(storage.readRecords('eventHandling').at(-1).handling, 'declined');
+  assert.equal(storage.readRecords('alerts').find(e => e.id === event.id).handling, 'declined');
 });
 
 test('escalation preserves incident identity and a recross resolves pending work', () => {
@@ -232,26 +234,26 @@ test('escalation preserves incident identity and a recross resolves pending work
 
 test('revised action quantities conflict and identical request identities survive completion', () => {
   const common = { kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, automatic: true };
-  const command = commands.enqueueCommand('trader', 'Exit one share', 'alice');
-  agentContext.run({ role: 'trader', commandId: command.id, actorId: 'alice', attemptId: 'attempt-one' }, () => {
-    const first = proposals.createProposal({ ...common, params: { qty: 1 } });
-    assert.throws(() => proposals.createProposal({ ...common, params: { qty: 10 } }), /Conflicting open action/);
-    proposals.transitionProposal(first.id, 'executing'); proposals.transitionProposal(first.id, 'executed');
-    assert.equal(proposals.createProposal({ ...common, params: { qty: 1 } }).id, first.id);
-    assert.equal(commands.getCommand(command.id).actionIds.length, 1);
+  const command = commands.enqueueRequest('trader', 'Exit one share', 'alice');
+  agentContext.run({ role: 'trader', requestId: command.id, actorId: 'alice', toolCallId: 'attempt-one' }, () => {
+    const first = actions.createAction({ ...common, params: { qty: 1 } });
+    assert.throws(() => actions.createAction({ ...common, params: { qty: 10 } }), /Conflicting open action/);
+    actions.transitionAction(first.id, 'executing'); actions.transitionAction(first.id, 'executed');
+    assert.equal(actions.createAction({ ...common, params: { qty: 1 } }).id, first.id);
+    assert.equal(commands.getRequest(command.id).actionIds.length, 1);
     assert.equal(first.requestedBy, 'alice');
   });
 });
 
 test('restart recovers an action receipt saved before its tool result without rerunning a handler', async () => {
-  const command = commands.enqueueCommand('trader', 'Exit AAPL', 'alice');
-  const context = { role: 'trader', commandId: command.id, actorId: 'alice', attemptId: command.id + ':1:0' };
-  agentContext.run(context, () => proposals.createProposal({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
-  storage.saveRecord('agentTurn', command.id, { id: command.id, messages: [{ role: 'user', content: [{ type: 'text', text: 'Exit AAPL' }] }, { role: 'assistant', content: toolResponse([['write', {}]]).content }], rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '' });
+  const command = commands.enqueueRequest('trader', 'Exit AAPL', 'alice');
+  const context = { role: 'trader', requestId: command.id, actorId: 'alice', toolCallId: command.id + ':1:0' };
+  agentContext.run(context, () => actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
+  storage.saveRecord('transcripts', command.id, { id: command.id, messages: [{ role: 'user', content: [{ type: 'text', text: 'Exit AAPL' }] }, { role: 'assistant', content: toolResponse([['write', {}]]).content }], rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '' });
   let invoked = 0;
   const registry = new ToolRegistry([{ name: 'write', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { invoked++; return '{}'; });
-  const turn = await runTurn({ context, registry, provider: { chat: async request => {
-    assert.match(request.messages.at(-1).content[0].content, /proposalId/); return textResponse();
+  const turn = await runAgentLoop({ context, registry, provider: { chat: async request => {
+    assert.match(request.messages.at(-1).content[0].content, /actionId/); return textResponse();
   } }, messages: async () => { throw new Error('Should resume'); }, systemPrompt: '', maxRounds: 3, maxTokens: 100 });
   assert.equal(invoked, 0); assert.equal(turn.status, 'completed');
 });
@@ -293,7 +295,7 @@ test('account comparisons with deposits or unverifiable cash flows withhold perf
 
 test('lessons require evidence for model writes and can be retired without deleting history', () => {
   const evidence = journal.recordDecision(journal.decision('hold', 'trader', { rationale: 'Reviewed evidence' }));
-  agentContext.run({ role: 'trader', commandId: 'lesson-command', actorId: 'alice', attemptId: 'lesson-attempt' }, () => {
+  agentContext.run({ role: 'trader', requestId: 'lesson-command', actorId: 'alice', toolCallId: 'lesson-attempt' }, () => {
     assert.throws(() => lessons.recordLesson('Unsupported observation'), /source decision/);
     assert.throws(() => lessons.recordLesson('Unknown evidence', ['missing']), /existing decisions/);
     lessons.recordLesson('Supported observation', [evidence.id]);
@@ -301,9 +303,9 @@ test('lessons require evidence for model writes and can be retired without delet
   });
   assert.equal(lessons.listLessons().length, 1);
   const lesson = lessons.listLessons()[0];
-  lessons.reviewLesson(lesson.id, 'Reviewed observation', false, 'admin');
+  lessons.reviewLesson(lesson.id, 'Reviewed observation', false);
   assert.equal(lessons.readLessons().length, 0);
-  assert.equal(lessons.listLessons()[0].reviewedBy, 'admin');
+  assert.equal(lessons.listLessons()[0].text, 'Reviewed observation');
 });
 
 test('chat budget exhaustion preserves a separate allocation for trader work', async () => {
@@ -312,11 +314,11 @@ test('chat budget exhaustion preserves a separate allocation for trader work', a
   try {
     const provider = withModelBudget({ chat: async () => textResponse() });
     const params = { systemPrompt: '', messages: [], tools: [], maxTokens: 100 };
-    await agentContext.run({ role: 'concierge', actorId: 'alice', commandId: 'budget' }, async () => {
+    await agentContext.run({ role: 'concierge', actorId: 'alice', requestId: 'budget' }, async () => {
       await provider.chat(params); await provider.chat(params);
       await assert.rejects(() => provider.chat(params), /reserved for the trader/);
     });
-    await agentContext.run({ role: 'trader', actorId: 'system', commandId: 'budget-trader' }, () => provider.chat(params));
+    await agentContext.run({ role: 'trader', actorId: 'system', requestId: 'budget-trader' }, () => provider.chat(params));
   } finally { if (previous === undefined) delete process.env.AI_MAX_REQUESTS_PER_DAY; else process.env.AI_MAX_REQUESTS_PER_DAY = previous; }
 });
 
@@ -328,32 +330,32 @@ test('stopping a turn during an awaited tool prevents a later local mutation', a
   const began = new Promise(resolve => { entered = resolve; });
   const registry = new ToolRegistry([{ name: 'write', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => {
     entered(); await waiting;
-    proposals.createProposal({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } });
+    actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } });
     return '{}';
   });
-  const work = runTurn({ context: { role: 'trader', commandId: 'cancelled', actorId: 'alice' }, registry, provider: { chat: async () => toolResponse([['write', {}]]) },
+  const work = runAgentLoop({ context: { role: 'trader', requestId: 'cancelled', actorId: 'alice' }, registry, provider: { chat: async () => toolResponse([['write', {}]]) },
     messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100, signal: abort.signal });
   await began; abort.abort(); release();
   const result = await work;
-  assert.equal(result.status, 'interrupted'); assert.equal(proposals.getAllProposals().length, 0);
+  assert.equal(result.status, 'interrupted'); assert.equal(actions.getAllActions().length, 0);
 });
 
 test('restart honors saved truncation and terminal model responses', async () => {
   for (const reason of ['max_tokens','end_turn']) {
     const id = 'saved-' + reason;
     const content = reason === 'max_tokens' ? toolResponse([['write', {}]]).content : textResponse().content;
-    storage.saveRecord('agentTurn', id, { id, messages: [{ role: 'assistant', content }], rounds: 1, status: 'running', responseStopReason: reason, inTokens: 0, outTokens: 0, text: '' });
+    storage.saveRecord('transcripts', id, { id, messages: [{ role: 'assistant', content }], rounds: 1, status: 'running', responseStopReason: reason, inTokens: 0, outTokens: 0, text: '' });
     const registry = new ToolRegistry([{ name: 'write', description: '', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { throw new Error('Must not invoke a tool'); });
-    const result = await runTurn({ context: { role: 'trader', commandId: id, actorId: 'test' }, registry, provider: { chat: async () => { throw new Error('Must not call the model again'); } }, messages: async () => [], systemPrompt: '', maxRounds: 3, maxTokens: 100 });
+    const result = await runAgentLoop({ context: { role: 'trader', requestId: id, actorId: 'test' }, registry, provider: { chat: async () => { throw new Error('Must not call the model again'); } }, messages: async () => [], systemPrompt: '', maxRounds: 3, maxTokens: 100 });
     assert.equal(result.status, reason === 'max_tokens' ? 'failed' : 'completed');
     if (reason === 'end_turn') assert.equal(result.text, 'Done');
   }
 });
 
 test('legacy queued actions acquire a journal record before transitioning', () => {
-  const p = proposals.createProposal({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'legacy', timeoutMs: 60000, params: { qty: 1 } });
-  storage.database().prepare("DELETE FROM records WHERE kind='decision' AND id=?").run('action-' + p.id);
-  proposals.decideProposal(p.id, 'approve', 'human', undefined, 'alice');
+  const p = actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'legacy', timeoutMs: 60000, params: { qty: 1 } });
+  storage.deleteRecord('journal', 'action-' + p.id);
+  actions.decideAction(p.id, 'approve', 'human', undefined, 'alice');
   assert.equal(journal.readDecision('action-' + p.id).orderStatus, 'approved');
 });
 

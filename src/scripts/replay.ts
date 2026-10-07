@@ -19,6 +19,8 @@
  *   npm run replay -- -v  # plus every fired event
  */
 
+import path from 'path';
+import { DATA_DIR } from '../core/paths';
 import fs from 'fs';
 import type { AccountInfo, OpenOrder, Position } from '../broker/IBroker';
 import type { RawBundle } from '../collect';
@@ -36,13 +38,12 @@ import {
   type EventKind,
   type TriggerEvent,
 } from '../features/eventBus';
-import { useEphemeralEventLog } from '../features/eventLog';
+import { useEphemeralAlertLog } from '../features/alertLog';
 import { getLastTick, recordTick, resetLastTick } from '../features/lastTick';
 import { createLiveRouter } from '../features/router';
 import { watchlistScan } from '../features/watchlistScan';
 import { ensureDailyReset } from '../features/scheduler';
 import {
-  JOURNAL_FILE,
   decision,
   readDecisions,
   recordDecision,
@@ -50,16 +51,16 @@ import {
 } from '../journal/journal';
 import { useEphemeralLessons } from '../journal/lessons';
 import type { DecisionRecord } from '../journal/types';
-import { useEphemeralFillsLedger } from '../review/fillsLedger';
-import { useEphemeralProposalLog } from '../core/proposalLog';
+import { useEphemeralFillsLedger } from '../review/fills';
+import { useEphemeralActionHistory } from '../core/actionHistory';
 import {
-  createProposal,
-  decideProposal,
-  getOpenProposals,
-  getProposal,
-  transitionProposal,
-} from '../core/proposals';
-import { sweepProposals } from '../strategy/proposalExecutor';
+  createAction,
+  decideAction,
+  getOpenActions,
+  getAction,
+  transitionAction,
+} from '../core/actions';
+import { sweepActions } from '../strategy/actionExecutor';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
@@ -110,11 +111,11 @@ useEphemeralFillsLedger();
 useEphemeralLessons();
 // No scenario should splice a synthetic entry into the operator's real event history —
 // same reasoning, one file over.
-useEphemeralEventLog();
-// Same reasoning again: a manual-path scenario creates and transitions real `Proposal`
+useEphemeralAlertLog();
+// Same reasoning again: a manual-path scenario creates and transitions real `Action`
 // objects, and the audit trail for those must not land in the operator's real
-// `data/proposals.jsonl`.
-useEphemeralProposalLog();
+// `data/actions.jsonl`.
+useEphemeralActionHistory();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -871,6 +872,7 @@ function escalationText(): void {
  *     caller's `entryDecisionId` round-trip is exercised rather than skipped.
  */
 function journalSeam(): void {
+  const JOURNAL_FILE = path.join(DATA_DIR, 'db', 'journal.jsonl');
   const before = readDecisions().length;
   const sizeBefore = fs.existsSync(JOURNAL_FILE) ? fs.statSync(JOURNAL_FILE).size : -1;
 
@@ -2221,15 +2223,15 @@ function concentrationSingleBreach(): void {
 }
 
 /**
- * 31. Proposal lifecycle — pending, approved/rejected, and the illegal moves that must throw.
+ * 31. Action lifecycle — pending, approved/rejected, and the illegal moves that must throw.
  *
- * Exercises `core/proposals.ts` directly: no broker, no venue call. The `transitionProposal(...,
+ * Exercises `core/actions.ts` directly: no broker, no venue call. The `transitionAction(...,
  * 'executed', ...)` call below stands in for what the real executor's act step would record
  * after a successful `actEntry`/`actAnnotation` — calling those for real would need a broker,
  * which this harness never touches.
  */
-function proposalLifecycle(): void {
-  const toReject = createProposal({
+function actionLifecycle(): void {
+  const toReject = createAction({
     kind: 'entry',
     symbol: 'AAPL',
     venue: 'paper',
@@ -2237,11 +2239,11 @@ function proposalLifecycle(): void {
     reason: 'test entry',
     timeoutMs: 60_000,
   });
-  check('a fresh proposal is pending', toReject.status === 'pending');
-  check('a fresh proposal is visible via getProposal', getProposal(toReject.id)?.id === toReject.id);
-  check('a fresh proposal is open', getOpenProposals().some((p) => p.id === toReject.id));
+  check('a fresh action is pending', toReject.status === 'pending');
+  check('a fresh action is visible via getAction', getAction(toReject.id)?.id === toReject.id);
+  check('a fresh action is open', getOpenActions().some((p) => p.id === toReject.id));
 
-  const toApprove = createProposal({
+  const toApprove = createAction({
     kind: 'stop_adjust',
     symbol: 'MSFT',
     venue: 'paper',
@@ -2250,52 +2252,52 @@ function proposalLifecycle(): void {
     timeoutMs: 60_000,
   });
 
-  decideProposal(toReject.id, 'reject', 'human', 'not now');
-  const afterReject = getProposal(toReject.id);
-  check('rejecting moves the proposal to rejected', afterReject?.status === 'rejected');
+  decideAction(toReject.id, 'reject', 'human', 'not now');
+  const afterReject = getAction(toReject.id);
+  check('rejecting moves the action to rejected', afterReject?.status === 'rejected');
   check('the reject reason is recorded', afterReject?.rejectReason === 'not now');
-  check('a rejected proposal is no longer open', !getOpenProposals().some((p) => p.id === toReject.id));
+  check('a rejected action is no longer open', !getOpenActions().some((p) => p.id === toReject.id));
 
-  decideProposal(toApprove.id, 'approve', 'human');
-  const afterApprove = getProposal(toApprove.id);
-  check('approving moves the proposal to approved', afterApprove?.status === 'approved');
+  decideAction(toApprove.id, 'approve', 'human');
+  const afterApprove = getAction(toApprove.id);
+  check('approving moves the action to approved', afterApprove?.status === 'approved');
   check(
-    'an approved-but-unexecuted proposal is still open',
-    getOpenProposals().some((p) => p.id === toApprove.id),
+    'an approved-but-unexecuted action is still open',
+    getOpenActions().some((p) => p.id === toApprove.id),
   );
 
-  transitionProposal(toApprove.id, 'executing');
-  transitionProposal(toApprove.id, 'submitted', { result: { orderId: 'sim-1' } });
-  transitionProposal(toApprove.id, 'executed', { result: { orderId: 'sim-1' } });
-  const afterExecute = getProposal(toApprove.id);
-  check('executing moves the proposal to executed', afterExecute?.status === 'executed');
-  check('an executed proposal is no longer open', !getOpenProposals().some((p) => p.id === toApprove.id));
+  transitionAction(toApprove.id, 'executing');
+  transitionAction(toApprove.id, 'submitted', { result: { orderId: 'sim-1' } });
+  transitionAction(toApprove.id, 'executed', { result: { orderId: 'sim-1' } });
+  const afterExecute = getAction(toApprove.id);
+  check('executing moves the action to executed', afterExecute?.status === 'executed');
+  check('an executed action is no longer open', !getOpenActions().some((p) => p.id === toApprove.id));
 
   let threwOnExecutedApprove = false;
   try {
-    transitionProposal(toApprove.id, 'approved');
+    transitionAction(toApprove.id, 'approved');
   } catch {
     threwOnExecutedApprove = true;
   }
-  check('approving an already-executed proposal throws', threwOnExecutedApprove);
+  check('approving an already-executed action throws', threwOnExecutedApprove);
 
   let threwOnRejectedApprove = false;
   try {
-    transitionProposal(toReject.id, 'approved');
+    transitionAction(toReject.id, 'approved');
   } catch {
     threwOnRejectedApprove = true;
   }
-  check('approving an already-rejected proposal throws', threwOnRejectedApprove);
+  check('approving an already-rejected action throws', threwOnRejectedApprove);
 }
 
 /**
- * 32. Proposal timeout — the default policy's onTimeout:deny expires a stale proposal
+ * 32. Action timeout — the default policy's onTimeout:deny expires a stale action
  * without ever reaching the venue. Deliberately not testing onTimeout:allow: that path falls
- * through to sweepProposals()'s second, broker-touching pass in the SAME call, which this
+ * through to sweepActions()'s second, broker-touching pass in the SAME call, which this
  * no-broker harness must never run.
  */
-async function proposalTimeout(): Promise<void> {
-  const stale = createProposal({
+async function actionTimeout(): Promise<void> {
+  const stale = createAction({
     kind: 'exit',
     symbol: 'TSLA',
     venue: 'paper',
@@ -2304,16 +2306,16 @@ async function proposalTimeout(): Promise<void> {
     timeoutMs: -1,
   });
   check(
-    'a proposal with a past deadline is still pending until swept',
-    getProposal(stale.id)?.status === 'pending',
+    'an action with a past deadline is still pending until swept',
+    getAction(stale.id)?.status === 'pending',
   );
 
-  await sweepProposals();
+  await sweepActions();
 
-  const after = getProposal(stale.id);
-  check('the default policy onTimeout:deny expires a stale proposal', after?.status === 'expired');
+  const after = getAction(stale.id);
+  check('the default policy onTimeout:deny expires a stale action', after?.status === 'expired');
   check('the expiry is attributed to the timeout, not a human', after?.decidedBy === 'timeout');
-  check('an expired proposal is no longer open', !getOpenProposals().some((p) => p.id === stale.id));
+  check('an expired action is no longer open', !getOpenActions().some((p) => p.id === stale.id));
 }
 
 async function main(): Promise<void> {
@@ -2387,14 +2389,14 @@ async function main(): Promise<void> {
   await scenario('29. Concentration — a single name alone breaching the limit', plain, concentrationSingleBreach);
   await scenario('30. OCO pairing — the take-profit leg rests linked to the stop, not alone', plain, ocoPairing);
   await scenario(
-    '31. Proposal lifecycle — pending, approved, rejected, and the illegal moves that must throw',
+    '31. Action lifecycle — pending, approved, rejected, and the illegal moves that must throw',
     {},
-    proposalLifecycle,
+    actionLifecycle,
   );
   await scenario(
-    '32. Proposal timeout — deny expires it without ever reaching the venue',
+    '32. Action timeout — deny expires it without ever reaching the venue',
     {},
-    proposalTimeout,
+    actionTimeout,
   );
   await scenario('33. Position alerts wait for the open — nothing fires at midnight', plain, positionAlertsWaitForOpen);
 

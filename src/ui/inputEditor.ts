@@ -22,6 +22,11 @@
  */
 
 import * as blessed from 'blessed';
+import { escapeTags, makeFormat } from './format';
+import type { SlashCommand } from './surface';
+
+type CommandSuggestion = Pick<SlashCommand, 'name' | 'aliases' | 'args' | 'help'>;
+const commandFormat = makeFormat({ dash: '-', ellipsis: '…' });
 
 interface KeyEvent {
   name?: string;
@@ -87,11 +92,18 @@ export class InputEditor {
   private pasting: string[] | null = null;
   /** Inside the run of keypresses that one line break arrives as. See `breakRole`. */
   private inBreak = false;
-  /** A submit waiting one turn of the loop to see whether more input follows it. */
-  private pendingSubmit = false;
+  /** Enter/Tab wait one turn of the loop to distinguish a keystroke from pasted text. */
+  private pendingKey: 'enter' | 'tab' | null = null;
   /** A line break has already been folded out of this burst of input, so it was a paste. */
   private folded = false;
   private handler?: (line: string) => void;
+  private commandSource?: () => readonly CommandSuggestion[];
+  private commandMenu?: blessed.Widgets.BoxElement;
+  private commandMatches: CommandSuggestion[] = [];
+  private commandIndex = 0;
+  private commandOffset = 0;
+  private commandQuery = '';
+  private dismissedCommandQuery: string | null = null;
 
   constructor(options: blessed.Widgets.BoxOptions) {
     this.el = blessed.box({ ...options, tags: false, wrap: false });
@@ -104,7 +116,9 @@ export class InputEditor {
     // screen.render() calls this on the focused element — our cursor hook.
     (this.el as any)._updateCursor = (fromRender?: boolean) => this.placeCursor(fromRender);
 
-    this.el.on('focus', () => this.screen.program.showCursor());
+    this.el.on('focus', () => { this.screen.program.showCursor(); this.render(); });
+    this.el.on('blur', () => { this.commandMenu?.hide(); this.screen.render(); });
+    this.el.on('hide', () => this.commandMenu?.hide());
     this.el.on('resize', () => this.render());
 
     this.listenForPaste();
@@ -127,6 +141,32 @@ export class InputEditor {
 
   onSubmit(handler: (line: string) => void): void {
     this.handler = handler;
+  }
+
+  /** Read the live registry so commands registered after startup are suggested too. */
+  setCommands(source: () => readonly CommandSuggestion[]): void {
+    this.commandSource = source;
+    if (!this.commandMenu) {
+      this.commandMenu = blessed.box({
+        parent: this.screen, hidden: true, mouse: true, autoFocus: false,
+        border: { type: 'line' }, tags: true, wrap: false,
+        style: { bg: 'black', fg: 'white', border: { fg: 'cyan' } },
+      });
+      this.commandMenu.on('click', (event) => {
+        const menu = this.commandMenu!;
+        const row = event.y - Number(menu.atop) - Number(menu.itop);
+        if (event.button !== 'left' || row < 0 || row >= Number(menu.height) - Number(menu.iheight)) return;
+        const index = this.commandOffset + row;
+        if (index >= this.commandMatches.length) return;
+        this.commandIndex = index;
+        this.completeCommand();
+        this.focus();
+      });
+      this.commandMenu.on('wheelup', () => this.moveCommand(-1));
+      this.commandMenu.on('wheeldown', () => this.moveCommand(1));
+      this.el.once('destroy', () => this.commandMenu?.destroy());
+    }
+    this.render();
   }
 
   focus(): void {
@@ -153,19 +193,34 @@ export class InputEditor {
     // Something behind an armed submit in the same read of stdin — another break included —
     // means that newline came from a paste that arrived without markers. Fold it into the
     // buffer and carry on with this key.
-    if (this.pendingSubmit) {
-      this.pendingSubmit = false;
-      this.folded = true;
-      // Cleared at the end of the burst, unless a submit is armed by then — that one has to see
-      // the flag to know it is the tail of a paste. Without this, the operator's next Return
-      // after an unmarked paste would be swallowed as one more fold.
-      setImmediate(() => {
-        if (!this.pendingSubmit) this.folded = false;
-      });
-      this.fold('\n');
+    if (this.pendingKey) {
+      const pending = this.pendingKey;
+      this.pendingKey = null;
+      if (pending === 'enter') {
+        this.folded = true;
+        // Cleared at the end of the burst, unless a submit is armed by then — that one has to see
+        // the flag to know it is the tail of a paste. Without this, the operator's next Return
+        // after an unmarked paste would be swallowed as one more fold.
+        setImmediate(() => {
+          if (!this.pendingKey) this.folded = false;
+        });
+        this.fold('\n');
+      } else this.insert(' ');
     }
 
-    if (role === 'break') return this.armSubmit();
+    if (role === 'break') return this.armKey('enter');
+    if (!ctrl && !meta && !key?.shift && this.commandMenu && !this.commandMenu.hidden) {
+      if (name === 'escape') {
+        this.dismissedCommandQuery = this.value;
+        return this.render();
+      }
+      if (name === 'up' || name === 'down') return this.moveCommand(name === 'up' ? -1 : 1);
+      if (name === 'tab') return this.armKey('tab');
+    }
+    if (name === 'down' && this.dismissedCommandQuery === this.value) {
+      this.dismissedCommandQuery = null;
+      return this.render();
+    }
     if (name === 'escape') return this.setValue('');
     if (name === 'left') return ctrl || meta ? this.moveTo(this.wordEdge(-1)) : this.move(-1);
     if (name === 'right') return ctrl || meta ? this.moveTo(this.wordEdge(1)) : this.move(1);
@@ -183,9 +238,8 @@ export class InputEditor {
     if (ctrl && name === 'k') return this.kill(this.cursor, this.chars.length);
     if (ctrl && name === 'y') return this.yank();
 
-    // A tab is a column separator in a pasted table far more often than it is a keystroke —
-    // nothing in this box is bound to it — and `insert` drops it as a control character, welding
-    // two columns into one word. A space keeps the separation the operator pasted. The same
+    // Outside the command menu, preserve tabs as spaces rather than welding table columns
+    // together. Deferred completion does the same when more pasted text follows Tab. The same
     // substitution happens to a single-line bracketed paste, in `insertBlock`.
     if (name === 'tab' && !ctrl && !meta) return this.insert(' ');
 
@@ -330,7 +384,65 @@ export class InputEditor {
       used += w;
     }
     this.el.setContent(out);
+    this.renderCommands();
     this.screen.render(); // in turn calls placeCursor() via _updateCursor
+  }
+
+  private renderCommands(): void {
+    const menu = this.commandMenu;
+    if (!menu) return;
+    const value = this.value;
+    if (value !== this.commandQuery) {
+      this.commandQuery = value;
+      this.dismissedCommandQuery = null;
+      this.commandIndex = this.commandOffset = 0;
+    }
+    const match = /^\/([^\s/]*)$/.exec(value);
+    if (!match || this.cursor === 0 || this.pasting || this.el.hidden ||
+      this.screen.focused !== this.el || this.dismissedCommandQuery === value) return menu.hide();
+    const prefix = match[1].toLowerCase();
+    this.commandMatches = (this.commandSource?.() ?? []).filter(command =>
+      [command.name, ...(command.aliases ?? [])].some(name => name.toLowerCase().startsWith(prefix)));
+    this.commandIndex = Math.min(this.commandIndex, Math.max(0, this.commandMatches.length - 1));
+
+    // The prompt is at the bottom of the terminal; show the menu immediately above it.
+    const rows = Math.min(8, Math.max(1, this.commandMatches.length), Number(this.el.atop) - 2);
+    if (rows < 1) return menu.hide();
+    this.commandOffset = Math.max(0, Math.min(this.commandOffset, this.commandMatches.length - rows));
+    if (this.commandIndex < this.commandOffset) this.commandOffset = this.commandIndex;
+    if (this.commandIndex >= this.commandOffset + rows) this.commandOffset = this.commandIndex - rows + 1;
+    menu.left = this.el.aleft;
+    menu.width = this.el.width;
+    menu.height = rows + 2;
+    menu.top = Number(this.el.atop) - Number(menu.height);
+    const width = Math.max(1, Number(menu.width) - Number(menu.iwidth));
+    const count = this.commandMatches.length ? `${this.commandIndex + 1}/${this.commandMatches.length}` : '0';
+    // Blessed insets labels into the border; reserve that inset so a narrow label cannot wrap.
+    menu.setLabel(commandFormat.fit(` Commands ${count} · ↑↓ browse · Tab/Enter select · Esc close `, Math.max(1, width - 3)).trimEnd());
+    const lines = this.commandMatches.slice(this.commandOffset, this.commandOffset + rows).map((command, index) => {
+      const usage = `/${command.name}${command.args ? ' ' + command.args : ''}`;
+      const line = escapeTags(commandFormat.fit(` ${usage} — ${command.help}`, width));
+      return this.commandOffset + index === this.commandIndex ? `{black-fg}{cyan-bg}${line}{/}` : line;
+    });
+    menu.setContent(lines.length ? lines.join('\n') : ' No matching commands.');
+    menu.show();
+    menu.setFront();
+  }
+
+  private moveCommand(direction: -1 | 1): void {
+    if (this.commandMatches.length) {
+      this.commandIndex = (this.commandIndex + direction + this.commandMatches.length) % this.commandMatches.length;
+    }
+    this.render();
+  }
+
+  /** Selection fills the prompt; the next Enter submits through the normal command handler. */
+  private completeCommand(): boolean {
+    if (!this.commandMenu || this.commandMenu.hidden) return false;
+    const command = this.commandMatches[this.commandIndex];
+    if (!command) return false;
+    this.setValue(`/${command.name} `);
+    return true;
   }
 
   /** Slide the viewport so the cursor stays visible, keeping the tail in view. */
@@ -502,20 +614,22 @@ export class InputEditor {
    * never come — an old terminal, or a `tmux` that strips them — and it is what `onKey` acts on
    * when it turns an armed submit into a line break.
    */
-  private armSubmit(): void {
-    this.pendingSubmit = true;
+  private armKey(key: 'enter' | 'tab'): void {
+    this.pendingKey = key;
     setImmediate(() => {
-      if (!this.pendingSubmit) return;
-      this.pendingSubmit = false;
+      if (this.pendingKey !== key) return;
+      this.pendingKey = null;
       // Nothing followed this break, but earlier ones in the same burst were folded away, so
       // this is a paste that happens to end with a newline — not an operator pressing Return.
       // Sending 31 pasted lines to the agent unbidden is the one outcome worth ruling out here.
       if (this.folded) {
         this.folded = false;
-        return this.fold('\n');
+        return this.fold(key === 'enter' ? '\n' : ' ');
       }
 
-      this.submit();
+      if (this.completeCommand()) return;
+      if (key === 'enter') this.submit();
+      else this.insert(' ');
     });
   }
 
