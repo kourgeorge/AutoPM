@@ -12,6 +12,7 @@ import {
   alpacaTrading as tradingClient,
   SIP_EMBARGO_MS,
 } from '../core/alpacaHttp';
+import { getNewsBySymbol } from '../collect/yahoo';
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -80,11 +81,11 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_news',
-    description: 'Recent news articles for a symbol or market. Prefer this over web_search for financial news.',
+    description: 'Recent news articles for a symbol or market. Prefer this over web_search for financial news. Articles come from Alpaca (Benzinga) in `news`; when symbols are given, Yahoo Finance stories for each ticker are added in `yahoo`, grouped by symbol. Each source reports its own failure, so an empty list from one source with an error means that source is down, not that there is no news.',
     input_schema: {
       type: 'object',
       properties: {
-        symbols: { type: 'string',  description: 'Comma-separated tickers, e.g. "AAPL,MSFT". Omit for general market news.' },
+        symbols: { type: 'string',  description: 'Comma-separated tickers, e.g. "AAPL,MSFT". Omit for general market news (Alpaca only). Yahoo stories are fetched for the first 10 tickers.' },
         limit:   { type: 'integer', minimum: 1, maximum: 50, description: 'Articles to return (default 10, max 50).' },
         start:   { type: 'string',  description: 'ISO 8601 start datetime.' },
         end:     { type: 'string',  description: 'ISO 8601 end datetime.' },
@@ -224,14 +225,40 @@ async function getMarketMovers(input: Record<string, unknown>): Promise<string> 
   return JSON.stringify(res.data);
 }
 
+/**
+ * Two sources in one call, so the model cannot forget the second one. Alpaca (Benzinga) is
+ * market-wide; Yahoo is asked per ticker, only when tickers are given. Each source fails on its
+ * own — a down source is reported as an error next to the other's results.
+ */
 async function getNews(input: Record<string, unknown>): Promise<string> {
-  const params: Record<string, unknown> = { limit: Math.max(1, Math.min(50, Number(input.limit ?? 10))) };
+  const limit = Math.max(1, Math.min(50, Number(input.limit ?? 10)));
+  const params: Record<string, unknown> = { limit };
   if (input.symbols) params.symbols = input.symbols;
   if (input.start)   params.start   = input.start;
   if (input.end)     params.end     = input.end;
 
-  const res = await dataClient.get('/v1beta1/news', { params });
-  return JSON.stringify(res.data);
+  const symbols = [...new Set(String(input.symbols ?? '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean))].slice(0, 10);
+  const [alpaca, yahoo] = await Promise.all([
+    dataClient.get('/v1beta1/news', { params }).then(
+      res => ({ news: res.data.news ?? [], next_page_token: res.data.next_page_token ?? null }),
+      (err: any) => ({ news: [], alpacaError: `Alpaca news unavailable: ${err?.response?.status ? `HTTP ${err.response.status}` : err?.message ?? 'request failed'}` }),
+    ),
+    symbols.length ? getNewsBySymbol(symbols, Math.min(5, limit)) : Promise.resolve(undefined),
+  ]);
+
+  // Yahoo has no date filter of its own; apply the caller's window to its stories too.
+  const startMs = input.start ? Date.parse(String(input.start)) : NaN;
+  const endMs   = input.end   ? Date.parse(String(input.end))   : NaN;
+  if (yahoo && (Number.isFinite(startMs) || Number.isFinite(endMs))) {
+    for (const entry of Object.values(yahoo)) {
+      entry.news = entry.news.filter(n => {
+        const t = n.publishedAt ? Date.parse(n.publishedAt) : NaN;
+        if (!Number.isFinite(t)) return true;
+        return !(Number.isFinite(startMs) && t < startMs) && !(Number.isFinite(endMs) && t > endMs);
+      });
+    }
+  }
+  return JSON.stringify({ source: 'alpaca', ...alpaca, ...(yahoo ? { yahoo } : {}) });
 }
 
 async function getPortfolioHistory(input: Record<string, unknown>): Promise<string> {

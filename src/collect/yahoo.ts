@@ -228,3 +228,20 @@ export async function getNewsRaw(symbol: string, limit: number): Promise<NewsIte
   const r = await yf.search(ySymbol, { quotesCount: 0, newsCount: Math.min(50, limit * 2) }, { validateResult: false }) as any;
   return shapeYahooNews(ySymbol, Array.isArray(r?.news) ? r.news : [], limit);
 }
+
+/**
+ * Yahoo news for several tickers, grouped by ticker. Each ticker succeeds or fails on its own,
+ * and a failure is stated, never an empty list. Never throws.
+ */
+export async function getNewsBySymbol(
+  symbols: string[], limit: number,
+): Promise<Record<string, { news: NewsItem[]; error?: string }>> {
+  const results = await Promise.all(symbols.map(async symbol => {
+    try {
+      return [symbol, { news: await getNewsRaw(symbol, limit) }] as const;
+    } catch (err: any) {
+      return [symbol, { news: [], error: `Yahoo news unavailable: ${err?.message ?? 'request failed'}` }] as const;
+    }
+  }));
+  return Object.fromEntries(results);
+}

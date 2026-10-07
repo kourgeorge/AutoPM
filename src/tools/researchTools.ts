@@ -1,5 +1,5 @@
 /**
- * The tools here that reach outside the system for PROSE.
+ * The tool here that reaches outside the system for PROSE.
  *
  * Everything else that used to live in this file was scraped from an unofficial endpoint and
  * removed. Each has since come back through a source that can be named, and each has its own
@@ -10,13 +10,13 @@
  * `data.sec.gov`, not to a scrape.
  *
  * So what remains here is the one capability nothing structured can supply: recent news in
- * prose — open web search through Tavily, and per-ticker stories from Yahoo Finance. Note the division that follows from it — a DATE is never news. An earnings date read
- * out of a search result is a guess with a citation attached; `get_calendar` is the only
+ * prose, through Tavily web search. (Per-ticker news from Alpaca and Yahoo is `get_news`.)
+ * Note the division that follows from it — a DATE is never news. An earnings date read out
+ * of a search result is a guess with a citation attached; `get_calendar` is the only
  * source of one.
  */
 
 import { ToolDefinition } from '../core/types';
-import { getNewsRaw } from '../collect/yahoo';
 
 export const RESEARCH_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -30,19 +30,6 @@ export const RESEARCH_TOOL_DEFINITIONS: ToolDefinition[] = [
         limit: { type: 'integer', description: 'Max results to return (default 5)', minimum: 1, maximum: 10 },
       },
       required: ['query'],
-    },
-  },
-  {
-    name: 'get_ticker_news',
-    description:
-      'Recent Yahoo Finance news stories per ticker, grouped by symbol. A second news source alongside get_news (Alpaca).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        symbols: { type: 'string', description: 'Comma-separated tickers, e.g. "AAPL,MSFT" (max 10). Crypto as "BTC/USD".' },
-        limit:   { type: 'integer', minimum: 1, maximum: 20, description: 'Stories per ticker (default 5, max 20).' },
-      },
-      required: ['symbols'],
     },
   },
 ];
@@ -75,27 +62,10 @@ async function executeWebSearch(query: string, limit: number): Promise<string> {
   }
 }
 
-/** Per-ticker Yahoo news. Each ticker succeeds or fails on its own. Never throws. */
-async function executeTickerNews(symbolsInput: unknown, limitInput: unknown): Promise<string> {
-  const symbols = [...new Set(String(symbolsInput ?? '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean))].slice(0, 10);
-  if (symbols.length === 0) return JSON.stringify({ error: 'symbols is required, e.g. "AAPL,MSFT"' });
-  const limit = Math.max(1, Math.min(20, Number(limitInput ?? 5) || 5));
-
-  const results = await Promise.all(symbols.map(async symbol => {
-    try {
-      return [symbol, { news: await getNewsRaw(symbol, limit) }] as const;
-    } catch (err: any) {
-      return [symbol, { news: [], error: `Yahoo news unavailable: ${err?.message ?? 'request failed'}` }] as const;
-    }
-  }));
-  return JSON.stringify({ source: 'yahoo', symbols: Object.fromEntries(results) });
-}
-
 export async function executeResearchTool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<string | null> {
   if (name === 'web_search') return executeWebSearch(input.query as string, (input.limit as number | undefined) ?? 5);
-  if (name === 'get_ticker_news') return executeTickerNews(input.symbols, input.limit);
   return null;
 }
