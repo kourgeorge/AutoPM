@@ -42,8 +42,8 @@ test('web_search without a Tavily key reports an error instead of empty results'
   }
 });
 
-test('get_ticker_news requires symbols and is registered', async () => {
-  assert.ok(RESEARCH_TOOL_DEFINITIONS.some(t => t.name === 'get_ticker_news'));
-  const r = JSON.parse(await executeResearchTool('get_ticker_news', {}));
-  assert.match(r.error, /symbols is required/);
+test('the separate Yahoo tool is gone; get_news carries Yahoo instead', () => {
+  assert.ok(!RESEARCH_TOOL_DEFINITIONS.some(t => t.name === 'get_ticker_news'));
+  const { ALPACA_DATA_TOOL_DEFINITIONS } = require(root + '/src/tools/alpacaDataTools');
+  assert.match(ALPACA_DATA_TOOL_DEFINITIONS.find(t => t.name === 'get_news').description, /Yahoo/);
 });

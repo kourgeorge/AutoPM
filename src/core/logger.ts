@@ -109,8 +109,10 @@ function summarizeResult(tool: string, raw: string): string {
         return Array.isArray(r.ideas) ? `${r.ideas.length} idea(s): ${r.ideas.map((i: any) => i.symbol).join(', ')}` : 'no ideas';
       case 'web_search':
         return Array.isArray(r?.results) ? (r.error ? `FAILED: ${r.error}` : `${r.results.length} results`) : formatResult(r);
-      case 'get_ticker_news':
-        return r?.symbols ? Object.entries(r.symbols).map(([s, v]: [string, any]) => `${s}: ${v.error ? 'unavailable' : v.news.length}`).join(', ') : formatResult(r);
+      case 'get_news': {
+        const yahoo = r?.yahoo ? Object.values<any>(r.yahoo).reduce((n, v) => n + v.news.length, 0) : null;
+        return `alpaca ${r?.alpacaError ? 'unavailable' : (r?.news?.length ?? 0)}${yahoo == null ? '' : `, yahoo ${yahoo}`}`;
+      }
       case 'search_news':
         return Array.isArray(r) ? `${r.length} articles` : formatResult(r);
       case 'get_sec_filing_summary':
