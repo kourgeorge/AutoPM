@@ -140,8 +140,8 @@ export type AutomationTimeout = 'deny' | 'allow';
  *
  * Behaviour, so it lives here rather than in `core/config.ts`: an operator tunes it to change
  * how the system trades. It is deliberately absent from `TradingSettingsUpdate` in
- * `policy/mutate.ts` — the concierge's `update_trading_settings` must not be able to disarm the
- * gate on the operator's behalf. Only a human editing policy.yaml can.
+ * `policy/mutate.ts` — the concierge's `update_trading_settings` saves risk and watchlist changes
+ * but must not be able to disarm the gate on the operator's behalf. Only the Strategy settings form can.
  */
 export interface AutomationPolicy {
   level: AutomationLevels;

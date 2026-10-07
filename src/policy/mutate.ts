@@ -1,4 +1,8 @@
-/** Host-side settings helper. The dashboard uses atomic revision activation directly. */
+/**
+ * Settings changes made from the account chat. The dashboard saves through `saveStrategy`
+ * directly; this applies a partial change on top of the saved settings and goes through the
+ * same validation, conflict check and change history.
+ */
 
 import { dump as dumpYaml, load as parseYamlDoc } from 'js-yaml';
 import { parsePolicy, readPolicyText, saveStrategy, getPolicyHash } from './load';
@@ -20,13 +24,23 @@ export interface TradingSettingsUpdate {
   maxDailyLossPct?: number;
   /** risk.maxGrossExposurePct — fraction of equity, e.g. 0.8 for 80% */
   maxGrossExposurePct?: number;
+  /** risk.riskPerTradePct — percentage points, e.g. 0.5 for 0.5% */
+  riskPerTradePct?: number;
+  /** risk.targetVolatilityPct — percentage points, e.g. 12 for 12% a year */
+  targetVolatilityPct?: number;
+  /** risk.minRewardRisk — e.g. 2 for 2:1 */
+  minRewardRisk?: number;
+  /** risk.maxSingleWeightPct — percentage points */
+  maxSingleWeightPct?: number;
+  /** risk.maxSectorWeightPct — percentage points */
+  maxSectorWeightPct?: number;
 }
 
 export type UpdateTradingSettingsResult =
   | { ok: true;  applied: string[]; version: number }
   | { ok: false; errors: string[] };
 
-export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTradingSettingsResult {
+export function updateTradingSettings(changes: TradingSettingsUpdate, actorId = 'host-admin'): UpdateTradingSettingsResult {
   let text: string;
   try {
     text = readPolicyText();
@@ -89,11 +103,16 @@ export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTra
     ['stopLossAtrMult',   'risk.stopLossAtrMult'],
     ['maxDailyLossPct',   'risk.maxDailyLossPct'],
     ['maxGrossExposurePct', 'risk.maxGrossExposurePct'],
+    ['riskPerTradePct',   'risk.riskPerTradePct'],
+    ['targetVolatilityPct', 'risk.targetVolatilityPct'],
+    ['minRewardRisk',     'risk.minRewardRisk'],
+    ['maxSingleWeightPct', 'risk.maxSingleWeightPct'],
+    ['maxSectorWeightPct', 'risk.maxSectorWeightPct'],
   ];
   for (const [field, label] of riskFields) {
     const v = changes[field as keyof TradingSettingsUpdate];
     if (v !== undefined) {
-      const prev = doc.risk[field];
+      const prev = doc.risk[field] ?? 'not configured';
       doc.risk[field] = v;
       applied.push(`${label}: ${prev} → ${v}`);
     }
@@ -113,8 +132,7 @@ export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTra
     return { ok: false, errors: validation.errors };
   }
 
-  try { saveStrategy(doc, getPolicyHash(), 'host-admin'); }
+  // saveStrategy assigns the real next version and re-checks nothing changed underneath us.
+  try { return { ok: true, applied, version: saveStrategy(doc, getPolicyHash(), actorId).policy.version }; }
   catch (err: any) { return { ok: false, errors: [err.message] }; }
-
-  return { ok: true, applied, version: doc.version };
 }

@@ -48,7 +48,7 @@ export function summarizeStrategy(policy: Policy, strategyHash: string) {
     `Unanswered manual approvals expire after ${automation.approvalTimeoutMinutes} minutes.`,
     `Allowed symbols: ${s.watchlist.join(', ')}.`,
     'Risk per trade is planned loss, while position size is money invested. Stops can slip or gap; volatility is an estimate and reward:risk does not promise a return.',
-    'To change these settings, review and save them in Strategy settings. A suggestion in chat does not activate changes.',
+    'To change these settings, save them in Strategy settings or ask in the account chat.',
   ].join('\n');
 
   return {

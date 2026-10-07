@@ -5,6 +5,8 @@ import { enqueueRequest, pendingRequests, updateRequest, getRequest, type AgentR
 import { getOpenActions } from '../core/actions';
 import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
+import { agentContext } from '../core/agentContext';
+import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
 /**
  * Concierge Agent — the user-facing conversational layer.
  *
@@ -119,7 +121,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'update_trading_settings',
-    description: 'Propose changes for the operator to review in Strategy settings: add/remove watchlist symbols or adjust position sizing, risk-profile controls, exposure limits or the ATR stop guide. Read get_strategy_settings first. This tool only returns a suggestion; it does not save or activate changes, and the account settings form does not populate automatically.',
+    description: 'Save changes to the account strategy settings: add/remove watchlist symbols or adjust position sizing, risk-profile controls, exposure limits or the ATR stop guide. Read get_strategy_settings first. Only call this when the operator has asked for the change (or confirmed a value you suggested). The change takes effect immediately, is recorded in the strategy change history, and goes through the same checks as the Strategy settings form; a rejected value returns ok:false with the reason and saves nothing. Approval/automation settings cannot be changed here.',
     input_schema: {
       type: 'object',
       properties: {
@@ -143,7 +145,7 @@ const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
 ];
 
 /** Tools that change something. Their full inputs and results are what the trace is for. */
-const ACTION_TOOLS = new Set(['execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'send_to_trader', 'sleep']);
+const ACTION_TOOLS = new Set(['update_trading_settings', 'execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'send_to_trader', 'sleep']);
 
 /**
  * The stored turn, flattened to what was said and done. The opening context message is left
@@ -211,15 +213,15 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
 const SYSTEM_PROMPT = `You are AutoTrade's account concierge.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
 Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_actions for the outcome.
-You cannot place trades, approve actions, adopt holdings, or activate strategy changes.
+You cannot place trades, approve actions or adopt holdings. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
 For pause/resume and approvals, direct the operator to the account controls.
-A one-off instruction goes to the trader. A lasting settings change is an action for review in Strategy settings.
+A one-off instruction goes to the trader. A lasting settings change is saved with update_trading_settings.
 To explain why a position was entered or exited, read get_actions for that symbol (includeDecided), then get_request_trace with the action's requestId: say who started the request, the stated reason, and whether the turn shows evidence for it. If the recorded reason contradicts the action — a hold sentence on a sell, "operator-directed" when the scheduler started it, or no reason at all — say so plainly; do not present it as a deliberate decision.
 get_state shows pause, account and outstanding actions. get_journal explains decisions, newest kept when trimmed; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
 Read get_strategy_settings afresh before describing current settings or suggesting a change. Its summary is the presentation baseline; use its correctly scaled values, not remembered defaults or old conversation results.
 For a general settings question, lead with the saved profile, then group risk controls, investment limits and approvals into short labeled lines or bullets. Include the allowed symbols in a full overview. Answer a narrow question using just the relevant settings. Avoid raw JSON, YAML keys, revision hashes and Markdown tables; the account chat displays plain text.
 Explain risk per trade as planned loss at the stop and position size as money invested. Name volatility as an annualized estimate, reward:risk as planned upside versus downside, and blank controls as not configured. A daily loss threshold halts new entries; it does not guarantee losses cannot exceed it. Distinguish alerts from entry limits and saved settings from actual holdings or trading status.
-Settings questions are read-only: do not wake the trader. Label proposed values as suggestions, keep them separate from currently saved values, and direct the operator to review and save changes in Strategy settings. Never claim a suggestion was saved or that it automatically populated the form.
+Settings questions do not wake the trader. When the operator asks to change a setting, save it with update_trading_settings and report the before and after values from its result. When you are only suggesting values, label them as suggestions and ask before saving. Never claim a change was saved unless the tool returned ok:true; if it returned errors, say what was rejected.
 Read get_policy_playbook when quoting or explaining account strategy prose. Lessons are advisory observations and must not override strategy or platform behavior.
 Use chart tools when the operator asks to see history or a comparison. Their results state whether a comparison is available.
 Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued action filled or that a paused trader started immediately.
@@ -312,7 +314,10 @@ export class ConciergeAgent {
     }
 
     if (name === 'update_trading_settings') {
-      return JSON.stringify({ proposedSettings: input, note: 'Settings are not changed. The operator must review and save them in Strategy settings.' });
+      const result = updateTradingSettings(input as TradingSettingsUpdate, `concierge:${agentContext.getStore()?.actorId ?? 'operator'}`);
+      if (!result.ok) return JSON.stringify(result);
+      const snapshot = getPolicySnapshot();
+      return JSON.stringify({ ...result, saved: summarizeStrategy(snapshot.policy, snapshot.hash) });
     }
 
     if (CHART_TOOL_NAMES.has(name)) {
