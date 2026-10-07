@@ -30,7 +30,7 @@ Start it, then open `http://127.0.0.1:8787`:
 npm run start:headless
 ```
 
-AutoTrade is a local, single-user app: there is no login. The dashboard only answers on this computer (127.0.0.1), and refuses requests from other sites. Initial entries and exits require approval.
+AutoTrade is a local, single-user app: there is no login. The dashboard only answers on this computer (127.0.0.1), and refuses requests from other sites. New accounts start with entries and exits set to manual approval; you can switch either to automatic in Strategy settings.
 
 For Interactive Brokers, also set `BROKER=ibkr`, `IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID`, and **`IBKR_ACCOUNT`**. Account selection is explicit. Market data still uses the configured Alpaca/Yahoo collectors. USD stock contracts are the supported trading instruments; other holdings are displayed with distinct instrument identities and cannot be adopted for automated trading.
 
@@ -54,11 +54,11 @@ Existing holdings start unmanaged unless they have a legacy management record. A
 
 The account owns a saved revision consisting of structured settings and a pinned playbook. **Review and save** activates both atomically and records the previous revision. Stale saves are rejected so one user cannot overwrite another's changes.
 
-`policy/default.yaml` and `policy/PLAYBOOK.md` seed new accounts. Application upgrades do not silently replace an existing account's playbook. Model-written lessons are advisory. Chat suggests settings; it cannot activate a strategy or approve a trade. Platform ceilings and execution constraints remain enforced in code even if the playbook text changes.
+`policy/default.yaml` and `policy/PLAYBOOK.md` seed new accounts. Application upgrades do not silently replace an existing account's playbook. Model-written lessons are advisory. Chat can save watchlist, sizing and risk-limit changes when you ask for them (through the same checks and change history as the Strategy settings form); it cannot change approval settings, activate a strategy, or approve a trade. Platform ceilings and execution constraints remain enforced in code even if the playbook text changes.
 
 The dashboard's **Risk profile** control offers Conservative, Balanced, Aggressive and Custom. Presets fill explicit numeric policy settings; editing one of those values makes the profile Custom. Saving creates the usual account strategy revision and invalidates older approvals. New accounts start Balanced; existing accounts retain their limits and leave new controls unconfigured until the user saves them.
 
-Ask the concierge **“Explain my strategy settings”** for a plain-language overview of the saved profile, risk controls, investment limits, allowed symbols and human approvals. Its read-only `get_strategy_settings` tool reads the current account revision and supplies percentages with consistent units, including explicit “Not configured” labels. Risk-profile changes suggested in chat remain suggestions; review and save the values in Strategy settings to activate them.
+Ask the concierge **“Explain my strategy settings”** for a plain-language overview of the saved profile, risk controls, investment limits, allowed symbols and human approvals. Its read-only `get_strategy_settings` tool reads the current account revision and supplies percentages with consistent units, including explicit “Not configured” labels. Settings changes you ask for in chat are saved immediately with `update_trading_settings` and appear in the strategy change history; approval and automation settings can only be changed in Strategy settings.
 
 | Control | Conservative | Balanced | Aggressive |
 | --- | ---: | ---: | ---: |
@@ -72,7 +72,7 @@ Ask the concierge **“Explain my strategy settings”** for a plain-language ov
 
 `risk.riskPerTradePct` and `risk.targetVolatilityPct` use **percentage points** (`0.5` means 0.5%). `risk.minRewardRisk` is a ratio. Null leaves an optional control unconfigured. The older `positionSizePct`, `maxDailyLossPct` and `maxGrossExposurePct` remain fractions (`0.1` means 10%). Presets are starting settings, not performance forecasts.
 
-`get_watchlist_scan` adds portfolio risk fit and ranks feasible candidates by signal strength discounted for incremental volatility. `get_entry_plan` sizes a supported stop/target setup using current equity, buying power, concentration and risk at the IOC entry limit. Execution rechecks the actual permitted quantity, including the approved maximum and regime reduction. Stops and volatility targets are estimates: gaps, slippage and fees can exceed the planned loss, and a high reward:risk ratio alone does not imply positive expectancy.
+With a configured risk profile, `get_watchlist_scan` adds portfolio risk fit and ranks feasible candidates by signal strength discounted for incremental volatility. `get_entry_plan` sizes a supported stop/target setup using current equity, buying power, concentration and risk at the IOC entry limit. Execution rechecks the actual permitted quantity, including the approved maximum and regime reduction. Stops and volatility targets are estimates: gaps, slippage and fees can exceed the planned loss, and a high reward:risk ratio alone does not imply positive expectancy.
 
 Portfolio volatility uses sample covariance from up to 60 completed daily return intervals, at least 30 aligned observations, annualized over 252 sessions; cash contributes zero modeled volatility. The engine aligns both endpoints of each interval and requires history through the last completed exchange session. Volatility targeting currently requires authenticated Alpaca calendar access even when orders route through IBKR. Missing calendar data or missing/stale required history blocks new entries. Unknown sectors conservatively count toward the largest possible overlap, including ETFs whose constituents are not modeled. Saving a tighter profile affects future entries; it does not automatically liquidate existing holdings. Backtests reuse the sizing engine with past-only data and conservatively unknown sectors; targetless exit modes disclose that their mechanical reward:risk cannot be evaluated.
 
