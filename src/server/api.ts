@@ -7,12 +7,12 @@ import path from 'path';
 import { modelUsage } from '../core/modelBudget';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
-import { getState, openPositionSnapshot } from '../state/state';
-import { readRecords, readRecordPage, appendRecord, transaction } from '../core/storage';
+import { getState } from '../state/state';
+import { readRecords, readRecordPage, appendRecord } from '../core/storage';
 import { broker } from '../broker';
-import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
-import { assertExecutionOwner } from '../core/runtime';
+import { canonicalSymbol } from '../core/symbols';
 import { confirmProtection } from '../strategy/protectionIntent';
+import { adoptHolding, AdoptRefused } from '../strategy/adopt';
 import { sweepActions } from '../strategy/actionExecutor';
 import http from 'http';
 import { URL } from 'url';
@@ -295,20 +295,9 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     return { available: !!tick && !tick.ordersStale, lastTickAt: tick?.tickAt, orders: tick && !tick.ordersStale ? tick.orders : null };
   });
   add('POST', '/api/positions/:symbol/adopt', async ({ params, body }) => {
-    const input = await body(), symbol = canonicalSymbol(params.symbol), stop = Number(input.stop), target = input.target == null ? undefined : Number(input.target);
-    if ([stop, target].some(level => level != null && Math.abs(level * 100 - Math.round(level * 100)) > 1e-8)) throw new HttpError(400, 'Stop and target prices must use whole cents');
-    if (isCryptoSymbol(symbol) || !(stop > 0) || !Number.isFinite(stop) || (target != null && (!Number.isFinite(target) || target <= stop))) throw new HttpError(400, 'Provide valid equity stop and target prices');
-    const positions = await broker.getPositions();
-    const held = positions.find(p => sameSymbol(p.symbol, symbol));
-    const mark = held?.marketValue != null && held.qty > 0 ? held.marketValue / held.qty : null;
-    if (!held || held.assetClass === 'other' || held.qty <= 0 || !Number.isInteger(held.qty) || mark == null || stop >= mark || (target != null && target <= mark)) throw new HttpError(409, 'A whole-share long holding and a stop below the current mark are required');
-    if (getState().positionSnapshots[symbol]) throw new HttpError(409, 'Position is already managed');
-    if ((await broker.getOpenOrders()).some(o => sameSymbol(o.symbol, symbol))) throw new HttpError(409, 'Review existing broker orders before adopting this holding');
-    assertExecutionOwner();
-    transaction(() => {
-      openPositionSnapshot({ symbol, entryPrice: held.avgCost, stopLevel: stop, takeProfitLevel: target });
-      appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { actorId: OPERATOR, action: 'adopt', symbol, stop, target, qty: held.qty });
-    });
+    const input = await body(), target = input.target == null ? undefined : Number(input.target);
+    try { await adoptHolding(params.symbol, Number(input.stop), target, OPERATOR); }
+    catch (err: any) { if (err instanceof AdoptRefused) throw new HttpError(err.kind === 'invalid' ? 400 : 409, err.message); throw err; }
     return { managed: true, protection: 'Waiting for broker confirmation' };
   });
   add('POST', '/api/positions/:symbol/confirm-protection', async ({ params, body }) => {

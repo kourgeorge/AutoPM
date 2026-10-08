@@ -41,6 +41,48 @@ export async function protect<T>(symbol: string, stop: number, target: number | 
   }
 }
 
+/**
+ * A protective order this system placed minutes ago is missing from the broker's open orders.
+ *
+ * That is not "it filled or someone cancelled it" — it is the signature of an order the venue
+ * never really accepted, and clearing and re-placing it is a loop (one new order per sweep).
+ * Marking the request unknown stops the sweep re-arming this symbol and pauses trading until
+ * the operator has looked at the broker.
+ */
+export const VANISHED_WINDOW_MS = 10 * 60_000;
+export function recentlyConfirmedIntent(symbol: string, now = Date.now()): ProtectionIntent | undefined {
+  const intent = protectionIntents()[canonicalSymbol(symbol)];
+  return intent?.status === 'confirmed' && now - Date.parse(intent.at) < VANISHED_WINDOW_MS ? intent : undefined;
+}
+export function flagVanishedProtection(symbol: string, orderId: string): void {
+  const intent = protectionIntents()[canonicalSymbol(symbol)];
+  if (!intent) return;
+  save({ ...intent, status: 'unknown', error: `order ${orderId} disappeared from the broker within minutes of being placed` });
+  updateState({ paused: true });
+  notifyAccount('protection_unknown', `${symbol}: protective order ${orderId} vanished right after it was placed. Trading is paused; check the broker's orders before resuming.`);
+}
+
+/**
+ * The operator has checked the broker and the uncertain request never became an order: clear
+ * it so the sweep may place protection again. Refused while the broker shows ANY order for the
+ * symbol — that case is a relink (`confirmProtection`) or a manual cleanup, never a re-arm,
+ * because re-arming next to a live order is exactly the duplicate this guard exists to stop.
+ */
+export async function clearUnplacedProtection(symbol: string, actorId: string): Promise<void> {
+  const key = canonicalSymbol(symbol);
+  const intent = protectionIntents()[key];
+  if (!intent || intent.status === 'confirmed') throw new Error(`No uncertain protection request for ${key}`);
+  if ((await broker.getOpenOrders()).some(o => sameSymbol(o.symbol, key))) throw new Error(`The broker shows open orders for ${key}; cancel or review them first`);
+  assertExecutionOwner();
+  transaction(() => {
+    const { [key]: _dropped, ...rest } = protectionIntents();
+    saveValue('protectionIntents', rest);
+    if (getState().positionSnapshots[key]) patchPositionSnapshot(key, { stopOrderId: undefined, takeProfitOrderId: undefined });
+    appendRecord('stop-requests', crypto.randomUUID(), new Date().toISOString(), { ...intent, status: 'cleared', clearedBy: actorId });
+    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { action: 'rearm', symbol: key, actorId, intentId: intent.id });
+  });
+}
+
 /** A human can relink a confirmed broker stop after reviewing an interrupted request. */
 export async function confirmProtection(symbol: string, stopId: string, targetId: string | undefined, actorId: string): Promise<void> {
   const adjustment = getOpenActions().find(p => p.status === 'unknown' && ['stop_adjust','target_adjust'].includes(p.kind) && sameSymbol(p.symbol, symbol));

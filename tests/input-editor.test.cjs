@@ -147,5 +147,5 @@ test('the real terminal UI exposes built-in and runtime commands and routes comp
       ALERT_WEBHOOK_URL: '' },
   });
   assert.equal(result.status, 0, result.stderr || result.error?.message);
-  assert.match(fs.readFileSync(path.join(dir, 'terminal-menu.txt'), 'utf8'), /Commands 1\/17/);
+  assert.match(fs.readFileSync(path.join(dir, 'terminal-menu.txt'), 'utf8'), /Commands 1\/19/);
 });

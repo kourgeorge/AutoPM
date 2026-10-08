@@ -12,7 +12,7 @@ async function run() {
   const type = async bytes => { process.stdin.emit('data', Buffer.from(bytes)); await nextTurn(); };
   const capture = () => stripVTControlCharacters(ui.screen.screenshot(0, 100, 0, 28));
   await type('/');
-  assert.match(capture(), /Commands 1\/17/);
+  assert.match(capture(), /Commands 1\/19/);
   assert.match(capture(), /\/help/);
   fs.writeFileSync(process.env.DATA_DIR + '/terminal-menu.txt', capture());
   await type('sta');

@@ -30,6 +30,8 @@ import {
   type TickSnapshot,
 } from './dashboard';
 import { decideAction } from '../core/actions';
+import { adoptHolding } from '../strategy/adopt';
+import { clearUnplacedProtection } from '../strategy/protectionIntent';
 import { escapeTags, plainWidth, wrapPlain } from './format';
 import { makeGlyphs, type Glyphs } from './glyphs';
 import { DECIDE_COMMAND, HEADLESS, type OperatorUI, type SlashCommand } from './surface';
@@ -722,9 +724,45 @@ class TerminalUI implements OperatorUI {
       help: 'Reject a pending action.',
       run: (args) => this.decideFromCommand('reject', args),
     });
+    this.registerCommand({
+      name: 'adopt',
+      args: '<symbol> <stop> [target]',
+      help: 'Hand a holding to the bot: it places a real stop (and target) at the broker and may propose exits.',
+      run: (args) => this.adoptFromCommand(args),
+    });
+    this.registerCommand({
+      name: 'rearm',
+      args: '<symbol>',
+      help: 'After a stop or target request was flagged for review: if the broker shows no orders for the symbol, clear the flag so protection is placed again.',
+      run: async (args) => {
+        const symbol = args.trim().split(/\s+/)[0];
+        if (!symbol) return this.log('WARN', 'Usage: /rearm <symbol>');
+        try {
+          await clearUnplacedProtection(symbol, 'operator');
+          this.log('TRADE', `${symbol.toUpperCase()} cleared for protection. The stop is placed on the next protection check; /resume if trading is paused.`);
+        } catch (err: any) {
+          this.log('WARN', `Could not re-arm ${symbol.toUpperCase()}: ${err?.message ?? String(err)}`);
+        }
+      },
+    });
   }
 
-  private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
+  private async adoptFromCommand(args: string): Promise<void> {
+    const [symbol, stopText, targetText, ...extra] = args.split(/\s+/).filter(Boolean);
+    const stop = Number(stopText), target = targetText == null ? undefined : Number(targetText);
+    if (!symbol || !stopText || extra.length || !Number.isFinite(stop) || (target != null && !Number.isFinite(target))) {
+      this.log('WARN', 'Usage: /adopt <symbol> <stop> [target]   e.g. /adopt IBM 210 255');
+      return;
+    }
+    try {
+      const r = await adoptHolding(symbol, stop, target, 'operator');
+      this.log('TRADE', `Adopted ${r.symbol} (${r.qty} sh, now ${r.mark.toFixed(2)}): stop ${stop.toFixed(2)}${target != null ? `, target ${target.toFixed(2)}` : ''}. The broker order is placed on the next protection check (about a minute).`);
+    } catch (err: any) {
+      this.log('WARN', `Could not adopt ${symbol.toUpperCase()}: ${err?.message ?? String(err)}`);
+    }
+  }
+
+private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
     const [id, ...reason] = args.split(/\s+/).filter(Boolean);
     if (!id) {
       this.log('WARN', `Usage: /${decision} <id>${decision === 'reject' ? ' [reason]' : ''}`);
