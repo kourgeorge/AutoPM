@@ -94,10 +94,9 @@ const concierge = new ConciergeAgent(msg => trader.wake(msg));
 ui.onMessage((msg) => concierge.handleMessage(msg));
 registerOperatorCommands(trader);
 
-// Headless (`HEADLESS=1`) swaps the terminal for the browser dashboard: the same commands,
-// approvals and chat. Started after the commands are registered so `/api/commands` lists
-// them all from the first request.
-const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, messageService: (text, actor) => concierge.handleMessage(text, actor) }) : null;
+// Both independent clients use this engine API. Register commands before accepting requests;
+// the separate web process owns browser assets and the TUI owns its terminal lifecycle.
+const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, serveWeb: false, messageService: (text, actor) => concierge.handleMessage(text, actor) }) : null;
 
 // L2 — the deterministic tick loop, and the ONLY path that wakes anyone. Machine wakes
 // carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a

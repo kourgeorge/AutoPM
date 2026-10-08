@@ -24,12 +24,12 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { decideAction } from '../core/actions';
 import type { Cycle, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
 import { DECIDE_COMMAND, type LogLevel, type OperatorUI, type SlashCommand } from './surface';
+import type { ChartData } from './chart';
+import type { ToolCallDetails } from '../core/types';
+import { agentContext } from '../core/agentContext';
 
 /** Enough for a few hours of a busy session; older entries are dropped from the front. */
 const FEED_CAPACITY = 2000;
-
-/** Charts are sized to this many columns — there is no box to measure, so pick a sensible web width. */
-const CHART_COLS = 100;
 
 export type FeedKind = 'log' | 'reply' | 'chart' | 'alert' | 'operator';
 
@@ -38,9 +38,14 @@ export interface FeedEntry {
   seq: number;
   at: string;
   kind: FeedKind;
+  /** Who produced the entry, independent of whether it is prose, a chart, or a log. */
+  source?: string;
   /** Set for `kind: 'log'` only. */
   level?: LogLevel;
   text: string;
+  chart?: ChartData;
+  /** Full tool inputs/outputs for both feed history and live events; never display-truncated. */
+  tool?: ToolCallDetails;
 }
 
 export interface HeadlessSnapshot {
@@ -122,8 +127,8 @@ export class HeadlessUI implements OperatorUI {
     this.commandOrder.push(cmd);
   }
 
-  log(level: LogLevel, msg: string): void {
-    const entry = this.push('log', msg, level);
+  log(level: LogLevel, msg: string, tool?: ToolCallDetails): void {
+    const entry = this.push('log', msg, level, undefined, tool);
     const out = `[${entry.at}] ${level.padEnd(5)} ${msg}\n`;
     (level === 'ERROR' ? process.stderr : process.stdout).write(out);
   }
@@ -138,8 +143,8 @@ export class HeadlessUI implements OperatorUI {
     process.stdout.write(lines.join('\n') + '\n');
   }
 
-  chartWidth(): number {
-    return CHART_COLS;
+  showChart(data: ChartData): void {
+    this.push('chart', data.kind === 'price' ? data.label : `${data.a.label} / ${data.b.label} performance`, undefined, data);
   }
 
   alert(msg: string): void {
@@ -216,6 +221,12 @@ export class HeadlessUI implements OperatorUI {
     return () => this.tickListeners.delete(listener);
   }
 
+  /** Record what the operator typed in the browser, so the conversation shows both sides. */
+  echoOperator(line: string): void {
+    const trimmed = line.trim();
+    if (trimmed) this.push('operator', trimmed);
+  }
+
   /**
    * One typed line, exactly as the terminal would take it: `/command`, `approve <id>`,
    * `reject <id> [reason]`, or else a chat message for the concierge.
@@ -277,8 +288,9 @@ export class HeadlessUI implements OperatorUI {
 
   // ── Private ──────────────────────────────────────────────────────────────
 
-  private push(kind: FeedKind, text: string, level?: LogLevel): FeedEntry {
-    const payload = { at: new Date().toISOString(), kind, text, ...(level ? { level } : {}) };
+  private push(kind: FeedKind, text: string, level?: LogLevel, chart?: ChartData, tool?: ToolCallDetails): FeedEntry {
+    const source = kind === 'operator' ? 'operator' : tool?.agent ?? agentContext.getStore()?.role ?? 'system';
+    const payload = { at: new Date().toISOString(), kind, source, text, ...(level ? { level } : {}), ...(chart ? { chart } : {}), ...(tool ? { tool } : {}) };
     const entry: FeedEntry = { ...payload, seq: appendActivity(payload) };
     if (level) entry.level = level;
     this.feed.push(entry);

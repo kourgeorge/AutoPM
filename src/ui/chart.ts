@@ -1,5 +1,5 @@
 /**
- * ASCII chart rendering for the concierge's chart tools.
+ * TUI-only text rendering of numeric chart events.
  *
  * Pure formatting, same discipline as `format.ts` — no blessed import. Callers own the box,
  * the framing, and the clipping; this file only turns numbers into rows of text.
@@ -15,6 +15,16 @@ import * as asciichart from 'asciichart';
 
 const CHART_HEIGHT = 12;
 
+/** Numeric chart payload; clients choose their own renderer and dimensions. */
+export type ChartData =
+  | { kind: 'price'; label: string; values: number[]; dates: string[] }
+  | { kind: 'comparison'; a: { label: string; values: number[] }; b: { label: string; values: number[] } };
+
+export function renderChart(data: ChartData, width: number): string[] {
+  return data.kind === 'price' ? renderPriceChart(data.label, data.values, data.dates, width)
+    : renderComparisonChart(data.a, data.b, width);
+}
+
 /**
  * Columns asciichart spends on its y-axis labels, reserved before the plot area.
  *
@@ -29,14 +39,25 @@ const CHART_HEIGHT = 12;
 const AXIS_RESERVE = 13;
 
 /**
- * Thin a series to at most `maxPoints` columns, always keeping the last point exact.
+ * Fit a series to `maxPoints` plot columns, always keeping both endpoints exact.
  *
  * asciichart spends one column per array element — a 90-day series would overrun any
  * reasonable terminal width untouched, so this picks evenly spaced samples rather than
  * truncating the tail off the window.
  */
-function downsample(values: number[], maxPoints: number): number[] {
-  if (maxPoints <= 0 || values.length <= maxPoints) return values;
+export function fitSeries(values: number[], maxPoints: number): number[] {
+  if (maxPoints <= 0 || values.length < 2 || values.length === maxPoints) return values;
+  // Spread short histories across the plot, retaining every original observation.
+  // Extra columns connect observations; they are not additional market samples.
+  if (values.length < maxPoints) {
+    const out = new Array<number>(maxPoints);
+    for (let i = 0; i < values.length - 1; i++) {
+      const left = Math.round(i * (maxPoints - 1) / (values.length - 1));
+      const right = Math.round((i + 1) * (maxPoints - 1) / (values.length - 1));
+      for (let x = left; x <= right; x++) out[x] = values[i] + (values[i + 1] - values[i]) * (x - left) / (right - left);
+    }
+    return out;
+  }
   const step = values.length / maxPoints;
   const out: number[] = [];
   for (let i = 0; i < maxPoints; i++) out.push(values[Math.floor(i * step)]);
@@ -57,7 +78,7 @@ export function renderPriceChart(
 ): string[] {
   if (values.length < 2) return [`${label}: not enough data to chart`];
 
-  const plotted = downsample(values, plotWidth(width));
+  const plotted = fitSeries(values, plotWidth(width));
   const chart = asciichart.plot(plotted, { height: CHART_HEIGHT });
   const from = dates[0] ?? '';
   const to = dates[dates.length - 1] ?? '';
@@ -93,8 +114,8 @@ export function renderComparisonChart(
   const min = Math.min(...na, ...nb);
   const max = Math.max(...na, ...nb);
   const maxPoints = plotWidth(width);
-  const chartA = asciichart.plot(downsample(na, maxPoints), { height: CHART_HEIGHT, min, max });
-  const chartB = asciichart.plot(downsample(nb, maxPoints), { height: CHART_HEIGHT, min, max });
+  const chartA = asciichart.plot(fitSeries(na, maxPoints), { height: CHART_HEIGHT, min, max });
+  const chartB = asciichart.plot(fitSeries(nb, maxPoints), { height: CHART_HEIGHT, min, max });
 
   const changeA = na[na.length - 1];
   const changeB = nb[nb.length - 1];

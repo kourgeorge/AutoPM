@@ -33,6 +33,16 @@ export interface ToolDefinition {
   };
 }
 
+/** Complete tool exchange for clients. Output stays verbatim, including non-JSON results. */
+export interface ToolCallDetails {
+  id?: string;
+  requestId?: string;
+  agent: string;
+  name: string;
+  input: unknown;
+  output: string;
+}
+
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
@@ -52,5 +62,4 @@ export interface AiConfig {
   maxTokensPerTurn: number;
   maxToolRounds: number;
 }
-
 

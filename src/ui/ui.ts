@@ -13,6 +13,7 @@
 
 import * as blessed from 'blessed';
 import { InputEditor } from './inputEditor';
+import { renderChart, type ChartData } from './chart';
 import {
   isOpenAction,
   needsAttention,
@@ -29,13 +30,9 @@ import {
   type ActionRow,
   type TickSnapshot,
 } from './dashboard';
-import { decideAction } from '../core/actions';
-import { adoptHolding } from '../strategy/adopt';
-import { clearUnplacedProtection } from '../strategy/protectionIntent';
 import { escapeTags, plainWidth, wrapPlain } from './format';
 import { makeGlyphs, type Glyphs } from './glyphs';
 import { DECIDE_COMMAND, HEADLESS, type OperatorUI, type SlashCommand } from './surface';
-import { HeadlessUI } from './headless';
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 
@@ -86,6 +83,16 @@ const CHAT_GUTTER = Math.max(...Object.values(CHAT_LABELS).map((l) => l.length))
  * just aligned — putting the overflow back at column 0, which is the whole bug.
  */
 const LOG_SCROLLBAR_COLS = 1;
+
+/**
+ * One more column every pre-wrapped log row leaves empty. Blessed re-wraps a row whose VISIBLE
+ * width exactly fills the box whenever an escape code trails its last character (element.js:641
+ * hits `total === width` with the closing `{/}` still unread, so `i !== line.length` and it
+ * backs up to the last space) — every coloured chat row ends in `{/}`, so a row `wrapPlain`
+ * filled to the column dropped its last word back to column 0. The sidebar dodges the same bug
+ * with `wrap: false`; the log cannot, because a too-narrow window still relies on blessed's wrap.
+ */
+const LOG_EXACT_FIT_COLS = 1;
 
 /**
  * Text columns a chat block needs before the hanging indent stops paying for itself. Below this
@@ -200,7 +207,7 @@ function clipPlain(s: string, width: number): string {
 // `surface.ts`, shared with the headless UI so both accept exactly the same input.
 export type { SlashCommand } from './surface';
 
-class TerminalUI implements OperatorUI {
+export class TerminalUI implements OperatorUI {
   private screen: blessed.Widgets.Screen;
   private logBox: blessed.Widgets.Log;
   private input: InputEditor;
@@ -254,7 +261,7 @@ class TerminalUI implements OperatorUI {
    */
   private lastBlank = true;
 
-  constructor() {
+  constructor(private readonly remote = false) {
     this.screen = blessed.screen({
       smartCSR: true,
       title: 'AutoTrade',
@@ -410,7 +417,7 @@ class TerminalUI implements OperatorUI {
     });
 
     this.input.onSubmit((line) => {
-      this.appendUserMessage(line);
+      if (!this.remote) this.appendUserMessage(line);
       // Matched HERE, before anything reaches the concierge: the decision to act on an action
       // must not pass through a language model, and the concierge has no decide tool precisely
       // so it cannot answer on the operator's behalf. Anything that doesn't match the command
@@ -418,6 +425,7 @@ class TerminalUI implements OperatorUI {
       const trimmed = line.trim();
       if (trimmed.startsWith('/')) return this.runCommand(trimmed);
       const match = DECIDE_COMMAND.exec(trimmed);
+      if (match && this.remote) { this.onSubmit?.(trimmed); return; }
       if (match) return this.decide(match[1].toLowerCase() as 'approve' | 'reject', match[2], match[3]);
       this.onSubmit?.(line);
     });
@@ -476,7 +484,7 @@ class TerminalUI implements OperatorUI {
     // `ts` is always `HH:MM:SS.mmm` and every entry in LEVEL_LABEL is 5 visible columns, so this
     // is the exact width of `${ts}  ${label}  ` below.
     const gutter = ts.length + 2 + 5 + 2;
-    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const room = this.logRoom();
     const textCols = room - gutter;
     const indent = ' '.repeat(gutter);
     const [open, close] = level === 'TRADE' ? ['{bold}{green-fg}', '{/}'] : ['', ''];
@@ -503,7 +511,7 @@ class TerminalUI implements OperatorUI {
    * primary fit.
    */
   replyChart(lines: string[]): void {
-    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const room = this.logRoom();
     const narrow = room - CHAT_GUTTER < CHAT_MIN_TEXT_COLS;
     const indent = narrow ? 2 : CHAT_GUTTER;
     const textCols = Math.max(1, room - indent);
@@ -522,9 +530,13 @@ class TerminalUI implements OperatorUI {
     this.screen.render();
   }
 
+  showChart(data: ChartData): void {
+    this.replyChart(renderChart(data, this.chartWidth()));
+  }
+
   /** Text columns `replyChart` will actually draw into, for sizing a chart before rendering it. */
   chartWidth(): number {
-    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const room = this.logRoom();
     const narrow = room - CHAT_GUTTER < CHAT_MIN_TEXT_COLS;
     return Math.max(1, room - (narrow ? 2 : CHAT_GUTTER));
   }
@@ -683,7 +695,7 @@ class TerminalUI implements OperatorUI {
     this.registerCommand({
       name: 'quit',
       aliases: ['exit', 'q'],
-      help: 'Shut down cleanly (same as Ctrl+C).',
+      help: this.remote ? (process.env.AUTOTRADE_PAIRED === '1' ? 'Close this paired session and stop its engine.' : 'Close this terminal client; the engine keeps running.') : 'Shut down cleanly (same as Ctrl+C).',
       run: () => this.quitHandler(),
     });
     this.registerCommand({
@@ -738,7 +750,8 @@ class TerminalUI implements OperatorUI {
         const symbol = args.trim().split(/\s+/)[0];
         if (!symbol) return this.log('WARN', 'Usage: /rearm <symbol>');
         try {
-          await clearUnplacedProtection(symbol, 'operator');
+          if (this.remote) { this.onSubmit?.('/rearm ' + args); return; }
+          await require('../strategy/protectionIntent').clearUnplacedProtection(symbol, 'operator');
           this.log('TRADE', `${symbol.toUpperCase()} cleared for protection. The stop is placed on the next protection check; /resume if trading is paused.`);
         } catch (err: any) {
           this.log('WARN', `Could not re-arm ${symbol.toUpperCase()}: ${err?.message ?? String(err)}`);
@@ -755,14 +768,15 @@ class TerminalUI implements OperatorUI {
       return;
     }
     try {
-      const r = await adoptHolding(symbol, stop, target, 'operator');
+      if (this.remote) { this.onSubmit?.('/adopt ' + args); return; }
+      const r = await require('../strategy/adopt').adoptHolding(symbol, stop, target, 'operator');
       this.log('TRADE', `Adopted ${r.symbol} (${r.qty} sh, now ${r.mark.toFixed(2)}): stop ${stop.toFixed(2)}${target != null ? `, target ${target.toFixed(2)}` : ''}. The broker order is placed on the next protection check (about a minute).`);
     } catch (err: any) {
       this.log('WARN', `Could not adopt ${symbol.toUpperCase()}: ${err?.message ?? String(err)}`);
     }
   }
 
-private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
+  private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
     const [id, ...reason] = args.split(/\s+/).filter(Boolean);
     if (!id) {
       this.log('WARN', `Usage: /${decision} <id>${decision === 'reject' ? ' [reason]' : ''}`);
@@ -779,7 +793,8 @@ private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
    */
   private decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
     try {
-      const p = decideAction(id, decision, 'human', reason?.trim() || undefined);
+      if (this.remote) { this.onSubmit?.(`${decision} ${id}${reason ? ' ' + reason : ''}`); return; }
+      const p = require('../core/actions').decideAction(id, decision, 'human', reason?.trim() || undefined);
       this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
     } catch (err: any) {
       this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
@@ -792,6 +807,8 @@ private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
    * because it IS the other half: an un-labelled `user:` line with no timestamp read as
    * neither a log entry nor a chat turn.
    */
+  echoOperator(msg: string): void { this.appendUserMessage(msg); }
+
   private appendUserMessage(msg: string): void {
     // Trimmed for the ECHO only: the full text is what reaches the concierge (`onSubmit`, above),
     // and what was left out is always stated rather than quietly dropped.
@@ -815,7 +832,7 @@ private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
    */
   private chatBlock(label: string, color: string, msg: string): void {
     // What is left of the box interior once the scrollbar and the indent are paid for.
-    const room = this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS;
+    const room = this.logRoom();
     const narrow = room - CHAT_GUTTER < CHAT_MIN_TEXT_COLS;
     const indent = narrow ? 2 : CHAT_GUTTER;
     // A window too narrow even for this hands `wrapPlain` a non-positive width, which returns
@@ -1070,6 +1087,11 @@ private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
     return `${f2} ${this.glyphs.sep} ${f3}`;
   }
 
+  /** Columns a pre-wrapped log row may fill without blessed breaking it a second time. */
+  private logRoom(): number {
+    return this.innerWidth(this.logBox) - LOG_SCROLLBAR_COLS - LOG_EXACT_FIT_COLS;
+  }
+
   /** Columns inside the borders and padding. `iwidth` is what the frame costs. */
   private innerWidth(el: blessed.Widgets.BoxElement): number {
     return Math.max(1, (Number(el.width) || 0) - (Number((el as any).iwidth) || 0));
@@ -1134,4 +1156,4 @@ private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
  * The blessed screen is never constructed in headless mode, which is what lets the process run
  * with no terminal attached at all.
  */
-export const ui: OperatorUI = HEADLESS ? new HeadlessUI() : new TerminalUI();
+export const ui: OperatorUI = HEADLESS ? new (require('./headless').HeadlessUI)() : new TerminalUI(process.env.AUTOTRADE_ROLE === 'tui');

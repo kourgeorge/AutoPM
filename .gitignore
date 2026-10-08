@@ -56,3 +56,7 @@ data/db/
 data/*.sqlite*
 data/jobs/
 data/backups/
+
+# Separate broker account directories contain local trading records and caches.
+/data-alpaca/
+/data-ibkr/

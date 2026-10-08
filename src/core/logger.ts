@@ -3,9 +3,11 @@
  * falls back to console when running non-interactively (piped, CI, etc.).
  */
 
+import type { ToolCallDetails } from './types';
+
 export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'TRADE' | 'TOOL';
 
-let _ui: { log: (level: LogLevel, msg: string) => void } | null = null;
+let _ui: { log: (level: LogLevel, msg: string, tool?: ToolCallDetails) => void } | null = null;
 
 export function attachUI(ui: typeof _ui): void {
   _ui = ui;
@@ -29,10 +31,13 @@ function write(level: LogLevel, msg: string, data?: unknown): void {
  * always visible, not just on failure: on the happy path the args are what makes it possible
  * to tell two calls to the same tool apart at a glance.
  */
-function logTool(agent: string, toolName: string, result: string, input?: unknown): void {
+function logTool(agent: string, toolName: string, result: string, input?: unknown, identity?: Pick<ToolCallDetails, 'id' | 'requestId'>): void {
   const summary = summarizeResult(toolName, result);
   const args = input !== undefined ? formatArgs(input) : '';
-  write('TOOL', `[${agent}] ${toolName}(${args}) → ${summary}`);
+  const message = `[${agent}] ${toolName}(${args}) → ${summary}`;
+  // The summary is a compatibility fallback. Clients receive the complete exchange too.
+  if (_ui) _ui.log('TOOL', message, { ...identity, agent, name: toolName, input: input ?? null, output: result });
+  else write('TOOL', message);
 }
 
 // Generous now that the UI wraps long TOOL lines with a hanging indent instead of clipping at

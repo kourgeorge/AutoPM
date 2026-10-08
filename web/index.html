@@ -1,18 +1,106 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AutoTrade · Account</title><link rel="stylesheet" href="/dashboard.css"><script defer src="/dashboard.js"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0c0f12"><title>AutoTrade · Trading workspace</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="stylesheet" href="/dashboard.css"><script defer src="/dashboard.js"></script></head>
 <body>
-<header><a class="brand" href="/">AutoTrade<span>Account workspace</span></a></header>
-<main>
+<svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+  <symbol id="icon-agent" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></symbol>
+  <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h6"/></symbol>
+  <symbol id="icon-terminal" viewBox="0 0 24 24"><path d="m4 6 5 5-5 5m9 1h7"/></symbol>
+  <symbol id="icon-strategy" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></symbol>
+  <symbol id="icon-review" viewBox="0 0 24 24"><path d="M4 20V10m8 10V4m8 16v-7M2 20h20"/></symbol>
+  <symbol id="icon-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="icon-journal" viewBox="0 0 24 24"><path d="M5 3h14v18H5zM9 3v18M12 8h4M12 12h4M12 16h3"/></symbol>
+  <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+  <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+</defs></svg>
+<aside class="sidebar" aria-label="Workspace navigation">
+  <a class="brand" href="/" aria-label="AutoTrade home"><span class="brand-mark"><svg><use href="#icon-agent"/></svg></span>auto<span>trade</span><span class="brand-period">_</span></a>
+  <div class="workspace-label">YOUR WORKSPACE</div>
+  <nav class="views" role="tablist" aria-label="Views" aria-orientation="vertical">
+    <button role="tab" id="tab-live" aria-controls="view-live" data-view="live"><svg><use href="#icon-review"/></svg><span>Live</span><span class="nav-dot"></span></button>
+    <button role="tab" id="tab-activity" aria-controls="view-activity" data-view="activity"><svg><use href="#icon-history"/></svg><span>Activity</span></button>
+    <button role="tab" id="tab-strategy" aria-controls="view-strategy" data-view="strategy"><svg><use href="#icon-strategy"/></svg><span>Strategy</span></button>
+    <button role="tab" id="tab-review" aria-controls="view-review" data-view="review"><svg><use href="#icon-journal"/></svg><span>Review</span></button>
+  </nav>
+  <div class="sidebar-bottom"><div class="workspace-note"><svg><use href="#icon-agent"/></svg><strong>Research. Reason. Execute.</strong><p>Your strategy, with an agent<br>keeping the context.</p></div>
+  <button id="theme-toggle" class="theme-toggle" aria-label="Switch to light theme"><svg><use href="#icon-sun"/></svg><span>Light appearance</span></button>
+  <div class="account"><div class="account-heading"><span class="account-avatar">AT</span><div><strong>Trading account</strong><span id="venue" class="badge"></span></div></div><span id="account-id" class="eyebrow">CONNECTING</span></div></div>
+</aside>
+<div class="app-shell">
+<header class="topbar">
+  <div class="breadcrumb"><span class="breadcrumb-root">Workspace</span> <span class="breadcrumb-slash">/</span> <strong id="view-label">Live trading</strong></div>
+  <div class="topbar-right"><span id="account-mode" class="badge">Connecting</span><span id="live" class="live-dot" role="status">Connecting…</span><span class="topbar-divider"></span><button id="pause">Pause trading</button></div>
+</header>
 <p id="notice" role="status" hidden></p>
-<div id="workspace">
-<div class="title"><div><p class="eyebrow" id="account-id">CONNECTING</p><h1>Your account at a glance.</h1></div><div class="actions"><span id="venue" class="badge"></span><button id="pause">Pause trading</button><button id="reconcile">Check broker outcomes</button></div></div>
 <div id="health" role="status"></div>
-<section class="metrics" aria-label="Account summary"><div><span>Equity</span><strong id="equity">—</strong></div><div><span>Cash</span><strong id="cash">—</strong></div><div><span>Trading</span><strong id="trading">—</strong></div><div><span>Last account update</span><strong id="updated">—</strong></div></section>
-<nav aria-label="Workspace sections"><a href="#decisions">Decisions</a><a href="#holdings">Holdings</a><a href="#strategy">Strategy</a><a href="#requests">Requests</a><a href="#lessons">Lessons</a><a href="#activity">Activity</a></nav>
-<section id="decisions"><div class="section-title"><h2>Trading decisions</h2><span>Approval authorizes an attempt. Filled quantity confirms a trade.</span></div><div id="actions" class="cards"></div></section>
-<section id="holdings"><h2>Holdings</h2><p id="positions-status"></p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Shares</th><th>Cost basis</th><th>Price</th><th>Planned stop</th><th>Management</th></tr></thead><tbody id="positions"></tbody></table></div><h3>Broker orders</h3><p id="orders-status"></p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Side / type</th><th>Quantity</th><th>Filled</th><th>Price</th><th>Broker status</th><th>Order ID</th></tr></thead><tbody id="orders"></tbody></table></div><details><summary>Recover an interrupted protection request</summary><p>Inspect the orders at your broker, then provide the IDs of the stop and target matching the saved request. The account remains paused until you resume it.</p><form id="protection"><label>Symbol<input name="symbol" required></label><label>Stop order ID<input name="stopOrderId" required></label><label>Target order ID (if applicable)<input name="targetOrderId"></label><button>Verify protection</button></form></details></section>
-<section id="strategy"><div class="section-title"><h2>Strategy settings</h2><span id="revision"></span></div><p>Changes apply to future decisions. Actions approved under an older revision must be proposed again.</p><form id="settings">
+<main id="workspace">
+<div id="view-live" class="view live-view" role="tabpanel" aria-labelledby="tab-live">
+  <div class="workspace-intro view-heading"><h1>Live terminal</h1></div>
+  <div id="status-panel" class="live-statusline" role="region" aria-labelledby="status-title" tabindex="0">
+    <div class="status-readout" tabindex="0" role="group" aria-label="Account and agent status">
+    <div class="status-panel-heading"><h2 id="status-title">Status</h2><span id="agent-model">Connecting to your account…</span></div>
+    <section id="agent-now" class="panel"><div class="pane-title"><h2>Happening now</h2><span id="tick-age">Waiting for data</span></div><div id="current-agents" aria-live="polite"></div><div class="runtime-footer"><span id="cycle-status">No completed cycles</span><span id="buying-power">Buying power unavailable</span></div></section>
+    </div>
+    <span id="market-session" class="session-pill">Waiting for market data</span>
+  </div>
+<section id="activity" class="chat" aria-label="Conversation">
+    <div class="chat-heading"><div class="agent-identity"><span class="agent-avatar" aria-hidden="true"><svg><use href="#icon-terminal"/></svg></span><h2>Chat</h2><span class="chat-participants"><span class="sr-only">Participants: </span>You · Concierge · Trader</span></div><div class="chat-heading-actions"><label class="toggle"><input type="checkbox" id="show-log" aria-label="Show event logs"> Logs</label><button id="clear-conversation" type="button" aria-label="Clear conversation" title="Clear this view. Saved history and assistant memory are kept.">Clear</button></div></div>
+    <div id="feed" class="hide-log" role="log" aria-label="Conversation and trading activity" aria-live="polite">
+      <div id="welcome" class="welcome"><div class="welcome-orbit"><svg><use href="#icon-agent"/></svg></div><span class="eyebrow">YOUR CONVERSATIONAL TRADING DESK</span><h2>What would you like to discuss?</h2><p>Ask about your portfolio, explore a trade,<br>or talk through your next move.</p><div class="starter-grid"><button type="button" data-question="How is my portfolio doing?"><svg><use href="#icon-review"/></svg><strong>Get the bigger picture</strong><span>Understand your portfolio ↗</span></button><button type="button" data-question="What are you watching right now?"><svg><use href="#icon-agent"/></svg><strong>Explore the next move</strong><span>Discuss the watchlist ↗</span></button></div></div>
+    </div>
+    <p id="thinking" hidden><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span> <span id="thinking-text">The assistant is thinking…</span></p>
+    <div class="composer"><div id="suggestions" class="suggestions" aria-label="Suggested questions"></div>
+    <form id="message">
+      <span class="terminal-prompt" aria-hidden="true">&gt;</span>
+      <div class="message-input">
+        <label class="sr-only" for="message-text">Message</label>
+        <input id="message-text" name="text" maxlength="4000" placeholder="Message the concierge or type /command…" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="command-list" aria-describedby="command-hint" autocomplete="off" required>
+        <div id="command-menu" hidden>
+          <ul id="command-list" role="listbox" aria-label="Commands"></ul>
+          <p id="command-empty" role="status" hidden>No matching commands.</p>
+          <p class="command-keys" aria-hidden="true">↑ ↓ browse · Enter / Tab select · Esc dismiss</p>
+        </div>
+        <span id="command-hint" class="sr-only">Type / at the start for commands. Use the arrow keys to browse, Enter or Tab to select, and Escape to dismiss. Send to run the selected command.</span>
+      </div>
+      <button class="primary send-button" aria-label="Send"><svg><use href="#icon-arrow"/></svg></button>
+    </form>
+    <div class="composer-footer"><span>Portfolio context included</span><span><kbd>/</kbd> commands · <kbd>↵</kbd> send</span></div></div>
+  </section>
+  <div class="live-main">
+    <section id="account-summary" class="panel" aria-label="Account summary">
+    <div class="pane-title"><h2>Account summary</h2><span id="trading" title="Trading status">—</span></div>
+    <section class="metrics" aria-label="Account indicators">
+      <div><span>Equity</span><strong id="equity">—</strong><small id="equity-change"></small></div>
+      <div><span>Open P&amp;L</span><strong id="open-pnl">—</strong><small id="open-pnl-pct"></small></div>
+      <div><span>Cash</span><strong id="cash">—</strong><small id="invested"></small></div>
+    </section>
+    <small id="updated" hidden></small>
+    <section id="chart" aria-label="Equity chart">
+      <div class="chart-caption"><strong id="chart-value">—</strong><span>Equity · USD</span></div><span id="chart-note" class="chart-note"></span>
+      <svg id="equity-chart" viewBox="0 0 600 140" preserveAspectRatio="none" role="img" aria-label="Equity over time"></svg>
+      <div class="chart-axis"><span id="chart-start">Awaiting history</span><span id="chart-end">Now</span></div><p id="exposure" class="exposure"></p>
+    </section>
+    </section>
+    <section id="holdings" class="panel">
+      <div class="pane-title"><div><h2>Current positions</h2></div><span id="positions-status"></span></div>
+      <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Shares</th><th>Cost</th><th>Price</th><th>P&amp;L</th><th>Stop / target</th><th>Management</th></tr></thead><tbody id="positions"></tbody></table></div>
+    </section>
+    <section id="watchlist-panel" class="panel" aria-label="Watchlist indicators"><div class="pane-title"><h2>Watchlist</h2><span id="watchlist-status">Waiting for data</span></div><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Price</th><th>Day %</th><th title="Mean trend signal score, from -1 to +1">Trend</th><th title="Mean-reversion signal score, from -1 to +1">MR</th><th title="Relative strength index">RSI</th></tr></thead><tbody id="watchlist-rows"></tbody></table></div><p class="watchlist-legend">Trend / MR: −1 to +1 · select ticker for candles</p></section>
+  </div>
+  <div class="live-secondary">
+    <section id="live-activity" class="panel"><div class="pane-title"><h2>Activity stream</h2><button id="open-conversation" class="text-button">Focus conversation ↗</button></div><div id="live-feed" role="log" aria-label="Live activity" aria-live="polite"><p id="live-feed-empty" class="activity-empty">Waiting for activity. Agent updates and execution events will appear here.</p></div></section>
+<section id="broker-panel" class="panel">      <div class="pane-title"><h2>Broker orders</h2><button id="reconcile" class="text-button">Check broker outcomes ↗</button></div><p id="orders-status"></p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Side / type</th><th>Quantity</th><th>Filled</th><th>Price</th><th>Broker status</th><th>Order ID</th></tr></thead><tbody id="orders"></tbody></table></div>
+      <details><summary>Recover an interrupted protection request</summary><p>Inspect the orders at your broker, then provide the IDs of the stop and target matching the saved request. The account remains paused until you resume it.</p><form id="protection"><label>Symbol<input name="symbol" required></label><label>Stop order ID<input name="stopOrderId" required></label><label>Target order ID (if applicable)<input name="targetOrderId"></label><button>Verify protection</button></form></details>
+</section>
+    <section id="decisions" class="panel">
+      <div class="pane-title"><h2>Decision desk</h2><span id="action-count" class="count-pill">0 pending</span></div><p class="section-description">Agent proposals, with you in the loop.</p>
+      <div id="actions"></div><p class="action-footnote">Approval authorizes an attempt. Fills confirm a trade.</p>
+    </section>
+  </div>
+</div>
+<div id="view-strategy" class="view" role="tabpanel" aria-labelledby="tab-strategy" hidden>
+<div class="view-heading"><h1 id="strategy-title">Strategy settings</h1><span id="revision"></span></div>
+<section id="strategy" class="panel" aria-labelledby="strategy-title"><p class="section-description">Changes apply to future decisions. Actions approved under an older revision must be proposed again.</p><form id="settings">
 <fieldset class="risk-profile"><legend>Risk profile</legend>
 <label>Profile<select name="riskProfile" aria-label="Profile"><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option><option value="custom">Custom</option></select></label>
 <p id="risk-summary" aria-live="polite"></p>
@@ -22,23 +110,58 @@
 <label>Minimum reward:risk<input aria-label="Minimum reward:risk" name="minRewardRisk" type="number" min="0.1" max="20" step="0.1" placeholder="Not configured"><small>2 means planned upside is at least twice the downside.</small></label>
 </div>
 <p class="risk-note">Presets set the budgets below. Customize any value to make it your own. Volatility and stop loss are estimates; gaps and slippage can exceed them. Blank optional controls remain unconfigured.</p>
-</fieldset><div class="form-grid"><label>Allowed symbols<input name="watchlist" required placeholder="AAPL, MSFT, SPY"></label><label>Maximum positions<input name="maxPositions" type="number" min="1" step="1" required></label><label>Maximum position size (%)<input name="positionSizePct" type="number" min="0.01" step="0.01" required></label><label>Daily loss limit (%)<input name="maxDailyLossPct" type="number" min="0.01" step="0.01" required></label><label>Gross exposure limit (%)<input name="maxGrossExposurePct" type="number" min="0.01" step="0.01" required></label><label>Single-name limit (%)<input name="maxSingleWeightPct" type="number" min="0" max="100" step="0.1" required></label><label>Sector limit (%)<input name="maxSectorWeightPct" type="number" min="0" max="100" step="0.1" required></label><label>Stop distance (ATR)<input name="stopLossAtrMult" type="number" min="0.1" step="0.1" required></label><label>Entries<select name="entry"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label><label>Exits<select name="exit"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label><label>Stop adjustments<select name="stopAdjust"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label><label>Target adjustments<select name="targetAdjust"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label></div><details><summary>Account playbook</summary><p>This account keeps its own playbook revision. Application updates do not silently replace it. Learned lessons are advisory.</p><textarea name="playbook" rows="18" aria-label="Account playbook"></textarea></details><div class="actions"><button class="primary">Review and save</button><button type="button" id="reload-strategy">Reload saved settings</button><span id="settings-state"></span></div></form></section>
-<section id="requests"><h2>Agent requests</h2><p>Requests retain their initiating user and report processing and execution outcomes.</p><div id="agent-commands" class="cards"></div></section><section id="lessons"><h2>Lessons</h2><p>Evidence-linked observations guide future reviews. Administrators can edit or retire them; account strategy remains authoritative.</p><div id="lesson-list" class="cards"></div></section><section id="activity"><h2>Activity &amp; assistant</h2><p>Activity is shared with the authorized users of this account. Chat can suggest settings; saving strategy settings activates them.</p><div id="feed" aria-label="Account activity"></div>
-<form id="message">
-  <div class="message-input">
-    <label class="sr-only" for="message-text">Message</label>
-    <input id="message-text" name="text" maxlength="4000" placeholder="Ask a question or type / for commands…" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="command-list" aria-describedby="command-hint" autocomplete="off" required>
-    <div id="command-menu" hidden>
-      <ul id="command-list" role="listbox" aria-label="Commands"></ul>
-      <p id="command-empty" role="status" hidden>No matching commands.</p>
-      <p class="command-keys" aria-hidden="true">↑ ↓ browse · Enter / Tab select · Esc dismiss</p>
-    </div>
-    <span id="command-hint" class="sr-only">Type / at the start for commands. Use the arrow keys to browse, Enter or Tab to select, and Escape to dismiss. Send to run the selected command.</span>
+</fieldset><div class="form-grid"><div class="symbol-field">
+  <div class="symbol-heading"><label id="allowed-symbols-label" for="symbol-input">Allowed symbols</label><span id="symbol-count"></span></div>
+  <div class="symbol-editor" role="group" aria-labelledby="allowed-symbols-label">
+    <ul id="allowed-symbols" class="symbol-tags" aria-label="Allowed symbols"></ul>
+    <div class="symbol-add"><input id="symbol-input" type="text" aria-label="Symbol to add" aria-describedby="symbol-help symbol-feedback" placeholder="Add symbol, e.g. AAPL" autocomplete="off" autocapitalize="characters" spellcheck="false"><button id="add-symbol" type="button">Add</button></div>
   </div>
-  <button>Send</button>
-</form></section>
+  <p id="symbol-help" class="symbol-help">Press Enter or Add to add symbols. Use × to remove them.</p>
+  <p id="symbol-feedback" class="symbol-feedback" role="status"></p>
+</div><label>Maximum positions<input name="maxPositions" type="number" min="1" step="1" required></label><label>Maximum position size (%)<input name="positionSizePct" type="number" min="0.01" step="0.01" required></label><label>Daily loss limit (%)<input name="maxDailyLossPct" type="number" min="0.01" step="0.01" required></label><label>Gross exposure limit (%)<input name="maxGrossExposurePct" type="number" min="0.01" step="0.01" required></label><label>Single-name limit (%)<input name="maxSingleWeightPct" type="number" min="0" max="100" step="0.1" required></label><label>Sector limit (%)<input name="maxSectorWeightPct" type="number" min="0" max="100" step="0.1" required></label><label>Stop distance (ATR)<input name="stopLossAtrMult" type="number" min="0.1" step="0.1" required></label><label>Entries<select name="entry"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label><label>Exits<select name="exit"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label><label>Stop adjustments<select name="stopAdjust"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label><label>Target adjustments<select name="targetAdjust"><option value="manual">Review each action</option><option value="auto">Automatic</option></select></label></div><details><summary>Account playbook</summary><p>This account keeps its own playbook revision. Application updates do not silently replace it. Learned lessons are advisory.</p><textarea name="playbook" rows="18" aria-label="Account playbook"></textarea></details><div class="actions"><button class="primary">Review and save</button><button type="button" id="reload-strategy">Reload saved settings</button><span id="settings-state"></span></div></form></section>
+</div>
+<div id="view-review" class="view" role="tabpanel" aria-labelledby="tab-review" hidden>
+<div class="view-heading"><h1>Performance &amp; review</h1></div>
+<section id="performance" class="panel"><div class="pane-title"><h2>Performance</h2><select id="score-days" aria-label="Performance window"><option value="">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div><div id="scorecard" class="score-grid"></div><ul id="score-caveats" class="caveats"></ul></section>
+<section id="requests" class="panel"><div class="pane-title"><h2 id="requests-title">Agent requests</h2></div><p class="section-description">Who asked, what was requested, and the outcome. Open a row for the full request and response.</p><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Agent requests"><table class="history-table" aria-labelledby="requests-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Agent</th><th scope="col">Requested by</th><th scope="col">Status</th><th scope="col">Request</th><th scope="col">Outcome</th></tr></thead><tbody id="agent-commands"></tbody></table></div></section>
+<section id="lessons" class="panel"><div class="pane-title"><h2 id="lessons-title">Lessons</h2></div><p class="section-description">Saved observations that guide future reviews. Open a lesson to read its evidence, edit it, or retire it.</p><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Lessons"><table class="history-table" aria-labelledby="lessons-title"><thead><tr><th scope="col">Details</th><th scope="col">Recorded</th><th scope="col">Status</th><th scope="col">Lesson</th><th scope="col">Evidence</th><th scope="col">Added by</th></tr></thead><tbody id="lesson-list"></tbody></table></div></section>
+</div>
+<div id="view-activity" class="view" role="tabpanel" aria-labelledby="tab-activity" hidden>
+  <div class="view-heading"><h1 id="history-title">Activity history</h1><button id="history-refresh">Refresh history</button></div>
+  <section class="panel history-panel" aria-labelledby="history-title">
+    <p class="section-description">Decisions, broker fills and events, newest first. Open a row for details.</p>
+    <div id="history-totals" class="history-totals"></div>
+    <div class="history-filters"><label class="history-search">Search history<input id="history-search" type="search" placeholder="Symbol, event type, reason, status or ID…"></label></div>
+    <p id="history-status" role="status">Loading saved history…</p>
+    <section class="history-section" aria-labelledby="history-decision-title">
+      <div class="pane-title"><h2 id="history-decision-title">Decisions</h2><span id="history-decision-count"></span></div>
+      <div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Decisions history"><table class="history-table" aria-labelledby="history-decision-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Symbol</th><th scope="col">Event type</th><th scope="col">Decision</th><th scope="col">Status</th><th scope="col">Requested</th><th scope="col">Filled</th><th scope="col">Reason</th></tr></thead><tbody id="history-decision-rows"></tbody></table></div>
+      <div class="history-pagination"><button id="history-decision-prev" aria-label="Previous decisions" disabled>Previous</button><span id="history-decision-page"></span><button id="history-decision-next" aria-label="Next decisions" disabled>Next</button></div>
+    </section>
+    <section class="history-section" aria-labelledby="history-fill-title">
+      <div class="pane-title"><h2 id="history-fill-title">Fills</h2><span id="history-fill-count"></span></div>
+      <div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Fills history"><table class="history-table" aria-labelledby="history-fill-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Symbol</th><th scope="col">Side</th><th scope="col">Quantity</th><th scope="col">Price</th><th scope="col">Value</th><th scope="col">Fees</th></tr></thead><tbody id="history-fill-rows"></tbody></table></div>
+      <div class="history-pagination"><button id="history-fill-prev" aria-label="Previous fills" disabled>Previous</button><span id="history-fill-page"></span><button id="history-fill-next" aria-label="Next fills" disabled>Next</button></div>
+    </section>
+    <section class="history-section" aria-labelledby="history-event-title">
+      <div class="pane-title"><h2 id="history-event-title">Events</h2><span id="history-event-count"></span></div>
+      <p class="section-description">Queued and handled events. An observed event can remain queued.</p>
+      <div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Events history"><table class="history-table" aria-labelledby="history-event-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Symbol</th><th scope="col">Event type</th><th scope="col">Severity</th><th scope="col">Queue</th><th scope="col">Handling</th><th scope="col">Summary</th></tr></thead><tbody id="history-event-rows"></tbody></table></div>
+      <div class="history-pagination"><button id="history-event-prev" aria-label="Previous events" disabled>Previous</button><span id="history-event-page"></span><button id="history-event-next" aria-label="Next events" disabled>Next</button></div>
+    </section>
+  </section>
 </div>
 </main>
+</div>
 <dialog id="review"><form method="dialog"><h2>Review strategy changes</h2><pre id="review-text"></pre><p>Automatic actions may place real orders when this is a live account. Unanswered manual approvals expire.</p><div class="actions"><button value="cancel">Keep editing</button><button class="primary" value="save">Save this revision</button></div></form></dialog>
 <dialog id="adopt"><form id="adopt-form"><h2>Manage an existing holding</h2><p>AutoTrade will place protection for this holding and may propose exits under your strategy.</p><label>Symbol<input name="symbol" readonly required></label><label>Stop price<input name="stop" type="number" step="0.01" min="0.01" required></label><label>Target price (optional)<input name="target" type="number" step="0.01" min="0.01"></label><div class="actions"><button type="button" id="cancel-adopt">Cancel</button><button class="primary">Adopt holding</button></div></form></dialog>
+<dialog id="ticker-chart-dialog" aria-labelledby="ticker-chart-title">
+  <div class="pane-title"><div><span class="eyebrow">PRICE HISTORY</span><h2 id="ticker-chart-title">Ticker chart</h2></div><button id="close-ticker-chart" aria-label="Close price chart">✕</button></div>
+  <div class="ticker-chart-controls"><label>Interval<select id="ticker-interval"><option value="1Day">Daily</option><option value="1Hour">Hourly</option><option value="15Min">15 minutes</option><option value="5Min">5 minutes</option></select></label><div class="chart-modes" role="group" aria-label="Chart style"><button id="chart-candles" aria-pressed="true">Candles</button><button id="chart-trend" aria-pressed="false">Trend</button></div><button id="refresh-ticker-chart">Refresh</button></div>
+  <p id="ticker-chart-status" role="status">Select a ticker to view its price history.</p>
+  <svg id="ticker-chart" viewBox="0 0 900 350" role="img" aria-label="Ticker price history" tabindex="0" aria-describedby="ticker-chart-help"></svg>
+  <p id="ticker-chart-help" class="chart-help">Hover, tap, or use ← → on the chart to inspect a bar.</p>
+  <div id="ticker-ohlc" class="ticker-ohlc" aria-live="polite"></div>
+  <div class="ticker-chart-footer"><span>Historical market data may be delayed. The latest bar may be incomplete.</span><button id="ask-ticker" class="text-button">Discuss with agent ↗</button></div>
+</dialog>
 </body></html>

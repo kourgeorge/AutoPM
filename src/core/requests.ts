@@ -42,8 +42,8 @@ export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'sta
     // Only the concierge talks to the operator. A trader result is a log line, not a chat reply;
     // the concierge reads it back through get_requests when asked.
     if (patch.result && patch.result !== current.result) appendActivity(current.role === 'concierge'
-      ? { at: new Date().toISOString(), kind: 'reply', text: patch.result }
-      : { at: new Date().toISOString(), kind: 'log', level: 'INFO', text: `[Trader] ${patch.result}` });
+      ? { at: new Date().toISOString(), kind: 'reply', source: 'concierge', text: patch.result }
+      : { at: new Date().toISOString(), kind: 'log', source: 'trader', level: 'INFO', text: `[Trader] ${patch.result}` });
     return next;
   });
 }

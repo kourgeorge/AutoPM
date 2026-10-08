@@ -1,25 +1,20 @@
 /**
- * Concierge chart tools — draw directly into the terminal instead of describing numbers.
+ * Concierge chart tools — publish numeric series for clients to render.
  *
- * Same reason `pushAlert` in `concierge.ts` writes to `ui.alert()` directly rather than
- * routing through the model: a model asked to reproduce a whitespace-exact multi-line ASCII
- * chart in its own generated text will paraphrase or re-indent it. So the executor renders
- * the chart and calls `ui.replyChart()` itself; what goes back to the model as the tool
- * result is numeric summary stats for it to comment on in its own words, never the chart text.
+ * The engine publishes the observations, labels and dates without choosing a layout.
+ * Each client renders those observations in its own presentation layer. The model receives
+ * summary statistics to discuss, not a preformatted chart to reproduce.
  */
 
 import type { ToolDefinition } from '../core/types';
-import { config } from '../core/config';
-import { alpacaTrading } from '../core/alpacaHttp';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
 import { etDate } from '../collect/etDate';
-import { renderComparisonChart, renderPriceChart } from '../ui/chart';
 import { ui } from '../ui/ui';
 import { comparePerformance } from '../review/benchmark';
 
 const CHART_HINT =
-  'This draws the chart directly in the terminal — do not try to describe or redraw it yourself, just comment on what it shows.';
+  'This sends chart data to the user interface for rendering. Do not redraw the chart yourself; comment on what the observations show.';
 
 export const CHART_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -37,7 +32,7 @@ export const CHART_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'show_performance_comparison',
-    description: `Draw two stacked charts comparing % change of two things over the same window, plus a one-line summary. Each of "a"/"b" is a ticker symbol, or the literal "ACCOUNT" for the trading account's own equity curve. ${CHART_HINT}`,
+    description: `Show the performance of two things over the same window. Each of "a"/"b" is a ticker symbol, or the literal "ACCOUNT" for the trading account's own equity curve. ${CHART_HINT}`,
     input_schema: {
       type: 'object',
       properties: {
@@ -81,7 +76,7 @@ async function showPriceHistory(input: Record<string, unknown>): Promise<string>
   const closes = bars.value.map((b) => b.c);
   const dates = bars.value.map((b) => etDate(Date.parse(b.t)) ?? b.t);
 
-  ui.replyChart(renderPriceChart(symbol, closes, dates, ui.chartWidth()));
+  ui.showChart({ kind: 'price', label: symbol, values: closes, dates });
 
   const first = closes[0];
   const last = closes[closes.length - 1];
@@ -111,7 +106,7 @@ async function showPerformanceComparison(input: Record<string, unknown>): Promis
   if (result.changePctA == null || result.changePctB == null) {
     ui.replyChart(['Performance comparison unavailable: ' + result.caveats.join('; ')]);
   } else {
-    ui.replyChart(renderComparisonChart({ label: a, values: result.valuesA }, { label: b, values: result.valuesB }, ui.chartWidth()));
+    ui.showChart({ kind: 'comparison', a: { label: a, values: result.valuesA }, b: { label: b, values: result.valuesB } });
   }
   const { valuesA, valuesB, ...summary } = result;
   return JSON.stringify(summary);

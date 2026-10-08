@@ -11,6 +11,8 @@
  */
 import * as dotenv from 'dotenv';
 import type { Cycle, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
+import type { ChartData } from './chart';
+import type { ToolCallDetails } from '../core/types';
 
 // Needed here because `ui.ts` is the FIRST import in `daemon.ts`, before anything else has
 // loaded `.env` — and `HEADLESS` may be set there. Idempotent.
@@ -54,10 +56,10 @@ export interface OperatorUI {
   onMessage(handler: (line: string) => void): void;
   onQuit(handler: () => void): void;
   registerCommand(cmd: SlashCommand): void;
-  log(level: LogLevel, msg: string): void;
+  log(level: LogLevel, msg: string, tool?: ToolCallDetails): void;
   reply(msg: string): void;
   replyChart(lines: string[]): void;
-  chartWidth(): number;
+  showChart(data: ChartData): void;
   alert(msg: string): void;
   setTick(tick: TickSnapshot): void;
   setEvents(events: EventRow[], eventLog: EventRow[]): void;
