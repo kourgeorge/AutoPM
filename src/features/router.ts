@@ -8,7 +8,7 @@
  *
  *  - ONE `wakeTrader()` per tick. Free, because the wake carries no payload — events are
  *    read from the registry at cycle start, so N wakes and 1 wake produce an identical cycle.
- *  - ONE `alertUser()` per tick, multi-line. Not free: `concierge.pushAlert` injects a
+ *  - ONE `alertUser()` per tick, multi-line. Not free: `assistant.pushAlert` injects a
  *    synthetic user turn AND an assistant echo into its history, so N pushes cost 2N turns
  *    of context pollution for information that fits in one message.
  *
@@ -17,7 +17,7 @@
  * routing table.
  *
  * Separate from scheduler.ts because that file's contract is "no opinion about waking
- * anyone" — it must not import the trader or the concierge.
+ * anyone" — it must not import the trader or the assistant.
  */
 
 import { logger } from '../core/logger';

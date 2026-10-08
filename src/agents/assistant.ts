@@ -8,7 +8,7 @@ import { summarizeStrategy } from '../policy/summary';
 import { agentContext } from '../core/agentContext';
 import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
 /**
- * Concierge Agent — the user-facing conversational layer.
+ * Assistant Agent — the user-facing conversational layer.
  *
  * Maintains a persistent conversation with the operator across messages.
  * Has read access to all system state and can send instructions to the
@@ -32,10 +32,10 @@ import { CHART_TOOL_DEFINITIONS, executeChartTool } from '../tools/chartTools';
 import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
 
 /**
- * Tools the concierge shares verbatim with the trader.
+ * Tools the assistant shares verbatim with the trader.
  *
  * Picked BY NAME out of `TRADER_TOOL_DEFINITIONS`, never restated. Every one of these is
- * executed by `executeTraderTool` — the concierge adds no behaviour to any of them — so a
+ * executed by `executeTraderTool` — the assistant adds no behaviour to any of them — so a
  * second copy of the definition could differ only in its prose, and it did: the trader's
  * `get_exposure` carries an anti-fabrication warning ("a sector weight you did not read
  * from here is a fabricated one") that the copy here had silently dropped. One definition,
@@ -67,7 +67,7 @@ const SHARED_WITH_TRADER = [
  * Resolve the shared names against the trader's array.
  *
  * Throws at MODULE LOAD, not at call time: a trader tool that gets renamed must fail the
- * next start loudly, rather than quietly leaving the concierge one capability short and
+ * next start loudly, rather than quietly leaving the assistant one capability short and
  * the operator wondering why it claims it cannot read the book.
  */
 function sharedTools(): ToolDefinition[] {
@@ -75,15 +75,15 @@ function sharedTools(): ToolDefinition[] {
     const def = TRADER_TOOL_DEFINITIONS.find((t) => t.name === name);
     if (!def) {
       throw new Error(
-        `Concierge expects trader tool "${name}", which is no longer in TRADER_TOOL_DEFINITIONS.`,
+        `Assistant expects trader tool "${name}", which is no longer in TRADER_TOOL_DEFINITIONS.`,
       );
     }
     return def;
   });
 }
 
-/** Read helpers and action/relay tools owned by the concierge. */
-const CONCIERGE_OWN_TOOLS: ToolDefinition[] = [
+/** Read helpers and action/relay tools owned by the assistant. */
+const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   {
     name: 'get_strategy_settings',
     description: 'Read a concise explanation of the current saved account strategy: risk profile, risk per trade, annualized volatility target, minimum reward:risk, capital and concentration limits, daily entry halt, approvals, allowed symbols and entry rules. Includes a ready-to-use plain-language summary and consistently scaled percentages. Read this afresh whenever the operator asks about settings or proposes a change; do not use an older conversation or the shipped defaults. This is read-only and does not fetch market data or activate anything.',
@@ -156,7 +156,7 @@ const ACTION_TOOLS = new Set(['update_trading_settings', 'execute_entry', 'execu
  * turn in agentTurn.jsonl already holds the whole conversation.
  */
 function previousChat(currentId: string): ChatMessage[] {
-  for (const { id } of listRecords<AgentRequest>('requests', { where: c => c.role === 'concierge' && c.id !== currentId, desc: true })) {
+  for (const { id } of listRecords<AgentRequest>('requests', { where: c => c.role === 'assistant' && c.id !== currentId, desc: true })) {
     const turn = readRecord<{ messages: ChatMessage[] }>('transcripts', id);
     if (turn?.messages.length) return turn.messages;
   }
@@ -192,9 +192,9 @@ function requestTrace(requestId: string): string {
   });
 }
 
-const CONCIERGE_TOOLS: ToolDefinition[] = [
+const ASSISTANT_TOOLS: ToolDefinition[] = [
   ...sharedTools(),
-  ...CONCIERGE_OWN_TOOLS,
+  ...ASSISTANT_OWN_TOOLS,
   ...ALPACA_DATA_TOOL_DEFINITIONS,
   ...RESEARCH_TOOL_DEFINITIONS,
   ...CHART_TOOL_DEFINITIONS,
@@ -210,7 +210,7 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
  * guidance that is not in a description (when to relay versus when to change policy) stays
  * below; per-tool detail belongs in the tool.
  */
-const SYSTEM_PROMPT = `You are AutoTrade's account concierge.
+const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
 Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_actions for the outcome.
 You cannot place trades, approve actions or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
@@ -225,20 +225,20 @@ Settings questions do not wake the trader. When the operator asks to change a se
 Read get_policy_playbook when quoting or explaining account strategy prose. Lessons are advisory observations and must not override strategy or platform behavior.
 Use chart tools when the operator asks to see history or a comparison. Their results state whether a comparison is available.
 Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued action filled or that a paused trader started immediately.
-Keep answers concise. Tools available: ${CONCIERGE_TOOLS.map(t => t.name).join(', ')}.`;
+Keep answers concise. Tools available: ${ASSISTANT_TOOLS.map(t => t.name).join(', ')}.`;
 
-export class ConciergeAgent {
+export class AssistantAgent {
   private readonly provider = createModelProvider(config.ai);
   private active: Promise<void> | null = null;
   private controller = new AbortController();
   private stopped = false;
-  private readonly registry = new ToolRegistry(CONCIERGE_TOOLS, (name, input) => this.dispatchTool(name, input));
+  private readonly registry = new ToolRegistry(ASSISTANT_TOOLS, (name, input) => this.dispatchTool(name, input));
 
   constructor(private readonly wake: (msg: string) => unknown) {}
 
   handleMessage(userText: string, actorId = 'operator'): AgentRequest {
     if (this.stopped) throw new Error('The service is stopping');
-    const command = enqueueRequest('concierge', userText, actorId);
+    const command = enqueueRequest('assistant', userText, actorId);
     this.resumeQueue();
     return command;
   }
@@ -254,13 +254,13 @@ export class ConciergeAgent {
   }
   private async drain(): Promise<void> {
     while (!this.stopped) {
-      const command = pendingRequests('concierge')[0];
+      const command = pendingRequests('assistant')[0];
       if (!command) return;
       updateRequest(command.id, { status: 'running' });
-      ui.setConciergeActivity({ state: 'thinking' });
+      ui.setAssistantActivity({ state: 'thinking' });
       try {
         const turn = await runAgentLoop({
-          context: { role: 'concierge', requestId: command.id, actorId: command.actorId },
+          context: { role: 'assistant', requestId: command.id, actorId: command.actorId },
           provider: this.provider, registry: this.registry, systemPrompt: runtimeContract() + "\n\n" + SYSTEM_PROMPT,
           messages: async () => [...compactMessages(previousChat(command.id), 24000),
             { role: 'user', content: [{ type: 'text', text: command.text }] }],
@@ -271,7 +271,7 @@ export class ConciergeAgent {
         if (turn.status === 'interrupted') return;
       } catch (err: any) {
         updateRequest(command.id, { status: 'failed', result: err.message });
-      } finally { ui.setConciergeActivity({ state: 'idle' }); }
+      } finally { ui.setAssistantActivity({ state: 'idle' }); }
     }
   }
   pushAlert(message: string): void { ui.alert(message); }
@@ -314,7 +314,7 @@ export class ConciergeAgent {
     }
 
     if (name === 'update_trading_settings') {
-      const result = updateTradingSettings(input as TradingSettingsUpdate, `concierge:${agentContext.getStore()?.actorId ?? 'operator'}`);
+      const result = updateTradingSettings(input as TradingSettingsUpdate, `assistant:${agentContext.getStore()?.actorId ?? 'operator'}`);
       if (!result.ok) return JSON.stringify(result);
       const snapshot = getPolicySnapshot();
       return JSON.stringify({ ...result, saved: summarizeStrategy(snapshot.policy, snapshot.hash) });

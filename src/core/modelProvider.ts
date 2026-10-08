@@ -258,7 +258,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     //
     // Scoped to gpt-N because the o-series does not accept `none` at all — reasoning is not
     // optional there, and o-series + tools on chat/completions is already accepted as-is.
-    // Scoped to a non-empty tool list because a tool-free call (the concierge's plain answers)
+    // Scoped to a non-empty tool list because a tool-free call (the assistant's plain answers)
     // is not in conflict, and should keep whatever thinking the model would do unbidden.
     // Matched against the model name with any LiteLLM routing prefix ("azure/", "openai/", …)
     // stripped, and independent of which host serves it — a proxy forwards this model-level

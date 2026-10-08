@@ -2,7 +2,7 @@ import { subscribeActivity } from './core/storage';
 import { ui } from './ui/ui';
 import { attachUI } from './core/logger';
 import { Trader } from './agents/trader';
-import { ConciergeAgent } from './agents/concierge';
+import { AssistantAgent } from './agents/assistant';
 import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
@@ -81,22 +81,22 @@ function decisionToActivityRow(r: DecisionRecord): EventRow {
 
 }
 
-// Concierge replies go to the chat; trader results (core/requests.ts) go to the log pane.
+// Assistant replies go to the chat; trader results (core/requests.ts) go to the log pane.
 if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => {
   if (entry.kind === 'reply') ui.reply(entry.text);
   else if (entry.kind === 'log' && entry.text.startsWith('[Trader] ')) ui.log(entry.level ?? 'INFO', entry.text);
 });
 
 const trader = new Trader();
-const concierge = new ConciergeAgent(msg => trader.wake(msg));
+const assistant = new AssistantAgent(msg => trader.wake(msg));
 
-// All user input goes to the concierge — except `/` commands, which the UI handles itself
-ui.onMessage((msg) => concierge.handleMessage(msg));
+// All user input goes to the assistant — except `/` commands, which the UI handles itself
+ui.onMessage((msg) => assistant.handleMessage(msg));
 registerOperatorCommands(trader);
 
 // Both independent clients use this engine API. Register commands before accepting requests;
 // the separate web process owns browser assets and the TUI owns its terminal lifecycle.
-const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, serveWeb: false, messageService: (text, actor) => concierge.handleMessage(text, actor) }) : null;
+const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, serveWeb: false, messageService: (text, actor) => assistant.handleMessage(text, actor) }) : null;
 
 // L2 — the deterministic tick loop, and the ONLY path that wakes anyone. Machine wakes
 // carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a
@@ -105,7 +105,7 @@ const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, serveWeb: fa
 const scheduler = new FeatureScheduler({
   route: createLiveRouter({
     wakeTrader: () => trader.wake(),
-    alertUser: (msg) => concierge.pushAlert(msg),
+    alertUser: (msg) => assistant.pushAlert(msg),
   }),
   // The tick's features are already computed for the detectors; the panel and the trader's
   // get_watchlist_scan are the second and third readers of the same snapshot, which is why
@@ -147,7 +147,7 @@ async function boot(): Promise<void> {
   void pollVenueClock();
   venueClockTimer = setInterval(() => void pollVenueClock(), VENUE_CLOCK_POLL_MS);
   notifications.start();
-  concierge.resumeQueue();
+  assistant.resumeQueue();
   scheduler.start();
   execution.start();
   await trader.start();
@@ -172,7 +172,7 @@ async function stopResources(signal: string): Promise<void> {
   logger.info('Shutting down: ' + signal);
   scheduler.stop();
   clearInterval(venueClockTimer);
-  const agentsStopped = Promise.all([trader.stop(), concierge.stop()]);
+  const agentsStopped = Promise.all([trader.stop(), assistant.stop()]);
   // Stop intake, drain the sole mutation executor, then close the durable store.
   const deadline = setTimeout(() => process.exit(1), 25_000);
   deadline.unref();

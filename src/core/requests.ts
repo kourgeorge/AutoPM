@@ -39,10 +39,10 @@ export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'sta
     if (!current) throw new Error('Unknown command');
     const next = { ...current, ...patch };
     saveRecord('requests', id, next);
-    // Only the concierge talks to the operator. A trader result is a log line, not a chat reply;
-    // the concierge reads it back through get_requests when asked.
-    if (patch.result && patch.result !== current.result) appendActivity(current.role === 'concierge'
-      ? { at: new Date().toISOString(), kind: 'reply', source: 'concierge', text: patch.result }
+    // Only the assistant talks to the operator. A trader result is a log line, not a chat reply;
+    // the assistant reads it back through get_requests when asked.
+    if (patch.result && patch.result !== current.result) appendActivity(current.role === 'assistant'
+      ? { at: new Date().toISOString(), kind: 'reply', source: 'assistant', text: patch.result }
       : { at: new Date().toISOString(), kind: 'log', source: 'trader', level: 'INFO', text: `[Trader] ${patch.result}` });
     return next;
   });

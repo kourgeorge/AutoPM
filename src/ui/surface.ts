@@ -10,7 +10,7 @@
  * in `core/config.ts`, which throws at import time when `AI_API_KEY` is missing.
  */
 import * as dotenv from 'dotenv';
-import type { Cycle, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
+import type { Cycle, DailyUsage, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
 import type { ChartData } from './chart';
 import type { ToolCallDetails } from '../core/types';
 
@@ -26,7 +26,7 @@ dotenv.config();
 export const HEADLESS = /^(1|true|yes)$/i.test(process.env.HEADLESS?.trim() ?? '');
 
 /**
- * One `/name args` operator command. Handled entirely outside the concierge: a slash command
+ * One `/name args` operator command. Handled entirely outside the assistant: a slash command
  * is an instruction to the program, not to a model.
  *
  * Commands that need broker, journal or policy data are registered from `daemon.ts` (see
@@ -47,7 +47,7 @@ export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'TRADE' | 'TOOL';
 
 /**
  * `approve <id>` / `reject <id> [reason...]`, case-insensitive. Matched against the raw input
- * line BEFORE anything reaches the concierge, so a decision never passes through a language
+ * line BEFORE anything reaches the assistant, so a decision never passes through a language
  * model. Shared by both UIs so the terminal and the API accept exactly the same words.
  */
 export const DECIDE_COMMAND = /^(approve|reject)\s+(\S+)(?:\s+([\s\S]*))?$/i;
@@ -67,8 +67,9 @@ export interface OperatorUI {
   setEnvironment(env: Environment): void;
   setVenueOpen(open: boolean | null): void;
   setTraderActivity(lane: Lane): void;
-  setConciergeActivity(lane: Lane): void;
+  setAssistantActivity(lane: Lane): void;
   setCycle(cycle: Cycle): void;
+  setDailyUsage(usage: DailyUsage): void;
   setStatus(text: string): void;
   captureStreams(): void;
   close(): void;

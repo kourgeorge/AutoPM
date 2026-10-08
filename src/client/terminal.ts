@@ -90,10 +90,11 @@ export class TerminalClient {
       this.view.setEvents(s.events, s.activity);
       this.view.setActions(s.actions);
       this.view.setCycle(s.cycle);
+      if (s.usage) this.view.setDailyUsage(s.usage);
       this.view.setTraderActivity(health.paused
         ? { state: 'awaiting', detail: 'Trading paused. ' + (s.traderLane.detail ?? '') }
         : s.traderLane);
-      this.view.setConciergeActivity(s.conciergeLane);
+      this.view.setAssistantActivity(s.assistantLane);
       const summary = health.issues.join('; ');
       if (summary !== this.healthSummary) {
         this.view.log(summary ? 'WARN' : 'INFO', summary ? 'Engine health: ' + summary : 'Engine health recovered.');
@@ -122,7 +123,7 @@ export class TerminalClient {
       this.connected = false;
       this.instanceId ??= '';
       this.view.setTraderActivity({ state: 'error', detail: 'Engine disconnected — displayed account data may be stale' });
-      this.view.setConciergeActivity({ state: 'error', detail: 'Engine disconnected' });
+      this.view.setAssistantActivity({ state: 'error', detail: 'Engine disconnected' });
       this.view.setVenueOpen(null);
       delay = 2000;
     }

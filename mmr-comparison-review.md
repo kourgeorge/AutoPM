@@ -6,7 +6,7 @@
 
 ## Executive assessment
 
-MMR is the closest open-source competitor/peer examined so far. It is an IBKR-first, Python, LLM-native trading platform with an explicit command/tool surface for an LLM loop. Both systems separate model reasoning from deterministic controls, calculate ATR-based sizing and portfolio risk, reconcile broker state, retain audit history, and support ongoing autonomous monitoring. The principal product difference is orientation: **MMR is a general-purpose, service-oriented IBKR trading platform for a CLI/agent workflow; AutoTrade is a more opinionated autonomous momentum-trading application with an integrated LLM Trader, operator Concierge, event/wake system, and interactive approval UX.**
+MMR is the closest open-source competitor/peer examined so far. It is an IBKR-first, Python, LLM-native trading platform with an explicit command/tool surface for an LLM loop. Both systems separate model reasoning from deterministic controls, calculate ATR-based sizing and portfolio risk, reconcile broker state, retain audit history, and support ongoing autonomous monitoring. The principal product difference is orientation: **MMR is a general-purpose, service-oriented IBKR trading platform for a CLI/agent workflow; AutoTrade is a more opinionated autonomous momentum-trading application with an integrated LLM Trader, operator Assistant, event/wake system, and interactive approval UX.**
 
 MMR is materially larger at this revision: approximately 99,792 lines across tracked Python/JS-family source and test files when excluding dependency/build directories, compared with AutoTrade's approximately 28,955 lines under the same broad counting approach at the original review. AutoTrade's tracked `.ts`/`.js` source is now approximately 22,600–22,800 lines by a narrower count (`src/` + `policy/`, no tests/docs) — the two counts aren't directly comparable methodologically, but the direction hasn't changed: MMR remains roughly 3-4x larger. The figure is approximate and includes MMR's web/front-end code and test code, so it is a complexity signal rather than a direct implementation-size comparison.
 
@@ -14,7 +14,7 @@ MMR is materially larger at this revision: approximately 99,792 lines across tra
 
 | Area | MMR | AutoTrade |
 |---|---|---|
-| LLM-native operation | CLI exposes JSON for an LLM loop: monitor → analyze → propose → digest → sleep | Native LLM Trader loop plus separate persistent Concierge |
+| LLM-native operation | CLI exposes JSON for an LLM loop: monitor → analyze → propose → digest → sleep | Native LLM Trader loop plus separate persistent Assistant |
 | Broker | IBKR via `ib_async`; paper/live configuration | Alpaca plus IBKR via `@stoqey/ib` |
 | Deterministic risk boundary | Pre-trade risk gate; filters; leverage/margin checks; rate/turnover limits | `orderManager` checks intent, stop, daily loss, max positions, duplicate holding, buying power, regime sizing, **book-wide gross-exposure cap (updated)** |
 | Sizing | Confidence-, ATR-, liquidity-, and spread-adjusted sizing | Inverse-ATR sizing plus macro-regime reduction |
@@ -55,7 +55,7 @@ MMR has distinct trading, data, and strategy services linked via ZeroMQ; DuckDB 
 ## AutoTrade advantages and differentiation
 
 ### 1. A real in-product agent/operator experience
-AutoTrade’s Trader and Concierge are native application components, not an external Claude Code loop driven by shell commands. It has a dedicated terminal UI, a persistent operator conversation, structured alert routing, and a deterministic event registry. MMR’s documented primary LLM integration is Claude Code using the MMR JSON CLI.
+AutoTrade’s Trader and Assistant are native application components, not an external Claude Code loop driven by shell commands. It has a dedicated terminal UI, a persistent operator conversation, structured alert routing, and a deterministic event registry. MMR’s documented primary LLM integration is Claude Code using the MMR JSON CLI.
 
 ### 2. Better event escalation and attention management (strengthened, updated 2026-09-03)
 AutoTrade's scheduler, edge/hysteresis/cooldown gates, severity routing, critical re-escalation, and wake-pending handling form a mature operational attention system. It avoids both constant LLM polling and lost mid-cycle alerts. MMR describes a monitor/analyze/propose loop and strategy-service reconciliation, but its repository does not present the same event-to-agent wake/escalation product model.
@@ -69,7 +69,7 @@ AutoTrade distinguishes three durable records: broker-derived fills for numerica
 AutoTrade is designed around both Alpaca and IBKR. MMR is deeply IBKR-specific. AutoTrade can differentiate as a broker-neutral LLM trading operating layer, retaining an IBKR-focused execution hardening path without giving up Alpaca support.
 
 ### 5. Policy model and interactive approval semantics
-AutoTrade’s policy YAML has immutable ceilings, safe hot reload, and live/paper identity derived from actual broker endpoints. Its live approval flow is deterministic and cannot be answered by the Concierge. MMR has robust config and optional proposal/approver-key controls, but `require_proposal_approval` and `approver_required_above_usd` are disabled by default in its shipped config. AutoTrade’s safer live default is an important positioning point.
+AutoTrade’s policy YAML has immutable ceilings, safe hot reload, and live/paper identity derived from actual broker endpoints. Its live approval flow is deterministic and cannot be answered by the Assistant. MMR has robust config and optional proposal/approver-key controls, but `require_proposal_approval` and `approver_required_above_usd` are disabled by default in its shipped config. AutoTrade’s safer live default is an important positioning point.
 
 ## Recommended competitive interpretation
 

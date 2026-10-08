@@ -754,7 +754,7 @@ function overnightHeartbeat(): void {
 }
 
 /**
- * Counting stubs in place of the trader and the concierge. The router's whole contract is
+ * Counting stubs in place of the trader and the assistant. The router's whole contract is
  * HOW MANY TIMES it calls them, so the doubles record calls rather than doing anything.
  */
 function routerSpy() {
@@ -772,7 +772,7 @@ function routerSpy() {
  *     and only survivable if it reaches it ONCE per tick. A busy tick produces several
  *     waking events and several alerting ones — `entry_signal` alone fires per watchlist
  *     symbol — and delivering those one at a time is what turns a working detector into a
- *     wake storm. `pushAlert` costs two turns of concierge history per call, so the
+ *     wake storm. `pushAlert` costs two turns of assistant history per call, so the
  *     alerting side has to coalesce as well, not just the waking side.
  */
 function liveRouting(): void {

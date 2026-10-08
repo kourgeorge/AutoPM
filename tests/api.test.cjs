@@ -41,7 +41,7 @@ test('tool exchanges retain complete input and output in history, polling and li
   const input = { symbol: 'FULLPAYLOAD', nested: { text: 'input'.repeat(300) } };
   const output = JSON.stringify({ bars: Array.from({ length: 700 }, (_, i) => ({ close: i, note: 'complete observation' })), end: 'last observation' });
   assert.ok(output.length > 10000);
-  const tool = { id: 'full-tool-call', requestId: 'full-tool-request', agent: 'concierge', name: 'get_bars', input, output };
+  const tool = { id: 'full-tool-call', requestId: 'full-tool-request', agent: 'assistant', name: 'get_bars', input, output };
   const controller = new AbortController();
   const stream = await fetch(base + '/api/stream', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) });
   const reader = stream.body.getReader();
@@ -54,11 +54,11 @@ test('tool exchanges retain complete input and output in history, polling and li
     while (!received.includes('\n\n', received.indexOf('event: feed\n'))) { const chunk = await reader.read();assert.equal(chunk.done, false);received += decoder.decode(chunk.value, { stream: true }); }
     const live = JSON.parse(received.split('\n').find(line => line.startsWith('data: ')).slice(6));
     assert.deepEqual(live.tool, tool);
-    assert.equal(live.source, 'concierge');
+    assert.equal(live.source, 'assistant');
     storage.closeStorage();
     const tail = (await request('/api/feed?tail=1')).body.entries[0];
     assert.deepEqual(tail.tool, tool);
-    assert.equal(tail.source, 'concierge');
+    assert.equal(tail.source, 'assistant');
     const polled = (await request('/api/feed?after=' + (tail.seq - 1))).body.entries[0];
     assert.deepEqual(polled.tool, tool);
     assert.ok(tail.text.length < output.length, 'compact log text does not replace the full payload');
@@ -113,7 +113,7 @@ test('command discovery and execution share an explicit registry, preserve alias
   const result=await request('/api/commands/LEARN',{args:'3'},operator);
   assert.equal(result.res.status,200);assert.equal(result.body.ok,true);
   assert.equal(result.body.output[0].text,'Lessons: 3');
-  assert.equal(result.body.output[0].source,'system','slash-command output is not a concierge reply');
+  assert.equal(result.body.output[0].source,'system','slash-command output is not an assistant reply');
   const audit=storage.readRecords('operator-commands').at(-1);
   assert.equal(audit.actorId,'operator');assert.equal(audit.action,'lessons');assert.equal(audit.args,'3');
   const help=await request('/api/commands/%3F',{},operator);
@@ -123,7 +123,7 @@ test('command discovery and execution share an explicit registry, preserve alias
   assert.equal((await request('/api/commands/lessons',{args:42},operator)).res.status,400);
   assert.equal((await request('/api/commands/lessons',{args:'x'.repeat(4001)},operator)).res.status,400);
   assert.equal((await request('/api/messages',{text:'/lessons 3'},operator)).res.status,400);
-  assert.equal(require('../src/core/requests').listRequests().length,before,'slash commands bypass the concierge queue');
+  assert.equal(require('../src/core/requests').listRequests().length,before,'slash commands bypass the assistant queue');
 });
 test('account information is saved in settings.json and everything else in state.json',()=>{
   const db=path.join(process.env.DATA_DIR,'db');

@@ -149,6 +149,11 @@ export interface Cycle {
   outTokens?: number;
 }
 
+export interface DailyUsage {
+  day: string;
+  byAgent?: Partial<Record<'trader' | 'assistant' | 'unassigned', { inputTokens: number; outputTokens: number }>>;
+}
+
 export interface DashboardModel {
   env: Environment;
   tick: TickSnapshot | null;
@@ -161,8 +166,9 @@ export interface DashboardModel {
    */
   venueOpen: boolean | null;
   trader: Lane;
-  concierge: Lane;
+  assistant: Lane;
   cycle: Cycle;
+  usage?: DailyUsage;
   /** Epoch ms of this paint. Passed in, never read from the clock, so renders are pure. */
   now: number;
   /** Monotonic repaint counter; drives the spinner and the heartbeat blink. */
@@ -671,6 +677,16 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
       { text: tokenSummary(m) ?? '', color: 'gray-fg' },
     ]),
   );
+  const daily = m.usage?.byAgent;
+  if (daily) {
+    const count = (n: number | undefined) => tokens(n) ?? '0';
+    const trader = daily.trader;
+    const assistant = daily.assistant;
+    head.push(joinChunks(f, width, ' · ', [
+      { text: `trader in/out ${count(trader?.inputTokens)}/${count(trader?.outputTokens)}`, color: 'gray-fg' },
+      { text: `assistant in/out ${count(assistant?.inputTokens)}/${count(assistant?.outputTokens)}`, color: 'gray-fg' },
+    ]));
+  }
   head.push(
     joinChunks(f, width, ' · ', [
       { text: t ? `tick ${f.ageOf(t.tickAt, m.now)} ago` : 'awaiting first tick', color: 'gray-fg' },
@@ -686,7 +702,7 @@ export function renderSidebar(m: DashboardModel, width: number, height: number):
   // Sizes of the three head blocks — identity, account, lifecycle — in the order pushed above.
   // Counts rather than an index per line, so adding a line to a block is one edit here and cannot
   // silently drop or duplicate one the way hand-written `head[n]` positions could.
-  const HEAD_BLOCKS = [3, 3, 3];
+  const HEAD_BLOCKS = [3, 3, daily ? 4 : 3];
   const pushHead = () => {
     let at = 0;
     for (const n of HEAD_BLOCKS) {
@@ -1151,7 +1167,7 @@ export function renderStrip(m: DashboardModel, width: number): string[] {
 /**
  * The one-line status bar. Both agents get their own lane here.
  *
- * They used to share a single `setStatus` string, which meant the concierge writing `ready`
+ * They used to share a single `setStatus` string, which meant the assistant writing `ready`
  * erased the trader's `next cycle in 7 min` — the operator lost the countdown by asking a
  * question. Two lanes, one line, no clobbering.
  */
@@ -1159,12 +1175,12 @@ export function renderStatus(m: DashboardModel, width: number, panelHint: string
   const f = makeFormat(m.glyphs);
   const g = m.glyphs;
   const trader = laneChunk(m, m.trader, true);
-  const concierge = laneChunk(m, m.concierge, false);
+  const assistant = laneChunk(m, m.assistant, false);
 
   return joinChunks(f, width, ` ${g.sep} `, [
     { text: 'AutoTrade', color: 'bold' },
     { text: `trader ${trader.text}`, color: trader.color },
-    { text: `concierge ${concierge.text}`, color: concierge.color },
+    { text: `assistant ${assistant.text}`, color: assistant.color },
     { text: panelHint },
     { text: 'PgUp/PgDn scroll' },
     { text: 'Ctrl+C quit' },
