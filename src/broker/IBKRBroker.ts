@@ -4,11 +4,24 @@ import { firstValueFrom } from 'rxjs';
 import { config } from '../core/config';
 import { etNow } from '../core/time';
 import type { IBroker, ExecutionOrder, Position, AccountInfo, OrderRequest, OpenOrder, Fill, OcoRequest } from './IBroker';
-import { BrokerRejection } from './errors';
+import { BrokerRejection, type BrokerAttempt } from './errors';
 import { logger } from '../core/logger';
 import { isCryptoSymbol } from '../core/symbols';
 
 const API_TIMEOUT_MS = parseInt(process.env.IBKR_API_TIMEOUT_MS ?? '10000');
+
+/**
+ * How old a portfolio valuation may be before it is reported as unknown. TWS pushes the
+ * portfolio on a roughly three-minute cycle, so anything well past that means the feed has
+ * stopped (a disconnect, a lost subscription) and the number is no longer a mark.
+ */
+const PORTFOLIO_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * How long a new order has to show up in TWS's open orders before it is treated as not having
+ * reached IBKR. TWS normally echoes an accepted order within a second.
+ */
+const TRANSMIT_CONFIRM_MS = parseInt(process.env.IBKR_TRANSMIT_CONFIRM_MS ?? '8000');
 
 /**
  * TWS order types this system can name. Everything else reports as `'other'` with `rawType`
@@ -122,6 +135,14 @@ export class IBKRBroker implements IBroker {
   private readonly api: IBApiNext;
   private readonly account: string;
   private readonly observedOrders = new Map<string, IbOrder>();
+  /**
+   * Market value and unrealized P&L by conId, from the account-updates (portfolio) feed.
+   *
+   * `getPositions()` on TWS's positions feed carries only qty and average cost — the
+   * valuation lives on a separate feed. Without this every IBKR position read as having no
+   * market value: exposure saw 0% weights and adopting a holding was refused for lack of a mark.
+   */
+  private readonly portfolioValues = new Map<number, { marketValue?: number; unrealizedPnL?: number; at: number }>();
 
   constructor() {
     const { host, port, clientId, account } = config.ibkr;
@@ -134,6 +155,16 @@ export class IBKRBroker implements IBroker {
         if (order.order.account === this.account) this.observedOrders.set(String(order.orderId), order);
       } },
       error: err => logger.warn('[IBKR] order updates disconnected: ' + String(err)),
+    });
+    this.api.getAccountUpdates(this.account).subscribe({
+      next: update => {
+        const now = Date.now();
+        for (const p of update.all.portfolio?.get(this.account) ?? []) {
+          if (p.contract.conId == null) continue;
+          this.portfolioValues.set(p.contract.conId, { marketValue: p.marketValue, unrealizedPnL: p.unrealizedPNL, at: now });
+        }
+      },
+      error: err => logger.warn('[IBKR] portfolio updates disconnected: ' + String(err)),
     });
 
     // placeNewOrder/modifyOrder resolve once the request is SENT to TWS, not once TWS accepts
@@ -184,13 +215,15 @@ export class IBKRBroker implements IBroker {
     for (const acctPositions of [update.all.get(this.account) ?? []]) {
       for (const p of acctPositions) {
         if (!p.pos) continue;
+        const cached = p.contract.conId != null ? this.portfolioValues.get(p.contract.conId) : undefined;
+        const valued = cached && Date.now() - cached.at <= PORTFOLIO_MAX_AGE_MS ? cached : undefined;
         result.push({
           assetClass: p.contract.secType === 'STK' && p.contract.currency === 'USD' ? 'equity' : 'other',
           symbol: p.contract.secType === 'STK' && p.contract.currency === 'USD' ? p.contract.symbol ?? '' : `${p.contract.localSymbol ?? p.contract.symbol}:${p.contract.secType}:${p.contract.conId}`,
           qty:           p.pos,
           avgCost:       p.avgCost ?? 0,
-          marketValue:   p.marketValue ?? undefined,
-          unrealizedPnL: p.unrealizedPNL ?? undefined,
+          marketValue:   p.marketValue ?? valued?.marketValue ?? undefined,
+          unrealizedPnL: p.unrealizedPNL ?? valued?.unrealizedPnL ?? undefined,
         });
       }
     }
@@ -244,6 +277,10 @@ export class IBKRBroker implements IBroker {
       // A STOP IS ALWAYS GTC — DAY would cancel the protection at every close, which is the
       // window it exists to cover. Crypto is GTC because that is all the venue accepts for it.
       tif:           req.timeInForce?.toUpperCase() ?? (req.type === 'stop' || isCryptoSymbol(req.symbol) ? 'GTC' : 'DAY'),
+      // MUST be explicit. The encoder sends this field verbatim, an omitted one goes out empty,
+      // and TWS reads empty as false: the order is created but held as ApiPending, never sent.
+      // (The library's own order classes default it to true; a plain object like this does not.)
+      transmit:      true,
     };
 
     let orderId: number;
@@ -258,7 +295,45 @@ export class IBKRBroker implements IBroker {
       throw new BrokerRejection(null, inner.message, null, req);
     }
 
+    await this.awaitTransmitted(orderId, req);
     return { id: String(orderId) };
+  }
+
+  /**
+   * Wait until TWS reports a just-placed order as having reached IBKR.
+   *
+   * `placeNewOrder` resolves when the request is SENT to TWS. TWS can then hold it without
+   * transmitting — `ApiPending` — and such an order never appears in the open-orders list.
+   * (The 2026-10-07 cause was an omitted `transmit` flag; see `placeOrder`.) Reporting it as placed
+   * made the stop sweep see "no stop", place another, and repeat every few seconds (2026-10-07:
+   * AMZN orders 1044-1164, all held in TWS). An order that has not shown up is therefore an
+   * UNKNOWN outcome: the request is cancelled so a later click cannot transmit it, and the
+   * caller gets an error, which pauses protection for review rather than retrying.
+   */
+  private async awaitTransmitted(orderId: number, req: BrokerAttempt): Promise<void> {
+    const id = String(orderId);
+    const deadline = Date.now() + TRANSMIT_CONFIRM_MS;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      let seen = this.observedOrders.get(id);
+      if (!seen) {
+        try {
+          for (const o of await withTimeout(this.api.getAllOpenOrders(), 'getAllOpenOrders')) {
+            if (o.order.account === this.account) this.observedOrders.set(String(o.orderId), o);
+          }
+        } catch { /* a slow read is not a verdict; keep waiting until the deadline */ }
+        seen = this.observedOrders.get(id);
+      }
+      const status = String(seen?.orderStatus?.status ?? seen?.orderState?.status ?? '');
+      if (!seen || ['', 'ApiPending', 'PendingSubmit', 'Unknown'].includes(status)) continue;
+      if (status === 'Inactive') throw new BrokerRejection(null, `IBKR did not accept order ${id} (status Inactive)`, null, req);
+      return;
+    }
+    try { this.api.cancelOrder(orderId); } catch { /* the error below already says the outcome is unknown */ }
+    throw new Error(
+      `IBKR has not confirmed order ${id} after ${Math.round(TRANSMIT_CONFIRM_MS / 1000)}s — TWS may be holding it `
+        + `(ApiPending). A cancel was sent; check the broker's orders before resuming.`,
+    );
   }
 
   private async lookupOrder(id?: string, ref?: string): Promise<ExecutionOrder | null> {
@@ -324,6 +399,7 @@ export class IBKRBroker implements IBroker {
       this.api.modifyOrder(orderId, existing.contract, {
         ...existing.order,
         auxPrice: stopPrice,
+        transmit: true,
       } as any);
     } catch (err: any) {
       const inner: Error = err?.error ?? err;
@@ -368,6 +444,7 @@ export class IBKRBroker implements IBroker {
       tif:           'GTC',
       ocaGroup,
       ocaType:       1,
+      transmit:      true, // see placeOrder: omitted means held in TWS, not sent
     };
     const takeProfitOrder = {
       account: this.account, orderRef: req.clientOrderId ? req.clientOrderId + '-target' : undefined,
@@ -378,6 +455,7 @@ export class IBKRBroker implements IBroker {
       tif:           'GTC',
       ocaGroup,
       ocaType:       1,
+      transmit:      true, // see placeOrder: omitted means held in TWS, not sent
     };
 
     let stopOrderId: number;
@@ -390,6 +468,7 @@ export class IBKRBroker implements IBroker {
       const inner: Error = err?.error ?? err;
       throw new BrokerRejection(null, inner.message, null, req);
     }
+    await this.awaitTransmitted(stopOrderId, req);
 
     let takeProfitOrderId: number;
     try {
@@ -403,6 +482,7 @@ export class IBKRBroker implements IBroker {
       const inner: Error = err?.error ?? err;
       throw new BrokerRejection(null, inner.message, null, req);
     }
+    await this.awaitTransmitted(takeProfitOrderId, req);
 
     return { stopOrderId: String(stopOrderId), takeProfitOrderId: String(takeProfitOrderId) };
   }
@@ -430,6 +510,7 @@ export class IBKRBroker implements IBroker {
       this.api.modifyOrder(orderId, existing.contract, {
         ...existing.order,
         lmtPrice: limitPrice,
+        transmit: true,
       } as any);
     } catch (err: any) {
       const inner: Error = err?.error ?? err;

@@ -1,4 +1,4 @@
-import { protect, protectionIntents } from './protectionIntent';
+import { flagVanishedProtection, protect, protectionIntents, recentlyConfirmedIntent } from './protectionIntent';
 import { assertExecutionOwner } from '../core/runtime';
 /**
  * L4 — the stop that rests at the venue.
@@ -622,6 +622,12 @@ export async function sweepStops(): Promise<void> {
     const recorded = getPositionSnapshot(p.symbol)?.stopOrderId;
     if (!recorded || isStopLocked(p.symbol)) continue;
     if (!orders.some(o => o.id === recorded)) {
+      if (recentlyConfirmedIntent(p.symbol)) {
+        // Placed minutes ago and already gone: never clear-and-replace, that loops.
+        flagVanishedProtection(p.symbol, recorded);
+        logger.warn(`[Stops] ${p.symbol} stop order ${recorded} vanished from the venue minutes after it was placed — not re-placing. Trading paused for review.`);
+        continue;
+      }
       patchPositionSnapshot(p.symbol, { stopOrderId: undefined });
       logger.warn(
         `[Stops] ${p.symbol} recorded stop order ${recorded}, which is no longer resting at the `
@@ -635,6 +641,12 @@ export async function sweepStops(): Promise<void> {
     const recorded = getPositionSnapshot(p.symbol)?.takeProfitOrderId;
     if (!recorded || isStopLocked(p.symbol)) continue;
     if (!orders.some(o => o.id === recorded)) {
+      if (recentlyConfirmedIntent(p.symbol)) {
+        // Placed minutes ago and already gone: never clear-and-replace, that loops.
+        flagVanishedProtection(p.symbol, recorded);
+        logger.warn(`[Stops] ${p.symbol} take-profit order ${recorded} vanished from the venue minutes after it was placed — not re-placing. Trading paused for review.`);
+        continue;
+      }
       patchPositionSnapshot(p.symbol, { takeProfitOrderId: undefined });
       logger.warn(
         `[Stops] ${p.symbol} recorded take-profit order ${recorded}, which is no longer resting `

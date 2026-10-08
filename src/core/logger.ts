@@ -82,7 +82,7 @@ function summarizeResult(tool: string, raw: string): string {
       case 'get_positions':
         return r.count === 0
           ? 'no open positions'
-          : r.positions.map((p: any) => `${p.symbol} ${p.qty}sh $${p.marketValue?.toFixed(0)} P&L ${p.unrealizedPnL >= 0 ? '+' : ''}$${p.unrealizedPnL?.toFixed(0)}`).join(' | ');
+          : r.positions.map((p: any) => `${p.symbol} ${p.qty}sh ${p.marketValue != null ? '$' + p.marketValue.toFixed(0) : 'value unknown'} P&L ${p.unrealizedPnL != null ? (p.unrealizedPnL >= 0 ? '+' : '-') + '$' + Math.abs(p.unrealizedPnL).toFixed(0) : 'unknown'}`).join(' | ');
       case 'get_bars':
         return Array.isArray(r) ? `${r.length} bars, last close $${r.at(-1)?.c?.toFixed(2)}` : formatResult(r);
       case 'get_indicators':
