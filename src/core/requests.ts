@@ -8,6 +8,8 @@ export interface AgentRequest {
   parentId?: string; createdAt: string;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
   result?: string; actionIds: string[];
+  /** Explicit dashboard assessments may research and record reviews, but cannot queue trades. */
+  mode?: 'review_only';
 }
 export function getRequest(id: string): AgentRequest | undefined { return readRecord('requests', id); }
 export function listRequests(limit = 50): AgentRequest[] {
@@ -17,7 +19,7 @@ export function pendingRequests(role: AgentRole): AgentRequest[] {
   return listRecords<AgentRequest>('requests', { where: c => c.role === role && ['queued','running','interrupted'].includes(c.status), limit: 20 })
     .map(r => r.value);
 }
-export function enqueueRequest(role: AgentRole, text: string, actorId = 'operator', id?: string): AgentRequest {
+export function enqueueRequest(role: AgentRole, text: string, actorId = 'operator', id?: string, mode?: 'review_only'): AgentRequest {
   return transaction(() => {
     assertAgentActive();
     const parent = agentContext.getStore();
@@ -27,7 +29,7 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     if (!text.trim() || text.length > 4000) throw new Error('A message must contain 1–4000 characters');
     if (pendingRequests(role).length >= 20) throw new Error('Agent queue is full; wait for a pending request to finish');
     const command: AgentRequest = { id, role, actorId: parent?.actorId ?? actorId, parentId: parent?.requestId,
-      text, createdAt: new Date().toISOString(), status: 'queued', actionIds: [] };
+      text, createdAt: new Date().toISOString(), status: 'queued', actionIds: [], ...(mode ? { mode } : {}) };
     saveRecord('requests', id, command);
     if (parent) recordToolResult({ ok: true, receipt: { requestId: id, status: getState().paused ? 'queued_paused' : 'queued' } });
     return command;

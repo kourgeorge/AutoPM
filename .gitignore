@@ -24,6 +24,7 @@ policy/history/
 # hash, regenerable by re-running the backtest), and generated backtest reports — none of
 # these is source, all are large and worthless to diff.
 data/historicalBars/
+/historicalBars/
 data/aiDecisionCache.json
 backtest-results/
 

@@ -44,7 +44,7 @@ export type ExitMode = 'stop_only' | 'stop_trailing' | 'stop_takeprofit';
  * comparing signal families under the same walk-forward harness — see `strategy/meanReversion.ts`
  * and `strategy/crossSectional.ts`. `'blend'` averages the trend and mean-reversion composites
  * (one vote per family, not a signal concatenation that would let trend's 5 signals outvote
- * mean-reversion's 4 by count).
+ * mean-reversion's 3 by count).
  */
 export type SignalSet = 'trend' | 'meanReversion' | 'crossSectional' | 'blend';
 

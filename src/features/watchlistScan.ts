@@ -55,7 +55,7 @@ export interface ScanRow {
    */
   reversal: ReversalFilter;
   /**
-   * A second, decorrelated family (see `strategy/meanReversion.ts`), kept out of `tally`
+   * A second price-derived family (see `strategy/meanReversion.ts`), kept out of `tally`
    * on purpose — same treatment as `reversal` above, for the same reason: it answers a
    * different question than the five trend signals do.
    */
@@ -182,7 +182,7 @@ export function watchlistScan(
   // Same reasoning as the trend caveat above, for the family that answers a different question.
   if (rows.some((r) => r.meanReversionTally.total > 0)) {
     caveats.push(
-      'meanReversionTally is a second, decorrelated family (Z-score reversion, Bollinger %B, contrarian RSI, monthly reversal) — it answers whether this has run too far from its own recent history, not whether it is trending. Do not average meanReversionTally.composite into tally.composite; read the two separately.',
+      'meanReversionTally is a second price-derived family (Z-score reversion, contrarian RSI, monthly reversal); independence from trend has not been measured — it answers whether this has run too far from its own recent history, not whether it is trending. Do not average meanReversionTally.composite into tally.composite; read the two separately.',
     );
   }
 

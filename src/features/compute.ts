@@ -27,7 +27,7 @@ import { etDate, marketSession, type MarketSession } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { atr, crossedAbove, ema, rsi } from '../strategy/indicators';
-import { computeSignals, signalSummary, type SignalScore } from '../strategy/signals';
+import { computeSignals, signalSummary, signalTally, type SignalScore } from '../strategy/signals';
 import { computeMeanReversionSignals } from '../strategy/meanReversion';
 import { reversalFilter, type ReversalFilter } from '../strategy/reversal';
 import { getCachedFundamentals } from '../collect/fundamentals';
@@ -45,6 +45,11 @@ import { dayPnLPercent } from '../strategy/riskManager';
 // ── Output types ──────────────────────────────────────────────────────────────
 
 export interface PositionData {
+  lastClose?: number | null;
+  trendComposite?: number | null;
+  barsAsOf?: string | null;
+  barsSource?: string | null;
+  quoteAsOf?: string | null;
   symbol: string;
   qty: number;
   price: number | null;
@@ -94,7 +99,7 @@ export interface WatchlistData {
   signals: SignalScore[];
   signalSummary: string;
   /**
-   * Mean-reversion family (see strategy/meanReversion.ts) — a second, decorrelated read, kept
+   * Mean-reversion family (see strategy/meanReversion.ts) — a second interpretation of the same price history, kept
    * beside `signals` and out of its composite, same treatment as `reversal` below.
    */
   meanReversionSignals: SignalScore[];
@@ -281,6 +286,11 @@ function buildPositionData(
 
   return {
     symbol: pos.symbol,
+    lastClose: isUsable(bars) ? bars.value.at(-1)?.c ?? null : null,
+    trendComposite: isUsable(bars) && bars.value.length >= p.strategy.minBars ? signalTally(computeSignals(bars.value, p)).composite : null,
+    barsAsOf: isUsable(bars) ? bars.asOf : null,
+    barsSource: isUsable(bars) ? bars.source : null,
+    quoteAsOf: isUsable(price) ? price.asOf : null,
     qty: pos.qty,
     price: spot,
     stale,

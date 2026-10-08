@@ -28,7 +28,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
         limit:     { type: 'integer', description: 'Bars to return, newest last (default 20, max 100).' },
         start:     { type: 'string',  description: 'ISO 8601 start date, e.g. "2025-01-01". Defaults to a window wide enough for `limit` bars.' },
         end:       { type: 'string',  description: 'ISO 8601 end date. Defaults to 16 minutes ago, the earliest the consolidated tape may be queried.' },
-        feed:      { type: 'string',  enum: ['sip', 'iex'], description: 'Leave unset for the full consolidated tape. "iex" is one venue, under 3% of volume — only for comparing against it deliberately.' },
+        feed:      { type: 'string',  enum: ['sip', 'iex'], description: 'Default is the best feed permitted by the subscription, which can be IEX. IEX is one exchange; SIP is consolidated.' },
       },
       required: ['symbols'],
     },
@@ -40,6 +40,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         symbols: { type: 'string', description: 'Ticker symbol, e.g. "NVDA".' },
+        feed: { type: 'string', enum: ['sip', 'iex'], description: 'Defaults to the best entitled feed. IEX quotes represent one exchange.' },
       },
       required: ['symbols'],
     },
@@ -51,6 +52,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         symbols: { type: 'string', description: 'Ticker symbol.' },
+        feed: { type: 'string', enum: ['sip', 'iex'], description: 'Defaults to the best entitled feed. IEX quotes represent one exchange.' },
       },
       required: ['symbols'],
     },
@@ -179,6 +181,7 @@ async function getStockBars(input: Record<string, unknown>): Promise<string> {
     end:       input.end   ?? new Date(Date.now() - SIP_EMBARGO_MS).toISOString(),
   };
   if (input.feed) params.feed = input.feed;
+  if (timeframe === '1Day') params.adjustment = 'split';
 
   const res = await dataClient.get<any>('/v2/stocks/bars', { params });
 
@@ -186,7 +189,8 @@ async function getStockBars(input: Record<string, unknown>): Promise<string> {
   for (const series of Object.values(bars)) {
     if (Array.isArray(series)) series.reverse();
   }
-  return JSON.stringify(res.data);
+  return JSON.stringify({ ...res.data, source: 'alpaca', feed: input.feed ?? 'subscription default',
+    caveats: ['Subscription default may be a single exchange feed. Daily bars may include an unfinished session; use get_signals for completed-session indicators.'] });
 }
 
 /** A window wide enough that `limit` bars fit inside it, with room for weekends and holidays. */
@@ -198,16 +202,18 @@ function defaultBarStart(limit: number, timeframe: string): string {
 
 async function getStockSnapshot(input: Record<string, unknown>): Promise<string> {
   const res = await dataClient.get('/v2/stocks/snapshots', {
-    params: { symbols: input.symbols, feed: input.feed ?? 'iex' },
+    params: { symbols: input.symbols, ...(input.feed ? { feed: input.feed } : {}) },
   });
-  return JSON.stringify(res.data);
+  return JSON.stringify({ ...res.data, source: 'alpaca', feed: input.feed ?? 'subscription default',
+    caveats: ['Subscription default may be IEX, a single exchange; do not assume a consolidated quote. Daily snapshot bars can be partial.'] });
 }
 
 async function getStockLatestQuote(input: Record<string, unknown>): Promise<string> {
   const res = await dataClient.get('/v2/stocks/quotes/latest', {
-    params: { symbols: input.symbols, feed: input.feed ?? 'iex' },
+    params: { symbols: input.symbols, ...(input.feed ? { feed: input.feed } : {}) },
   });
-  return JSON.stringify(res.data);
+  return JSON.stringify({ ...res.data, source: 'alpaca', feed: input.feed ?? 'subscription default',
+    caveats: ['Subscription default may be IEX, a single exchange; quote timestamps and feed scope must be checked.'] });
 }
 
 async function getMostActiveStocks(input: Record<string, unknown>): Promise<string> {

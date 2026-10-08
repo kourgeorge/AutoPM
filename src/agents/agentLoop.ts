@@ -3,7 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ChatMessage, ContentBlock } from '../core/types';
 import type { ModelProvider } from '../core/modelProvider';
 import { agentContext, type AgentContext } from '../core/agentContext';
-import { readRecord, saveRecord } from '../core/storage';
+import { readRecord, saveRecord, appendRecord } from '../core/storage';
 import type { ToolRegistry } from './toolRegistry';
 import { logger } from '../core/logger';
 
@@ -33,8 +33,9 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });
 }
-function boundedResult(raw: string): string {
-  return raw.length <= 10000 ? raw : JSON.stringify({ truncated: true, preview: raw.slice(0,8000), note: 'Narrow the query to retrieve a complete result.' });
+function boundedResult(raw: string, receiptId?: string): string {
+  return raw.length <= 10000 ? raw : JSON.stringify({ truncated: true, receiptId, totalCharacters: raw.length,
+    note: receiptId ? 'Read get_tool_result(receiptId, offset, limit) for complete pages. No evidence was discarded.' : 'Legacy result is oversized; repeat a narrower query to retrieve complete evidence.' });
 }
 
 /** Repair legacy histories and trim whole exchanges, never leaving orphaned tool results. */
@@ -43,7 +44,6 @@ export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessag
   for (let i = 0; i < input.length; i++) {
     const m = structuredClone(input[i]);
     if (m.role === 'user' && m.content.every(b => b.type === 'tool_result')) continue;
-    m.content = m.content.map(b => b.type === 'text' ? { ...b, text: b.text.slice(0,24000) } : b);
     messages.push(m);
     const calls = m.content.filter((b): b is ToolCall => b.type === 'tool_use');
     if (m.role === 'assistant' && calls.length) {
@@ -51,16 +51,25 @@ export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessag
       const results = next?.role === 'user' ? next.content.filter(b => b.type === 'tool_result') : [];
       messages.push({ role: 'user', content: calls.map(call => {
         const result = results.find(b => b.type === 'tool_result' && b.tool_use_id === call.id);
-        return { type: 'tool_result', tool_use_id: call.id, content: boundedResult(result?.type === 'tool_result' ? result.content : errorResult('Previous tool outcome unavailable. Inspect command/action status before retrying.')) };
+        const receiptId = result?.type === 'tool_result' ? result.receiptId : undefined;
+        return { type: 'tool_result', tool_use_id: call.id, receiptId, content: boundedResult(result?.type === 'tool_result' ? result.content : errorResult('Previous tool outcome unavailable. Inspect command/action status before retrying.'), receiptId) };
       }) });
       if (next?.content.every(b => b.type === 'tool_result')) i++;
     }
   }
-  while (JSON.stringify(messages).length > limit && messages.length > 3) {
+  const removed: ChatMessage[] = [];
+  while (JSON.stringify(messages).length > limit - 400 && messages.length > 3) {
     // Keep the latest user's request and the latest complete exchanges.
     const nextUser = messages.findIndex((m,i) => i > 0 && m.role === 'user' && m.content.some(b => b.type === 'text'));
-    if (nextUser > 0) messages.splice(0, nextUser);
-    else messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1);
+    if (nextUser > 0) removed.push(...messages.splice(0, nextUser));
+    else removed.push(...messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1));
+  }
+  if (removed.length) {
+    const text = JSON.stringify(removed), id = 'context-' + crypto.createHash('sha256').update(text).digest('hex').slice(0, 32);
+    appendRecord('contexts', id, new Date().toISOString(), { text });
+    const note: ContentBlock = { type: 'text', text: `Earlier exchanges omitted to fit context. Retrieve ${id} with get_saved_context; saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty.` };
+    if (messages[0]?.role === 'user') messages[0].content.push(note);
+    else messages.unshift({ role: 'user', content: [note] });
   }
   return messages;
 }
@@ -116,7 +125,7 @@ export async function runAgentLoop(opts: {
               saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result, startedAt, finishedAt: new Date().toISOString() });
               logger.tool(context.role, call.name, result, call.input, { id: toolCallId, requestId: id });
             }
-            results.push({ type: 'tool_result', tool_use_id: call.id, content: boundedResult(result) });
+            results.push({ type: 'tool_result', tool_use_id: call.id, receiptId: toolCallId, content: boundedResult(result, toolCallId) });
             if (call.name === 'sleep') {
               const value = JSON.parse(result);
               if (value.ok) { finish = true; current.sleepMs = value.sleepMs; }

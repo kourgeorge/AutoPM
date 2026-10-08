@@ -74,6 +74,7 @@ export interface RevisionFacts {
 
 export interface Fundamentals {
   symbol: string;
+  fetchedAt?: string;
   calendar: CalendarFacts;
   crowding: {
     shortPctOfFloat: number | null;
@@ -275,6 +276,7 @@ export function mapFundamentals(
 
   return {
     symbol,
+    fetchedAt: new Date(now).toISOString(),
     calendar: {
       nextEarningsAt,
       daysUntil: daysUntilFrom(nextEarningsAt, now),
@@ -406,7 +408,7 @@ export function getCachedFundamentals(
   const out: Record<string, Fundamentals | null> = {};
   for (const s of symbols) {
     const entry = cache[key(s)];
-    out[s] = entry && !isStale(entry, now) ? withFreshCountdown(entry.mapped, now) : null;
+    out[s] = entry && !isStale(entry, now) ? withFreshCountdown({ ...entry.mapped, fetchedAt: entry.fetchedAt }, now) : null;
   }
   return out;
 }
@@ -422,7 +424,7 @@ export async function getFundamentals(symbol: string): Promise<Fundamentals> {
   const cache = load();
 
   const entry = cache[k];
-  if (entry && !isStale(entry, now)) return withFreshCountdown(entry.mapped, now);
+  if (entry && !isStale(entry, now)) return withFreshCountdown({ ...entry.mapped, fetchedAt: entry.fetchedAt }, now);
 
   const { raw, modulesPresent } = await getFundamentalsRaw(k);
   const mapped = mapFundamentals(k, raw, modulesPresent, now);

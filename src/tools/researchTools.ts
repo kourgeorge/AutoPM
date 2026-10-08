@@ -17,6 +17,7 @@
  */
 
 import { ToolDefinition } from '../core/types';
+import { registerSearchResults } from '../collect/research';
 
 export const RESEARCH_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
@@ -55,7 +56,7 @@ async function executeWebSearch(query: string, limit: number): Promise<string> {
       publishedAt: r.published_date ?? null,
       score: r.score ?? null,
     }));
-    return JSON.stringify({ results: hits });
+    return JSON.stringify({ results: registerSearchResults(hits) });
   } catch (err: any) {
     const status = err?.response?.status;
     return JSON.stringify({ results: [], error: `web search unavailable: Tavily ${status ? `HTTP ${status}` : err?.message ?? 'request failed'}` });

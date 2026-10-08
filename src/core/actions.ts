@@ -71,12 +71,13 @@ export function createAction(input: CreateActionInput): Action {
 }
 export function ensureActionDecision(action: Action): void {
   if (readDecision('action-' + action.id)) return;
-  const signal = action.params.signal as Record<string, number> | undefined;
+  const signal = action.params.signal as import('./types').SignalResult | undefined;
   recordDecision(decision(action.kind === 'entry' || action.kind === 'exit' ? action.kind : 'adjustment', 'trader', {
     symbol: action.symbol, rationale: action.reason, actionId: action.id, requestId: action.requestId, actorId: action.requestedBy,
     triggerEventId: action.eventId, orderStatus: action.status, requestedQty: Number(action.params.qty ?? 0) || null,
     filledQty: 0, qty: 0, intendedPrice: signal?.price ?? action.params.price as number ?? null, intendedStop: signal?.stopLoss ?? action.params.stopLoss as number ?? null,
     intendedTarget: signal?.takeProfit ?? action.params.takeProfit as number ?? null,
+    thesis: signal?.thesis, observationIds: signal?.observationIds ?? action.params.observationIds as string[] | undefined, contextVariant: signal?.contextVariant,
     atrAtEntry: signal?.atr ?? null, protectionStatus: action.kind === 'exit' ? undefined : 'pending',
   }), 'action-' + action.id);
 }

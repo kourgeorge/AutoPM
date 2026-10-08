@@ -72,7 +72,7 @@ export interface Exposure extends Concentration {
   buyingPower: number;
   /** Upper triangle — each held pair exactly once. */
   correlations: HeldCorrelation[];
-  maxHeldCorrelation: number;
+  maxHeldCorrelation: number | null;
   maxHeldPair: [string, string] | null;
 }
 
@@ -223,15 +223,17 @@ export async function exposure(): Promise<Exposure> {
 
 async function heldCorrelations(symbols: string[]): Promise<{
   correlations: HeldCorrelation[];
-  maxHeldCorrelation: number;
+  maxHeldCorrelation: number | null;
   maxHeldPair: [string, string] | null;
   caveats: string[];
 }> {
-  const empty = { correlations: [], maxHeldCorrelation: 0, maxHeldPair: null as [string, string] | null, caveats: [] as string[] };
+  const empty = { correlations: [], maxHeldCorrelation: null as number | null, maxHeldPair: null as [string, string] | null, caveats: [] as string[] };
   if (symbols.length < 2) return empty;
 
   const caveats: string[] = [];
-  const returns = await returnsMatrix(symbols);
+  let returns: Awaited<ReturnType<typeof returnsMatrix>>;
+  try { returns = await returnsMatrix(symbols); }
+  catch (err) { return { ...empty, caveats: ['Held correlations unavailable: ' + (err instanceof Error ? err.message : String(err))] }; }
 
   const skipped = symbols.filter(s => !returns.has(s));
   if (skipped.length > 0) {
@@ -242,7 +244,7 @@ async function heldCorrelations(symbols: string[]): Promise<{
 
   const usable = symbols.filter(s => returns.has(s));
   const correlations: HeldCorrelation[] = [];
-  let maxHeldCorrelation = 0;
+  let maxHeldCorrelation: number | null = null;
   let maxHeldPair: [string, string] | null = null;
 
   for (let i = 0; i < usable.length; i++) {
@@ -254,7 +256,7 @@ async function heldCorrelations(symbols: string[]): Promise<{
       if (corr === null) continue;
       correlations.push({ a, b, corr });
 
-      if (Math.abs(corr) > Math.abs(maxHeldCorrelation)) {
+      if (maxHeldCorrelation === null || corr > maxHeldCorrelation) {
         maxHeldCorrelation = corr;
         maxHeldPair = [a, b];
       }

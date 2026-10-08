@@ -1,4 +1,4 @@
-import { enqueueRequest, listRequests, type AgentRequest } from '../core/requests';
+import { enqueueRequest, listRequests, pendingRequests, type AgentRequest } from '../core/requests';
 import { listLessons, reviewLesson } from '../journal/lessons';
 /** Local dashboard and operator API. Listens on this computer only; there is one user, so no login. */
 import crypto from 'crypto';
@@ -8,7 +8,7 @@ import { modelUsage } from '../core/modelBudget';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
-import { readRecords, readRecordPage, appendRecord, listRecords } from '../core/storage';
+import { readRecords, readRecordPage, appendRecord, listRecords, readRecord } from '../core/storage';
 import { broker } from '../broker';
 import { canonicalSymbol } from '../core/symbols';
 import { collectBars } from '../collect/barSource';
@@ -25,7 +25,9 @@ import { automationSummary } from '../core/automation';
 import { getAllActions, getOpenActions } from '../core/actions';
 import { getLastTick } from '../features/lastTick';
 import { scorecard } from '../review/metrics';
-import { activityHistory } from '../review/activity';
+import { activityHistory, savedPositionContext, savedTaskDetails } from '../review/activity';
+import { textPage } from '../agents/savedResults';
+import type { Evidence } from '../journal/evidence';
 import type { Trader } from '../agents/trader';
 import type { FeedEntry, HeadlessUI } from '../ui/headless';
 
@@ -221,8 +223,55 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       lastTickAt: tick?.tickAt ?? null,
       available: !!tick && !tick.positionsStale,
       error: tick?.positionsError ?? (!tick ? 'Waiting for account data' : null),
-      positions: tick && !tick.positionsStale ? Object.values(tick.positions).map(p => ({ ...p, managed: !!getState().positionSnapshots[canonicalSymbol(p.symbol)] })) : null,
+      positions: tick && !tick.positionsStale ? Object.values(tick.positions).map(p => ({ ...p,
+        managed: !!getState().positionSnapshots[canonicalSymbol(p.symbol)] })) : null,
     };
+  });
+
+  const reviewSymbol = (raw: string): string => {
+    const symbol = raw.trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(symbol)) throw new HttpError(400, 'A valid ticker is required');
+    return canonicalSymbol(symbol);
+  };
+  add('GET', '/api/positions/:symbol/review', ({ params }) => savedPositionContext(reviewSymbol(params.symbol)));
+  add('POST', '/api/positions/:symbol/review', ({ params }) => {
+    const symbol = reviewSymbol(params.symbol);
+    const instruction = `Review ${symbol} only. Read its current position/candidate dossier and relevant evidence. Explain the original entry thesis if held, changes, unknowns and verified protection. Record a material position or candidate assessment when appropriate. Do not request trades or protection changes.`;
+    try {
+      const request = pendingRequests('trader').find(r => r.mode === 'review_only' && r.text === instruction)
+        ?? enqueueRequest('trader', instruction, OPERATOR, undefined, 'review_only');
+      trader.wake();
+      return { accepted: true, requestId: request.id, status: request.status, paused: getState().paused };
+    } catch (err: any) { throw new HttpError(409, err.message); }
+  });
+
+  const savedPage = (value: string, url: URL) => {
+    try { return textPage(value, parseNonNegativeInt(url.searchParams.get('offset'), 0, 'offset'),
+      parseNonNegativeInt(url.searchParams.get('limit'), 3000, 'limit')); }
+    catch (err: any) { if (err instanceof HttpError) throw err; throw new HttpError(400, err.message); }
+  };
+  add('GET', '/api/evidence/:id', ({ params, url }) => {
+    const row = readRecord<Evidence>('evidence', params.id);
+    if (!row) throw new HttpError(404, 'This observation was not found');
+    return { id: row.id, tool: row.tool, symbol: row.symbol, source: row.source,
+      recordedAt: row.recordedAt, asOf: row.asOf, ...savedPage(JSON.stringify(row.data, null, 2), url) };
+  });
+  add('GET', '/api/tool-receipts/:id', ({ params, url }) => {
+    const row = readRecord<any>('tool-calls', params.id);
+    if (!row) throw new HttpError(404, 'This tool receipt was not found');
+    return { id: params.id, name: row.name, input: row.input, requestId: row.requestId,
+      startedAt: row.startedAt, finishedAt: row.finishedAt, resultSaved: row.result !== undefined,
+      ...savedPage(row.result ?? 'No result was recorded. Inspect linked action outcomes before retrying.', url) };
+  });
+  add('GET', '/api/source-text/:id', ({ params, url }) => {
+    const row = readRecord<{ text: string; fetchedAt: string; url: string }>('source-text', params.id);
+    if (!row) throw new HttpError(404, 'Original source text has not been saved');
+    return { id: params.id, fetchedAt: row.fetchedAt, ...savedPage(row.text, url) };
+  });
+  add('GET', '/api/agent-tasks/:id', ({ params }) => {
+    const task = savedTaskDetails(params.id);
+    if (!task) throw new HttpError(404, 'This agent task was not found');
+    return task;
   });
 
   // Read-only chart data. Short-lived, bounded caching also coalesces concurrent requests.

@@ -8,6 +8,7 @@ import { watchlistScan } from '../features/watchlistScan';
 import { collectRiskInputs } from './riskData';
 import { assessEntryRisk, entryLimitPrice } from './riskBudget';
 import { canonicalSymbol } from '../core/symbols';
+import { getCachedRegime } from '../macro/regime';
 
 export async function entryPlan(input: { symbol: string; price: number; stopLoss: number; takeProfit: number }) {
   const policy = getPolicy(), policyHash = getPolicyHash();
@@ -30,6 +31,7 @@ export async function entryPlan(input: { symbol: string; price: number; stopLoss
 /** Keep signal observations intact, then rank feasible candidates by signal per volatility budget used. */
 export async function riskAwareWatchlistScan() {
   const policy = getPolicy(), policyHash = getPolicyHash();
+  const regime = getCachedRegime(), effectiveCompositeMin = regime ? policy.regime[regime.regime].compositeMin : policy.strategy.compositeMin;
   const scan = watchlistScan(getLastTick(), policy.triggers.tickIntervalMs);
   if (!scan.rows.length || !hasRiskProfile(policy.risk)) return scan;
   try {
@@ -44,12 +46,12 @@ export async function riskAwareWatchlistScan() {
         : null;
       const usedVolatility = riskFit?.volatilityAfterPct != null && riskFit.volatilityBeforePct != null
         ? Math.max(0, riskFit.volatilityAfterPct - riskFit.volatilityBeforePct) : 0;
-      const riskAdjustedScore = riskFit?.allowed && row.tally.composite != null && row.tally.composite >= policy.strategy.compositeMin
+      const riskAdjustedScore = riskFit?.allowed && row.tally.composite != null && row.tally.composite >= effectiveCompositeMin
         ? row.tally.composite / (1 + usedVolatility / (policy.risk.targetVolatilityPct ?? 1)) : null;
       return { ...row, riskFit, riskAdjustedScore };
     });
     rows.sort((a, b) => (b.riskAdjustedScore ?? -Infinity) - (a.riskAdjustedScore ?? -Infinity) || a.symbol.localeCompare(b.symbol));
-    return { ...scan, rows, policyHash, profile: riskProfileName(policy.risk), caveats: [...scan.caveats,
+    return { ...scan, rows, policyHash, effectiveCompositeMin, profile: riskProfileName(policy.risk), caveats: [...scan.caveats,
       'Risk ranking is a shortlist heuristic: composite divided by 1 + incremental volatility / target. It is not expected return.',
       'Each candidate is measured separately against current holdings using an ATR stop. Get an entry plan with the actual supported stop and target before placing an order. Candidates cannot all use the same remaining budget.',
     ] };

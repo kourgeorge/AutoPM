@@ -257,8 +257,10 @@ function toolCallEntry(entry) {
       pre.tabIndex = 0;pre.setAttribute('aria-label', `${name} ${label.toLowerCase()}`);
       section.append(text('h3', label), pre);body.append(section);
     }
-    const references = [tool.requestId && `Request ${tool.requestId}`, tool.id && `Call ${tool.id}`].filter(Boolean);
-    if (references.length) body.append(text('p', references.join(' · '), 'tool-call-reference'));
+    const references=text('div','','tool-call-reference review-links');
+    if(tool.requestId)references.append(uiButton('Open agent task',()=>openAgentTask(tool.requestId)));
+    if(tool.id)references.append(uiButton('Open saved receipt',()=>openSavedRecord('tool',tool.id,0,[],tool.requestId || null)));
+    if(references.hasChildNodes())body.append(references);
   });
   details.append(summary, body);
   return details;
@@ -503,23 +505,18 @@ function renderPortfolio(p, s) {
   rows('positions', positions, v => {
     const pnl = v.price == null ? null : (v.price - v.entryPrice) * v.qty, pct = v.price == null ? null : (v.price / v.entryPrice - 1) * 100;
     if (pnl != null) { openPnl += pnl; cost += v.entryPrice * v.qty; priced++; }
-    const symbol=text('div','','ticker-links'), chart=text('button',v.symbol,'link'), ask=text('button','↗','ticker-ask');
-    chart.type='button';chart.setAttribute('aria-label',`View ${v.symbol} price chart`);chart.title='View trend and candlesticks';
-    chart.onclick=()=>openTickerChart(v.symbol);
-    ask.type='button';ask.setAttribute('aria-label',`Ask the agent about ${v.symbol}`);
-    ask.onclick=()=>askAbout(`How is ${v.symbol} doing, and what is your plan for it?`);
-    symbol.append(chart,ask);
+    const symbol=uiButton(v.symbol,()=>openPositionReview(v.symbol));
+    symbol.setAttribute('aria-label',`Open ${v.symbol} position details`);symbol.title='Open position details';
+    symbol.setAttribute('aria-haspopup','dialog');
     const price = text('span', v.price == null ? 'Unavailable' : money(v.price), v.stale ? 'stale' : '');
     const before = lastPrices.get(v.symbol);
     if (before != null && v.price != null && before !== v.price) price.classList.add(v.price > before ? 'tick-up' : 'tick-down');
     lastPrices.set(v.symbol, v.price);
     const change = text('span', pnl == null ? '—' : `${signedMoney(pnl)} ${signedPct(pct)}`, direction(pnl));
-    let managed = text('span', v.managed ? 'Managed' : 'Unmanaged');
-    if (!v.managed) { managed = text('button', 'Adopt holding'); managed.onclick = () => { $('adopt-form').elements.symbol.value = v.symbol; $('adopt').showModal(); }; }
-    return [symbol, v.qty, money(v.entryPrice), price, change, `${v.stopLevel == null ? '—' : money(v.stopLevel)} / ${v.takeProfitLevel == null ? '—' : money(v.takeProfitLevel)}`, managed];
+    return [symbol, v.qty, money(v.entryPrice), price, change];
   });
-  if (!positions.length) { const row=text('tr',''), cell=text('td',p.available?'No open positions. Your next holding will appear here.':'Holdings unavailable. Waiting for broker data.','table-empty');cell.colSpan=7;row.append(cell);$('positions').append(row); }
-  $('positions-status').textContent = p.available ? (positions.length ? `${positions.length} holding${positions.length === 1 ? '' : 's'} · select a ticker for its chart` : 'No open holdings.') : p.error;
+  if (!positions.length) { const row=text('tr',''), cell=text('td',p.available?'No open positions. Your next holding will appear here.':'Holdings unavailable. Waiting for broker data.','table-empty');cell.colSpan=5;row.append(cell);$('positions').append(row); }
+  $('positions-status').textContent = p.available ? (positions.length ? `${positions.length} holding${positions.length === 1 ? '' : 's'} · select a ticker for details` : 'No open holdings.') : p.error;
   setValue('open-pnl', priced ? signedMoney(openPnl) : '—');
   $('open-pnl').className = direction(openPnl);
   $('open-pnl-pct').textContent = priced && cost ? `${signedPct(openPnl / cost * 100)} on cost` : '';
@@ -540,7 +537,7 @@ function renderWatchlist(data) {
   };
   rows('watchlist-rows',list,row=>{
     const stale=outdated || row.stale || row.price==null;
-    const symbol=text('button',row.symbol,'link');symbol.type='button';symbol.setAttribute('aria-label',`View ${row.symbol} price chart`);symbol.onclick=()=>openTickerChart(row.symbol);
+    const symbol=uiButton(row.symbol,()=>openPositionReview(row.symbol));symbol.setAttribute('aria-label',`Open ${row.symbol} details`);symbol.setAttribute('aria-haspopup','dialog');
     const price=text('span',stale?'—':money(row.price),stale?'stale':'');price.title=stale?(row.staleReason || 'Price unavailable or stale'):'';
     return [symbol,price,text('span',stale||row.dayChangePct==null?'—':signedPct(row.dayChangePct),stale?'stale':direction(row.dayChangePct)),
       scoreCell(row.trend,row.signals,row.signalSummary),scoreCell(row.mr,row.meanReversionSignals,row.meanReversionSummary),Number.isFinite(row.rsi)?row.rsi.toFixed(0):'—'];
@@ -614,30 +611,25 @@ function drawChatSeries(svg,series) {
   const trend = series.values.at(-1) >= series.values[0] ? 'up' : 'down';
   svg.append(svgNode('path',{d:`${path}L${right},${bottom}L${left},${bottom}Z`,class:'chat-series-area '+trend}),svgNode('path',{d:path,class:'price-trend '+trend}));
 }
-async function openTickerChart(symbol) {
-  tickerChart.symbol=symbol;
-  $('ticker-chart-title').textContent=symbol;
-  if(!$('ticker-chart-dialog').open)$('ticker-chart-dialog').showModal();
-  await loadTickerChart();
-}
 async function loadTickerChart() {
   const request=++tickerChart.request;
   tickerChart.data=null;
-  $('ticker-chart').replaceChildren();$('ticker-chart').hidden=true;
+  $('ticker-chart').replaceChildren();$('ticker-chart').setAttribute('hidden','');
   $('ticker-chart-help').hidden=true;$('ticker-ohlc').replaceChildren();
   $('ticker-chart-status').className='';$('ticker-chart-status').textContent='Loading price history…';
   try {
     const data=await api(`price-history?symbol=${encodeURIComponent(tickerChart.symbol)}&timeframe=${encodeURIComponent($('ticker-interval').value)}`);
-    if(request!==tickerChart.request || !$('ticker-chart-dialog').open)return;
+    if(request!==tickerChart.request || !$('position-review-dialog').open || $('ticker-chart-panel').hidden)return;
     if(!data.available || !data.bars?.length)throw new Error(data.error || 'No price history is available for this ticker.');
     tickerChart.data=data;tickerChart.index=data.bars.length-1;
     const from=data.bars[0].c,to=data.bars.at(-1).c;
     $('ticker-chart-status').textContent=`${money(to)} last close · ${signedPct((to/from-1)*100)} over ${data.bars.length} bars · ${data.source} · Last bar ${new Date(data.asOf).toLocaleString()}${data.stale?' · Stale data':''}`;
     $('ticker-chart-status').className=data.stale?'warn':'';
-    $('ticker-chart').hidden=false;$('ticker-chart-help').hidden=false;
+    // SVGElement does not reflect the HTML `hidden` property into its attribute.
+    $('ticker-chart').removeAttribute('hidden');$('ticker-chart-help').hidden=false;
     drawTickerChart();
   } catch(error) {
-    if(request!==tickerChart.request || !$('ticker-chart-dialog').open)return;
+    if(request!==tickerChart.request || !$('position-review-dialog').open || $('ticker-chart-panel').hidden)return;
     $('ticker-chart-status').textContent=error.message;$('ticker-chart-status').className='warn';
   }
 }
@@ -646,10 +638,10 @@ function drawTickerChart() {
   const svg=$('ticker-chart'),bars=tickerChart.data.bars;
   const low=Math.min(...bars.map(b=>b.l)),high=Math.max(...bars.map(b=>b.h));
   const pad=(high-low || high*.01)*.08, min=low-pad,max=high+pad;
-  const narrow=svg.clientWidth<600,canvasWidth=narrow?600:900;
-  const left=narrow?88:66,width=canvasWidth-left-16,top=18,bottom=266,step=width/bars.length;
+  const narrow=svg.clientWidth<600,canvasWidth=Math.max(320,svg.clientWidth || 900),canvasHeight=Math.max(240,svg.clientHeight || 350);
+  const left=narrow?78:66,width=canvasWidth-left-16,top=18,bottom=canvasHeight-84,step=width/bars.length;
   tickerChart.layout={left,width,canvasWidth};
-  svg.setAttribute('viewBox',`0 0 ${canvasWidth} 350`);
+  svg.setAttribute('viewBox',`0 0 ${canvasWidth} ${canvasHeight}`);
   svg.classList.toggle('narrow',narrow);
   const x=i=>left+(i+.5)*step,y=value=>bottom-(value-min)/(max-min)*(bottom-top);
   const nodes=[];
@@ -660,7 +652,7 @@ function drawTickerChart() {
   const volume=Math.max(...bars.map(b=>b.v),1);
   bars.forEach((bar,i)=>{
     const cls=bar.c>=bar.o?'up':'down';
-    nodes.push(svgNode('rect',{x:x(i)-step*.32,y:318-bar.v/volume*32,width:Math.max(.8,step*.64),height:bar.v/volume*32,class:`price-volume ${cls}`}));
+    nodes.push(svgNode('rect',{x:x(i)-step*.32,y:canvasHeight-32-bar.v/volume*32,width:Math.max(.8,step*.64),height:bar.v/volume*32,class:`price-volume ${cls}`}));
     if(tickerChart.mode==='candles'){
       const candle=svgNode('g',{class:`price-candle ${cls}`});
       candle.append(svgNode('line',{x1:x(i),x2:x(i),y1:y(bar.h),y2:y(bar.l)}),svgNode('rect',{x:x(i)-step*.32,y:Math.min(y(bar.o),y(bar.c)),width:Math.max(.8,step*.64),height:Math.max(1,Math.abs(y(bar.o)-y(bar.c)))}));
@@ -671,9 +663,9 @@ function drawTickerChart() {
   for(const i of [...new Set([0,Math.floor((bars.length-1)/2),bars.length-1])]){
     const date=new Date(bars[i].t);
     const label=tickerChart.data.timeframe==='1Day'||narrow?date.toLocaleDateString([],{month:'short',day:'numeric'}):date.toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    nodes.push(svgNode('text',{x:x(i),y:341,'text-anchor':i===0?'start':i===bars.length-1?'end':'middle',class:'price-axis'},label));
+    nodes.push(svgNode('text',{x:x(i),y:canvasHeight-9,'text-anchor':i===0?'start':i===bars.length-1?'end':'middle',class:'price-axis'},label));
   }
-  nodes.push(svgNode('text',{x:left-8,y:306,'text-anchor':'end',class:'price-axis'},'Vol'),svgNode('line',{id:'price-crosshair',y1:top,y2:320,class:'price-crosshair'}));
+  nodes.push(svgNode('text',{x:left-8,y:canvasHeight-44,'text-anchor':'end',class:'price-axis'},'Vol'),svgNode('line',{id:'price-crosshair',y1:top,y2:canvasHeight-30,class:'price-crosshair'}));
   svg.replaceChildren(...nodes);
   svg.setAttribute('aria-label',`${tickerChart.symbol} ${tickerChart.mode}, ${bars.length} ${tickerChart.data.timeframe} bars. Use left and right arrow keys to inspect prices.`);
   $('chart-candles').setAttribute('aria-pressed',String(tickerChart.mode==='candles'));
@@ -698,14 +690,11 @@ $('ticker-chart').onkeydown=event=>{
   if(!tickerChart.data || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
   event.preventDefault();inspectTickerBar(event.key==='Home'?0:event.key==='End'?tickerChart.data.bars.length-1:tickerChart.index+(event.key==='ArrowRight'?1:-1));
 };
-new ResizeObserver(()=>{if($('ticker-chart-dialog').open && tickerChart.data)drawTickerChart();}).observe($('ticker-chart'));
+new ResizeObserver(()=>{if($('position-review-dialog').open && !$('ticker-chart-panel').hidden && tickerChart.data)drawTickerChart();}).observe($('ticker-chart'));
 $('chart-candles').onclick=()=>{tickerChart.mode='candles';drawTickerChart();};
 $('chart-trend').onclick=()=>{tickerChart.mode='trend';drawTickerChart();};
 $('ticker-interval').onchange=loadTickerChart;
 $('refresh-ticker-chart').onclick=loadTickerChart;
-$('close-ticker-chart').onclick=()=>$('ticker-chart-dialog').close();
-$('ticker-chart-dialog').onclose=()=>{tickerChart.request++;};
-$('ask-ticker').onclick=()=>{$('ticker-chart-dialog').close();askAbout(`What is your current view on ${tickerChart.symbol}?`);};
 
 function actionDetails(card, p, includeReason = false) {
   const body = text('div', '', 'action-detail');
@@ -955,7 +944,7 @@ function renderReviewTable(target, list, columnCount, render) {
   const signature = JSON.stringify(list);
   if (reviewSignatures[target] === signature) return;
   $(target).replaceChildren(...list.flatMap(render));
-  if (!list.length) { const row = text('tr',''),cell = text('td',target === 'lesson-list' ? 'No lessons recorded yet.' : 'No requests yet.','table-empty');cell.colSpan = columnCount;row.append(cell);$(target).append(row); }
+  if (!list.length) { const row = text('tr',''),cell = text('td',target === 'lesson-list' ? 'No lessons recorded yet.' : 'No agent tasks yet.','table-empty');cell.colSpan = columnCount;row.append(cell);$(target).append(row); }
   reviewSignatures[target] = signature;
 }
 function historyReference(id) {
@@ -964,14 +953,15 @@ function historyReference(id) {
   return button;
 }
 function renderRequests(list) {
-  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${command.role === 'assistant' ? 'Assistant' : 'Trader'} request: ${command.text}`,
-    [recordTime(command.createdAt),command.role === 'assistant' ? 'Assistant' : 'Trader',command.actorId,text('span',command.status,'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
+  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${command.role === 'assistant' ? 'Assistant' : 'Trader'} task: ${command.text}`,
+    [recordTime(command.createdAt),command.role === 'assistant' ? 'Assistant' : 'Trader',command.actorId,text('span',taskProgress(command.status),'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
       const detail = text('div','','history-detail request-detail');
-      detail.append(historyFacts([['Request',command.text],['Outcome',command.result || 'No outcome recorded yet.']]));
+      detail.append(historyFacts([['Task',command.text],['Mode',command.mode === 'review_only' ? 'Assessment only · trading tools disabled' : 'Normal agent task'],['Outcome',command.result || 'No outcome recorded yet.']]));
+      detail.append(uiButton('Open task trail: tools, decisions, actions and fills',()=>openAgentTask(command.id)));
       if (command.actionIds?.length) { const links = text('div','','record-links');links.append(text('span','Actions'),...command.actionIds.map(historyReference));detail.append(links); }
       const references = text('div','','request-references');
       references.append(text('span',historyDate(command.createdAt)),text('span',`ID ${command.id}`));
-      if (command.parentId) references.append(text('span',`Parent ${command.parentId}`));
+      if (command.parentId) references.append(uiButton(`Parent task ${command.parentId}`,()=>openAgentTask(command.parentId)));
       detail.append(references);return detail;
     }));
 }
@@ -981,9 +971,15 @@ function renderLessons(list) {
   renderReviewTable('lesson-list',list,6,lesson=>expandableRows(`lesson:${lesson.id}`,`Details for lesson: ${lesson.text}`,
     [recordTime(lesson.at),text('span',lesson.active ? 'Active' : 'Retired','badge '+(lesson.active ? 'executed' : '')),rowSummary(lesson.text),lesson.evidenceIds.length ? `${lesson.evidenceIds.length} decision${lesson.evidenceIds.length === 1 ? '' : 's'}` : 'Operator observation',lesson.actorId || '—'],()=>{
       const detail = text('div','','history-detail');
+      detail.append(historyFacts([['Where this lesson applies',lesson.scope || 'Not recorded'],['Supporting decision records',lesson.sampleCount ?? 'Not recorded'],['Confirmed exit records',lesson.completedExitCount ?? 'Not recorded'],['Review date',`${savedTime(lesson.reviewAfter)}${reviewDue(lesson.reviewAfter) ? ' · DUE' : ''}`]]));
+      detail.append(text('p','Decision counts are not independent trades or proof that this lesson improves returns.','review-meta'));
+      if(lesson.policyHash && strategy?.hash && lesson.policyHash!==strategy.hash)detail.append(text('p','Strategy changed since this lesson was recorded.','review-warning'));
       detail.append(text('h3','Lesson'),text('p',lesson.text),text('h3','Supporting evidence'));
       if (lesson.evidenceIds.length) { const links = text('div','','record-links');links.append(...lesson.evidenceIds.map(historyReference));detail.append(links); }
       else detail.append(text('p','Operator observation; no source decisions are linked.'));
+      detail.append(text('h3','Counter evidence'));
+      if(lesson.counterEvidenceIds?.length){const links=text('div','','record-links');links.append(...lesson.counterEvidenceIds.map(historyReference));detail.append(links);}
+      else detail.append(text('p','No counter evidence linked. This does not mean none exists.'));
       detail.append(text('p',lesson.active ? 'Active — available to guide future reviews.' : 'Retired — kept for reference, excluded from future reviews.'));
       const label = text('label','Edit lesson'),editor = text('textarea',lesson.text);editor.value = lesson.text;editor.maxLength = 2000;
       editor.oninput = () => dirtyLessons.add(lesson.id);label.append(editor);detail.append(label);
@@ -1146,6 +1142,262 @@ $('message').onsubmit=attempt(async()=>{
 $('cancel-adopt').onclick=()=>$('adopt').close();
 $('adopt-form').onsubmit=attempt(async()=>{const f=$('adopt-form').elements;await api(`positions/${encodeURIComponent(f.symbol.value)}/adopt`,{stop:Number(f.stop.value),...(f.target.value?{target:Number(f.target.value)}:{})});$('adopt').close();await refresh();});
 $('protection').onsubmit=attempt(async()=>{const f=$('protection').elements;await api(`positions/${encodeURIComponent(f.symbol.value)}/confirm-protection`,{stopOrderId:f.stopOrderId.value,...(f.targetOrderId.value?{targetOrderId:f.targetOrderId.value}:{})});await refresh();});
+// Research comes from saved records. Opening details also loads its price chart.
+let reviewSymbol = '', reviewLoad = 0, inspectorLoad = 0, reviewSubmitting = false, reviewLoading = false, positionTab = 'assessment';
+const savedTime = at => at != null && at !== '' && Number.isFinite(new Date(at).getTime()) ? historyDate(at) : 'Not recorded';
+const reviewDue = at => at && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.now();
+const taskProgress = value => ({queued:'Queued',running:'Working',waiting:'Waiting for actions',completed:'Finished',failed:'Failed',interrupted:'Interrupted · awaiting retry',cancelled:'Cancelled'})[value] || value;
+function uiButton(label, onClick, cls = 'link') {
+  const button = text('button',label,cls);button.type='button';button.onclick=onClick;return button;
+}
+function protectionCell(p) {
+  const cell=text('div','','protection-cell');
+  const label=!p?.known ? 'Coverage unknown' : !p.managed ? 'No AutoTrade stop link' : p.fullyCovered ? 'Linked stop covers shares' : p.coveredQty > 0 ? 'Linked stop covers some shares' : 'No linked stop in engine tick';
+  cell.append(text('span',label,p?.known && p.managed && !p.fullyCovered ? 'down' : ''));
+  cell.append(text('small',`Broker stop: ${p?.stopPrice == null ? '—' : money(p.stopPrice)} · target: ${p?.targetPrice == null ? '—' : money(p.targetPrice)}`));
+  cell.append(text('small',`Intended: ${p?.intendedStop == null ? '—' : money(p.intendedStop)} / ${p?.intendedTarget == null ? '—' : money(p.intendedTarget)}`));
+  cell.title=`Latest engine tick: ${savedTime(p?.checkedAt)}. Only linked AutoTrade orders are counted.`;
+  return cell;
+}
+function reviewSection(parent,title) {
+  const section=text('section','','review-section');section.append(text('h3',title));parent.append(section);return section;
+}
+function positionTabs(data) {
+  const parent=$('position-review-content'),tabs=text('div','','position-tablist'),panels={};
+  tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Position information');
+  const groups=[['assessment','Assessment'],['thesis','Entry thesis'],['protection','Protection'],['context','Market context'],['research',`Research (${data.researchTotal})`]];
+  const buttons=[];
+  function select(key,focus=false) {
+    positionTab=key;
+    for(let i=0;i<groups.length;i++) {
+      const active=groups[i][0]===key;buttons[i].setAttribute('aria-selected',String(active));buttons[i].tabIndex=active?0:-1;
+      panels[groups[i][0]].hidden=!active;
+      if(active && focus)buttons[i].focus();
+    }
+  }
+  for(const [key,label] of groups) {
+    const panel=text('div','','position-tabpanel'),button=uiButton(label,()=>select(key),'position-tab');
+    button.id=`position-tab-${key}`;button.setAttribute('role','tab');button.setAttribute('aria-controls',`position-panel-${key}`);
+    panel.id=`position-panel-${key}`;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);panel.tabIndex=0;
+    panel.hidden=true;buttons.push(button);panels[key]=panel;tabs.append(button);
+  }
+  tabs.onkeydown=event=>{
+    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    const index=buttons.indexOf(document.activeElement);if(index<0)return;
+    event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;
+    select(groups[next][0],true);
+  };
+  parent.append(tabs,...Object.values(panels));select(positionTab);return panels;
+}
+function evidenceLinks(parent, ids, label='Saved observations', taskId=null) {
+  const unique=[...new Set((ids || []).filter(Boolean))];
+  if (!unique.length) return;
+  const details=document.createElement('details'),links=text('div','','review-links');details.className='evidence-references';
+  details.append(text('summary',`${label} (${unique.length})`));
+  unique.forEach((id,index)=>{const button=uiButton(`Observation ${index+1}`,()=>openSavedRecord('evidence',id,0,[],taskId));button.title=id;links.append(button);});
+  details.append(links);parent.append(details);
+}
+function decisionLink(id) {
+  const link=historyReference(id),go=link.onclick;
+  link.onclick=()=>{ $('record-inspector').close();$('position-review-dialog').close();go(); };return link;
+}
+async function openPositionReview(symbol, retainTask=false) {
+  const changed=reviewSymbol!==symbol,token=++reviewLoad;reviewSymbol=symbol;reviewLoading=true;
+  const dialog=$('position-review-dialog');if(!dialog.open)dialog.showModal();
+  $('position-review-title').textContent=`${symbol} · details`;
+  $('position-review-status').textContent='Loading saved records…';
+  $('position-review-overview').replaceChildren();
+  $('position-review-content').replaceChildren();
+  if(changed || !retainTask){
+    positionTab='assessment';tickerChart.symbol=symbol;$('ticker-chart-title').textContent=`${symbol} price history`;
+    void loadTickerChart();dialog.querySelector('.position-window-body').scrollTop=0;
+  }
+  if(changed || !retainTask)$('position-review-task').replaceChildren();
+  $('ask-position-review').disabled=true;
+  try {
+    const data=await api(`positions/${encodeURIComponent(symbol)}/review`);
+    if(token!==reviewLoad || !dialog.open)return;
+    $('position-review-title').textContent=`${symbol} · ${data.held === false ? 'candidate' : 'position'} details`;
+    $('position-review-status').textContent=`${data.held === true ? 'Held' : data.held === false ? 'Not held' : 'Current holdings unknown'} · saved view loaded ${savedTime(data.savedAt)}`;
+    renderPositionReview(data);
+  } catch(error) { if(token===reviewLoad)$('position-review-status').textContent=`Could not load saved review: ${error.message}`; }
+  finally { if(token===reviewLoad){reviewLoading=false;$('ask-position-review').disabled=reviewSubmitting;} }
+}
+function renderPositionReview(data) {
+  const panels=positionTabs(data);
+  const summary=reviewSection($('position-review-overview'),'Position overview'),holding=data.holding;
+  if(holding) {
+    const pnl=holding.price==null ? null : (holding.price-holding.entryPrice)*holding.qty;
+    const pct=holding.price==null || !holding.entryPrice ? null : (holding.price/holding.entryPrice-1)*100;
+    const metrics=historyFacts([['Shares',historyNumber(holding.qty)],['Average cost',historyPrice(holding.entryPrice)],['Latest price',holding.price==null ? 'Unavailable' : historyPrice(holding.price)],['Open P&L',pnl==null ? 'Unavailable' : `${signedMoney(pnl)} ${signedPct(pct)}`]]);
+    metrics.classList.add('position-metrics');metrics.lastElementChild.querySelector('dd').className=direction(pnl);summary.append(metrics);
+    if(holding.stale)summary.append(text('p','The price in the latest engine tick is stale.','review-warning'));
+  } else summary.append(text('p',data.held===false ? 'This symbol is not currently held.' : 'Current shares and prices could not be confirmed from a recent engine tick.'));
+  const assessment=data.managed ? data.review : data.held === false ? data.candidateReview : null;
+  const flags=text('div','','position-flags');
+  flags.append(text('span',data.managed?'Managed by AutoTrade':data.held===true?'Unmanaged holding':data.held===false?'Candidate':'Holdings unknown','badge'));
+  if(assessment)flags.append(text('span',`Saved assessment: ${assessment.decision.toUpperCase()}`,'badge'));
+  if(reviewDue(assessment?.nextReviewAt))flags.append(text('span','Review due','badge pending'));
+  if(assessment?.policyHash && assessment.policyHash!==data.policyHash)flags.append(text('span','Strategy changed','badge pending'));
+  const controls=text('div','','position-controls');
+  controls.append(uiButton('Discuss with agent',()=>{
+    $('position-review-dialog').close();askAbout(`What is your current assessment and plan for ${data.symbol}?`);
+  },''));
+  if(data.held===true && !data.managed)controls.append(uiButton('Adopt holding',()=>{
+    $('position-review-dialog').close();$('adopt-form').elements.symbol.value=data.symbol;$('adopt').showModal();
+  },''));
+  const overviewActions=text('div','','position-overview-actions');overviewActions.append(flags,controls);summary.append(overviewActions);
+  if(data.managed && !holding)summary.append(text('p','A saved AutoTrade management record exists; current holdings remain unverified.','review-meta'));
+  const latest=reviewSection(panels.assessment,'Latest assessment');
+  if (assessment) {
+    latest.append(text('p',assessment.decision.toUpperCase(),'review-verdict'));
+    latest.append(historyFacts([['Recorded',savedTime(assessment.at)],['Next review',assessment.nextReviewAt ? `${savedTime(assessment.nextReviewAt)}${reviewDue(assessment.nextReviewAt) ? ' · DUE' : ''}` : 'No date recorded']]));
+    const assessmentGrid=text('div','','position-assessment-grid'),reason=text('div','','review-card'),unknowns=text('div','','review-card');
+    reason.append(text('h4',data.managed?'What changed':'Why wait or skip'),text('p',assessment.changedEvidence || assessment.reason));
+    unknowns.append(text('h4','Unknowns'));
+    if(assessment.unknowns?.length){const list=text('ul','');for(const u of assessment.unknowns)list.append(text('li',u));unknowns.append(list);}
+    else unknowns.append(text('p',Array.isArray(assessment.unknowns)?'None listed by the trader.':'No separate unknowns list recorded.'));
+    assessmentGrid.append(reason,unknowns);latest.append(assessmentGrid);
+    if(data.managed)latest.append(text('p','This is the saved assessment. Orders and fills are tracked separately.','review-meta'));
+    if(assessment.policyHash && assessment.policyHash!==data.policyHash)latest.append(text('p','Strategy changed since this assessment.','review-warning'));
+    if(data.held==null)latest.append(text('p','Current holdings could not be confirmed from a recent tick.','review-warning'));
+    evidenceLinks(latest,[assessment.snapshotId,...(assessment.evidenceIds || [])]);
+  } else latest.append(text('p','No assessment recorded for this current holding or candidate.'));
+  if(data.candidateReview && assessment!==data.candidateReview) {
+    const old=document.createElement('details');old.append(text('summary','Historical candidate assessment'),text('p',`${data.candidateReview.decision.toUpperCase()} · ${savedTime(data.candidateReview.at)} · ${data.candidateReview.reason}`));
+    evidenceLinks(old,data.candidateReview.evidenceIds);latest.append(old);
+  }
+  if(data.managed || data.held===true) {
+    const entry=reviewSection(panels.thesis,'Why this position was opened');
+    if(data.entry){const link=decisionLink(data.entry.id);link.title=data.entry.id;link.textContent='Open entry decision';entry.append(text('p',data.entry.rationale || 'No entry rationale recorded.'),text('p',`Entry decision recorded ${savedTime(data.entry.at)}`,'review-meta'),link);evidenceLinks(entry,data.entry.observationIds);}
+    else entry.append(text('p','The original entry decision is not linked. Its rationale is unknown.'));
+    const thesis=data.entry?.thesis;
+    if(!thesis)entry.append(text('p','No structured entry thesis recorded.'));
+    else {
+      entry.append(historyFacts([['Setup',thesis.setup],['Planned holding period',`${thesis.horizonDays} days`],['Catalyst risk accepted at entry',thesis.catalystRiskAccepted ? 'Yes' : 'No']]));
+      const checks=data.observation?.data?.thesisStatus?.premises || [];
+      const premises=text('div','','position-premises');
+      for(const premise of thesis.premises || []) {
+        const card=text('div','','review-card'),check=checks.find(p=>p.label===premise.label && p.metric===premise.metric);
+        card.append(text('h4',premise.label),text('span',check?.status || 'unknown','badge '+(check?.status==='supported'?'executed':'waiting')));
+        if(premise.metric!=='qualitative')card.append(text('p',`${premise.metric} ${ {gt:'>',gte:'≥',lt:'<',lte:'≤'}[premise.operator] || '' } ${premise.threshold}`));
+        card.append(text('p',check?.reading?.value==null ? 'No numeric verification saved.' : `Saved reading: ${check.reading.value} · as of ${savedTime(check.reading.asOf)}`,'review-meta'));
+        evidenceLinks(card,premise.evidenceIds,'Entry observations');premises.append(card);
+      }
+      entry.append(premises);
+      entry.append(text('p',`Premise checks come from the saved observation at ${savedTime(data.observation?.recordedAt)}. They are not a fresh assessment or a prediction of profit.`,'review-meta'));
+    }
+    const protection=reviewSection(panels.protection,'Broker protection and intended levels'),p=data.protection;
+    protection.append(protectionCell(p),historyFacts([['Engine tick',savedTime(p.checkedAt)],['Shares covered by linked stop',p.coveredQty==null ? 'Unknown' : `${p.coveredQty} of ${p.holdingQty}`],['Stop order',p.stopOrderId || 'No current linked order verified'],['Target order',p.targetOrderId || 'No current linked order verified']]));
+    protection.append(text('p',!p.known ? 'A recent holdings and orders tick is needed to verify coverage.' : 'Only orders linked to AutoTrade are counted. Other broker orders may exist. Intended levels alone do not prove an order is working.','review-meta'));
+  } else {
+    reviewSection(panels.thesis,'Entry thesis').append(text('p',data.held===false ? 'No current position is held, so there is no current entry thesis.' : 'An entry thesis cannot be linked while current holdings are unknown.'));
+    reviewSection(panels.protection,'Broker protection').append(text('p',data.held===false ? 'No current holding requires position protection.' : 'Current holdings and stop coverage are unknown.'));
+  }
+  const observation=reviewSection(panels.context,'Latest saved context'),obs=data.observation;
+  if(!obs)observation.append(text('p','No saved position/candidate observation found for this lifecycle.'));
+  else {
+    observation.append(historyFacts([['Recorded',savedTime(obs.recordedAt)],['Source',obs.source || 'Not recorded'],['Market data as of',savedTime(obs.asOf)]]));
+    if(!data.managed && data.held!==false)observation.append(text('p','No management record identifies the entry lifecycle. This is a historical observation for the symbol.','review-meta'));
+    evidenceLinks(observation,[obs.id],'Open complete saved context');
+    const c=obs.data || {};
+    if(c.heldDays!=null)observation.append(text('p',`Held ${c.heldDays} days${c.intendedHorizonDays!=null ? ` · planned ${c.intendedHorizonDays} days` : ''}${c.horizonExceeded ? ' · planned period exceeded' : ''}`));
+    for(const [key,label] of [['fundamentalChanges','Changes in fundamentals'],['relative','Performance compared with market / sector'],['liquidity','Liquidity and trading costs'],['forward','Return and risk from the saved price']]) {
+      if(c[key]!=null){const detail=document.createElement('details');detail.append(text('summary',label),typeof c[key]==='object' ? recordedFields(c[key]) : text('p',String(c[key])));observation.append(detail);}
+    }
+    if(c.caveats?.length){const list=text('ul','','review-meta');for(const caveat of c.caveats)list.append(text('li',caveat));observation.append(list);}
+    if(assessment?.snapshotId && assessment.snapshotId!==obs.id)observation.append(text('p','This observation differs from the one used for the assessment above. Open the assessment’s linked snapshot to see what it used.','review-meta'));
+  }
+  const research=reviewSection(panels.research,'Saved research');
+  if(!data.research.length)research.append(text('p','No research sources saved for this symbol.'));
+  else {
+    if(data.researchTotal>data.research.length)research.append(text('p',`Showing the ${data.research.length} most recently saved sources.`,'review-meta'));
+    for(const source of data.research) {
+      const card=document.createElement('details');card.className='review-card research-source';
+      const heading=text('summary',''),title=text('span',source.title || 'Untitled source');heading.append(title,text('small',`${source.publisher || source.source} · ${savedTime(source.publishedAt)}`));
+      if(source.review)heading.append(text('span',source.review.assessment,'badge'));card.append(heading);
+      card.append(historyFacts([['Publisher / provider',source.publisher || source.source],['Published',savedTime(source.publishedAt)],['Event date',savedTime(source.eventAt)],['First saved',savedTime(source.firstSeenAt)]]));
+      const links=text('div','','review-links');
+      if(source.read)links.append(uiButton('Read saved source text',()=>openSavedRecord('source',source.id)));
+      else links.append(text('span','Original text not cached'));
+      try { const url=new URL(source.url);if(url.protocol==='https:' && !url.username && !url.password){const link=text('a','Open publisher ↗');link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';links.append(link);} }catch{}
+      card.append(links);
+      if(source.review)card.append(text('p',`${source.review.assessment.toUpperCase()} · ${savedTime(source.review.at)} · ${source.review.affectedPremise || 'No premise named'}`),text('p',source.review.reason));
+      else card.append(text('p','No interpretation recorded.','review-meta'));
+      research.append(card);
+    }
+    research.append(text('p','Cached text means it can be retrieved; it does not prove the agent read every page.','review-meta'));
+  }
+}
+function beginInspector(title) {
+  const token=++inspectorLoad;$('record-inspector-title').textContent=title;
+  $('record-inspector-content').replaceChildren(text('p','Loading saved record…'));
+  if(!$('record-inspector').open)$('record-inspector').showModal();return token;
+}
+async function openSavedRecord(kind,id,offset=0,previous=[],taskId=null) {
+  const names={evidence:'Saved observation',tool:'Saved tool receipt',source:'Saved source text'},routes={evidence:'evidence',tool:'tool-receipts',source:'source-text'};
+  const token=beginInspector(names[kind]),parent=$('record-inspector-content');
+  try {
+    const row=await api(`${routes[kind]}/${encodeURIComponent(id)}?offset=${offset}`);
+    if(token!==inspectorLoad || !$('record-inspector').open)return;
+    parent.replaceChildren();
+    if(taskId)parent.append(uiButton('← Back to task',()=>openAgentTask(taskId)));
+    parent.append(historyFacts([['Record',id],['Tool / source',row.tool || row.name || names[kind]],['Recorded / started',savedTime(row.recordedAt || row.startedAt || row.fetchedAt)],['Data as of / finished',savedTime(row.asOf || row.finishedAt)]]));
+    if(row.input!=null){const inputs=document.createElement('details');inputs.append(text('summary','Tool input'),recordedFields(row.input));parent.append(inputs);}
+    if(kind==='tool')parent.append(text('p',row.resultSaved ? 'Saved output below. Check its contents for errors; a saved result alone does not establish success.' : 'No tool output was saved.','review-meta'));
+    parent.append(text('pre',row.text,'saved-record-text'));
+    const navigation=text('div','','record-pagination');
+    const back=uiButton('Previous',()=>openSavedRecord(kind,id,previous.at(-1),previous.slice(0,-1),taskId),'');back.disabled=!previous.length;
+    const next=uiButton('Next',()=>openSavedRecord(kind,id,row.nextOffset,[...previous,row.offset],taskId),'');next.disabled=row.nextOffset==null;
+    navigation.append(back,text('span',`${row.totalCharacters ? row.offset+1 : 0}–${row.offset+row.text.length} of ${row.totalCharacters} characters`),next);parent.append(navigation);
+  }catch(error){if(token===inspectorLoad){parent.replaceChildren(text('p',`Saved record unavailable: ${error.message}`));if(taskId)parent.append(uiButton('← Back to task',()=>openAgentTask(taskId)));}}
+}
+async function openAgentTask(id) {
+  const token=beginInspector('Agent task trail'),parent=$('record-inspector-content');
+  try {
+    const data=await api(`agent-tasks/${encodeURIComponent(id)}`);
+    if(token!==inspectorLoad || !$('record-inspector').open)return;
+    parent.replaceChildren();const r=data.request;
+    parent.append(historyFacts([['Task ID',r.id],['Agent',r.role],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',r.mode==='review_only'?'Assessment only · trading tools disabled':'Normal agent task']]));
+    if(r.parentId)parent.append(uiButton(`Parent task: ${r.parentId}`,()=>openAgentTask(r.parentId)));
+    parent.append(text('h3','Instruction'),text('p',r.text),text('h3','Outcome'),text('p',r.result || 'No outcome recorded yet.'));
+    if(data.transcript)parent.append(historyFacts([['Agent run',data.transcript.status],['Model rounds',data.transcript.rounds],['Input / output tokens',`${data.transcript.inTokens} / ${data.transcript.outTokens}`]]));
+    if(data.transcript?.error)parent.append(text('p',data.transcript.error,'review-warning'));
+    const tools=reviewSection(parent,`Tool activity (${data.totals.tools})`);
+    if(!data.tools.length)tools.append(text('p','No tool attempts recorded.'));
+    if(data.totals.tools>data.tools.length)tools.append(text('p',`Showing the latest ${data.tools.length} attempts.`));
+    for(const call of data.tools){const card=text('article','','review-card');card.append(text('h4',call.name),text('p',`${savedTime(call.startedAt)} · ${call.resultSaved?'Output saved':'No output saved'}${call.finishedAt ? ` · finished ${savedTime(call.finishedAt)}` : ''}`,'review-meta'),uiButton('Open input and saved output',()=>openSavedRecord('tool',call.id,0,[],id)));tools.append(card);}
+    const decisions=reviewSection(parent,`Recorded decisions (${data.totals.decisions})`);
+    if(data.totals.decisions>data.decisions.length)decisions.append(text('p',`Showing the latest ${data.decisions.length} decisions.`));
+    if(!data.decisions.length)decisions.append(text('p','No journal decisions linked to this task. Candidate assessments can be found in the review tool’s saved output.'));
+    for(const d of data.decisions){const card=text('article','','review-card');card.append(text('h4',`${d.symbol || 'Portfolio'} · ${d.kind} · ${d.orderStatus || 'Recorded decision'}`),text('p',savedTime(d.at),'review-meta'),text('p',d.rationale),decisionLink(d.id));evidenceLinks(card,d.observationIds,'Saved observations',id);decisions.append(card);}
+    const actions=reviewSection(parent,`Trading actions (${data.actions.length})`);
+    if(!data.actions.length)actions.append(text('p','No trading actions linked to this task.'));
+    for(const a of data.actions){const card=text('article','','review-card');card.append(text('h4',`${a.symbol} · ${a.kind} · ${a.status}`));actionDetails(card,a,true);card.append(decisionLink(a.id));actions.append(card);}
+    if(data.transitions?.length){const history=document.createElement('details');history.append(text('summary',`Action progress history (${data.totals.transitions})`));if(data.totals.transitions>data.transitions.length)history.append(text('p',`Showing the latest ${data.transitions.length} transitions.`));for(const event of data.transitions)history.append(text('p',`${savedTime(event.at)} · ${event.action.symbol} · ${event.transition} · ${event.action.id}`));actions.append(history);}
+    const fills=reviewSection(parent,`Confirmed broker fills (${data.totals.fills})`);
+    if(data.totals.fills>data.fills.length)fills.append(text('p',`Showing the latest ${data.fills.length} fills.`));
+    if(!data.fills.length)fills.append(text('p','No confirmed fills linked to these task orders.'));
+    for(const f of data.fills)fills.append(historyFacts([['Symbol / side',`${f.symbol} / ${f.side}`],['Executed',savedTime(f.at)],['Shares',historyNumber(f.qty)],['Price',historyPrice(f.price)],['Broker order',f.orderId],['Execution ID',f.execId]]));
+    if(data.children.length){const children=reviewSection(parent,'Related agent tasks');for(const child of data.children)children.append(uiButton(`${child.role} · ${taskProgress(child.status)} · ${child.text}`,()=>openAgentTask(child.id)));}
+    parent.append(uiButton('Refresh saved task trail',()=>openAgentTask(id),''));
+  }catch(error){if(token===inspectorLoad)parent.replaceChildren(text('p',`Task trail unavailable: ${error.message}`));}
+}
+$('close-position-review').onclick=()=>$('position-review-dialog').close();
+$('position-review-dialog').onclose=()=>{reviewLoad++;tickerChart.request++;};
+$('refresh-position-review').onclick=()=>openPositionReview(reviewSymbol,true);
+$('close-record-inspector').onclick=()=>$('record-inspector').close();
+$('record-inspector').onclose=()=>{inspectorLoad++;};
+$('ask-position-review').onclick=async()=>{
+  if(reviewSubmitting || !reviewSymbol)return;
+  const symbol=reviewSymbol;reviewSubmitting=true;$('ask-position-review').disabled=true;
+  $('position-review-task').textContent='Queuing assessment…';
+  try {
+    const result=await api(`positions/${encodeURIComponent(symbol)}/review`,{});
+    if(reviewSymbol===symbol){$('position-review-task').replaceChildren(text('span',`${taskProgress(result.status)}${result.paused ? ' · engine paused; review waits until resumed' : ' · assessment only; trading tools disabled'}. `),uiButton('Follow task',()=>openAgentTask(result.requestId)));}
+  }catch(error){if(reviewSymbol===symbol)$('position-review-task').textContent=`Could not queue review: ${error.message}`;}
+  finally{reviewSubmitting=false;$('ask-position-review').disabled=reviewLoading;}
+};
 // A web process may be opened before its engine. Retry read-only initialization,
 // including command discovery and strategy loading; never replay a user submission.
 async function connectDashboard() {

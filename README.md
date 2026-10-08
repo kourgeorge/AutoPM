@@ -56,6 +56,8 @@ For Interactive Brokers, also set `BROKER=ibkr`, `IBKR_HOST`, `IBKR_PORT`, `IBKR
 
 ## Trading lifecycle
 
+See [Trader decision context](DECISION_CONTEXT.md) for thesis checks, position reviews, research sources, evidence snapshots and decision follow-up. Optional SEC research requires `SEC_USER_AGENT` with an application name and contact email.
+
 All entry, exit, and adjustment tools create durable actions. Automatic actions start approved; manual actions wait for your approval. One executor validates and claims the action before contacting the broker.
 
 `pending → approved → executing → submitted / partial → executed`
@@ -146,6 +148,18 @@ The JSON shape is `{ "accountId": "ibkr:paper:ACCOUNT", "fills": [...] }`. Each 
 
 ## Operations
 
+### Saved reviews in the web dashboard
+
+Holdings and watchlist use compact, single-line rows. Select a ticker to open a centered details window: position figures and status at the top, price and volume chart in the middle, and tabs for Assessment, Entry thesis, Protection, Market context, and Research below it. Research sources expand individually. Opening the window loads its historical chart; **Refresh saved view** rereads existing records and the latest engine tick without requesting fresh research or reloading the chart. Unknown or stale coverage stays explicit; an intended stop is not a verified broker order.
+
+**Ask trader to review** queues a task for that symbol. It can fetch research and save assessments, but its tool registry excludes trading, protection changes, event handling, and agent handoffs. Paused engines leave the task queued. Read its outcome through **Follow task**, then refresh the saved view when it finishes.
+
+The Review tab calls agent requests **Agent tasks**. A task trail links saved tool inputs and outputs, journal decisions, action progress, confirmed fills, and related agent tasks. Observation and source text viewers have character pages and read saved content only. Lesson details show scope, supporting and counter decisions, sample counts, and review dates; these counts do not establish that a lesson improves returns.
+
+These views reuse the existing tables. New assessment tasks have an optional `mode: review_only` field in their request record; no database migration is needed for these UI changes.
+
+### Engine operations
+
 - `/api/status` provides detailed health, pause state, account identity, and model usage. Missing holdings/orders are explicitly unavailable, never reported as a flat portfolio.
 - `/api/feed` has durable cursors. SSE clients receive a reset event if their replay window is too large and must fetch the paginated feed. Slow streams close instead of accumulating memory.
 - `AI_MAX_REQUESTS_PER_DAY` defaults to 300 per day (UTC). `AI_MAX_TOKENS` defaults to 4096 and `AI_MAX_TOOL_ROUNDS` to 10. Missing provider token usage is counted explicitly. The request budget still applies when a provider omits token counts. Protective execution continues if the AI budget is exhausted.
@@ -165,4 +179,3 @@ npm run test:browser
 ```
 
 Tests use temporary account directories and fake broker credentials. The isolated replay blocks network requests. Browser checks cover approval, pause, reviewed settings, and mobile overflow; they use installed Chrome on macOS or Playwright Chromium elsewhere. No test places real trades.
-

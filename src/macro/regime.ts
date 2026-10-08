@@ -62,6 +62,7 @@ export interface RegimeClassification {
    * the LLM interprets. Empty on a complete read.
    */
   caveats: string[];
+  observations: Record<string, { seriesId: string; value: number | null; observationDate: string | null; vintageStart: string | null; vintageEnd: string | null; publishedAt: null }>;
   fetchedAt: string;
   source: string;
 }
@@ -76,6 +77,9 @@ export interface RegimeClassification {
  * indicators every five minutes forever.
  */
 interface SeriesResult {
+  observationDate?: string;
+  vintageStart?: string;
+  vintageEnd?: string;
   value: number | null;
   failed: boolean;
 }
@@ -126,7 +130,8 @@ async function fetchFredSeries(seriesId: string, limit = 5): Promise<SeriesResul
       const observations = res.data?.observations ?? [];
       for (const obs of observations) {
         if (obs.value != null && obs.value !== '.') {
-          return { value: parseFloat(obs.value), failed: false };
+          const value = Number(obs.value);
+          if (Number.isFinite(value)) return { value, failed: false, observationDate: obs.date, vintageStart: obs.realtime_start, vintageEnd: obs.realtime_end };
         }
       }
       // FRED answered. Every recent observation is a placeholder, which is a fact about the
@@ -307,7 +312,8 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
     .filter((_, i) => !fetched[i].failed && fetched[i].value === null)
     .map((s) => s.label);
 
-  const yieldSpread = treasury10y !== null && treasury2y !== null
+  const yieldDatesMatch = fetched[3].observationDate != null && fetched[3].observationDate === fetched[4].observationDate;
+  const yieldSpread = treasury10y !== null && treasury2y !== null && yieldDatesMatch
     ? treasury10y - treasury2y
     : null;
 
@@ -331,7 +337,8 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
   // read used to be visible only in the log line, so the model was handed `recovery` with no
   // way to know it was `expansion` with one indicator missing. It reads this; the log box
   // does not talk to it.
-  const caveats: string[] = [];
+  const caveats: string[] = ['Confidence describes a heuristic classification, not a calibrated forecast probability. Each observation date is a reference period; fetchedAt is not its publication time.'];
+  if (treasury10y != null && treasury2y != null && !yieldDatesMatch) caveats.push('Treasury observations have different or unknown reference dates; yield spread is unknown');
   if (!FRED_API_KEY) {
     caveats.push('FRED_API_KEY is not set — no indicator was fetched and the regime is a fallback');
   } else {
@@ -364,6 +371,7 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
       yieldSpread10y2y: yieldSpread,
       vix,
     },
+    observations: Object.fromEntries(SERIES.map((s, i) => [s.label, { seriesId: s.id, value: fetched[i].value, observationDate: fetched[i].observationDate ?? null, vintageStart: fetched[i].vintageStart ?? null, vintageEnd: fetched[i].vintageEnd ?? null, publishedAt: null }])),
     indicatorsMeasured: measured,
     indicatorsTotal: SERIES.length,
     caveats,
@@ -410,5 +418,5 @@ export async function getRegime(forceRefresh = false): Promise<RegimeClassificat
  * will be populated after the first cycle.
  */
 export function getCachedRegime(): RegimeClassification | null {
-  return _cache;
+  return _cache && Date.now() < _cacheExpiresAt ? _cache : null;
 }
