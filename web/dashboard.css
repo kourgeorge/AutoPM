@@ -953,3 +953,7 @@ dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
   .chat-series-footer { font-size: 10px; }
   .chat .composer-footer { font-size: 10px; }
 }
+.label-help { display: inline-flex; align-items: center; gap: 6px; }
+.help-tip { position: relative; display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1px solid currentColor; border-radius: 50%; color: var(--ink-3); font: 600 9px/1 sans-serif; cursor: help; }
+.help-tip::after { content: attr(data-tip); position: absolute; z-index: 20; left: 50%; bottom: calc(100% + 7px); width: max-content; max-width: 220px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); box-shadow: 0 5px 18px #0003; font: 400 11px/1.4 var(--font-sans); white-space: normal; opacity: 0; visibility: hidden; transform: translate(-50%, 3px); transition: opacity .12s ease, transform .12s ease; pointer-events: none; }
+.help-tip:hover::after, .help-tip:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
