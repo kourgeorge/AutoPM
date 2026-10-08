@@ -345,6 +345,19 @@ async function buildPortfolioContext(
       const mgmtAge = ageOf(mgmt.at);
       lines.push(`          Latest hold thesis${mgmtAge ? ` (${mgmtAge} ago)` : ''}: "${mgmt.rationale}"`);
     }
+    // Keep the position's own recent decision trail beside its live state. The account-wide
+    // RECENT DECISIONS block can omit a ticker's latest hold when other symbols are busy.
+    if (e) {
+      const recent = readDecisions({ symbol: e.symbol, limit: 5 }).reverse();
+      if (recent.length > 0) {
+        lines.push('          Latest decisions for this position (newest first):');
+        for (const decision of recent) {
+          lines.push(`            ${decision.at.slice(0, 16)} ${describeDecision(decision)}`);
+        }
+      } else {
+        lines.push('          No prior decisions recorded for this position.');
+      }
+    }
   }
 
   // Counted at the VENUE when exposure answered, not from the snapshot map. The two can differ —
