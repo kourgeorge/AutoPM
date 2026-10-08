@@ -84,6 +84,14 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .workspace-note p { font-size: 11px; line-height: 1.8; color: var(--ink-3); margin: 6px 0 0; }
 .theme-toggle { display: flex; align-items: center; gap: 9px; padding: 12px; border: 0; background: transparent; font-size: 12px; color: var(--ink-2); width: 100%; }
 .theme-toggle svg { width: 16px; height: 16px; }
+body { zoom: var(--text-zoom, 1.1); }
+.text-size { display: flex; align-items: center; gap: 4px; padding: 4px 12px 8px; font-size: 12px; color: var(--ink-2); }
+.text-size > span { flex: 1; white-space: nowrap; }
+.text-size button { padding: 2px 7px; font-size: 11px; }
+.text-size output { min-width: 32px; text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
+@media (max-width: 1000px) { .text-size { flex-direction: column; padding: 4px 0 8px; gap: 4px; }.text-size > span { display: none; } }
+/* Phones are already tight and have pinch-zoom: no control, no scaling. */
+@media (max-width: 600px) { .text-size { display: none; }body { zoom: 1; } }
 .account { border-top: 1px solid var(--line); padding: 20px 9px 0; margin-top: 12px; }
 .account-heading { display: flex; gap: 10px; align-items: center; }
 .account-avatar { display: grid; place-items: center; width: 31px; height: 33px; border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; font-size: 11px; color: var(--ink-2); }
