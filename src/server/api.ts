@@ -190,7 +190,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     const entries = after == null
       ? listRecords<FeedEntry>('activity', { desc: true, limit: 200 }).reverse().map(r => ({ ...r.value, seq: r.seq }))
       : ui.feedAfter(after, 200);
-    return { instanceId, snapshot: { ...ui.snapshot(), tick: getLastTick() ?? ui.snapshot().tick,
+    return { instanceId, snapshot: { ...ui.snapshot(), usage: modelUsage(), tick: getLastTick() ?? ui.snapshot().tick,
       actions: getOpenActions() }, health: serviceStatus(), entries };
   });
 
@@ -203,7 +203,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       env: snap.env,
       automation: automationSummary(),
       trader: { ...trader.status, lane: snap.traderLane, cycle: snap.cycle },
-      concierge: { lane: snap.conciergeLane },
+      assistant: { lane: snap.assistantLane },
       market: { open: snap.venueOpen, session: tick?.session ?? null },
       account: tick?.account ?? null,
       portfolio: tick?.portfolio ?? null,
@@ -354,7 +354,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     if (!text?.trim()) throw new HttpError(400, 'text is required');
     if (text.length > 4000) throw new HttpError(400, 'Messages must be at most 4000 characters');
     if (/^\s*(\/|approve\b|reject\b)/i.test(text)) throw new HttpError(400, 'Use the explicit account controls for commands and approvals');
-    const command = messageService ? messageService(text, OPERATOR) : enqueueRequest('concierge', text, OPERATOR);
+    const command = messageService ? messageService(text, OPERATOR) : enqueueRequest('assistant', text, OPERATOR);
     ui.echoOperator(text);
     return { accepted: true, requestId: command.id, status: command.status };
   });

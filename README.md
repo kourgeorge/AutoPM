@@ -78,7 +78,7 @@ The account owns a saved revision consisting of structured settings and a pinned
 
 The dashboard's **Risk profile** control offers Conservative, Balanced, Aggressive and Custom. Presets fill explicit numeric policy settings; editing one of those values makes the profile Custom. Saving creates the usual account strategy revision and invalidates older approvals. New accounts start Balanced; existing accounts retain their limits and leave new controls unconfigured until the user saves them.
 
-Ask the concierge **“Explain my strategy settings”** for a plain-language overview of the saved profile, risk controls, investment limits, allowed symbols and human approvals. Its read-only `get_strategy_settings` tool reads the current account revision and supplies percentages with consistent units, including explicit “Not configured” labels. Settings changes you ask for in chat are saved immediately with `update_trading_settings` and appear in the strategy change history; approval and automation settings can only be changed in Strategy settings.
+Ask the assistant **“Explain my strategy settings”** for a plain-language overview of the saved profile, risk controls, investment limits, allowed symbols and human approvals. Its read-only `get_strategy_settings` tool reads the current account revision and supplies percentages with consistent units, including explicit “Not configured” labels. Settings changes you ask for in chat are saved immediately with `update_trading_settings` and appear in the strategy change history; approval and automation settings can only be changed in Strategy settings.
 
 | Control | Conservative | Balanced | Aggressive |
 | --- | ---: | ---: | ---: |
@@ -100,7 +100,7 @@ After migration, editing the old YAML or Markdown files does not activate change
 
 ## Agent behavior and audit trail
 
-Trader and concierge use the same bounded turn runner. Tool permissions and input schemas are checked before dispatch. Requests, model turns, tool attempts, and mutation receipts survive restarts; resumed calls use their saved identities. Pausing or stopping interrupts reasoning, while the separate execution loop continues reconciling broker orders and protection. A failed or truncated turn is reported as incomplete, with any already-created actions still visible.
+Trader and assistant use the same bounded turn runner. Tool permissions and input schemas are checked before dispatch. Requests, model turns, tool attempts, and mutation receipts survive restarts; resumed calls use their saved identities. Pausing or stopping interrupts reasoning, while the separate execution loop continues reconciling broker orders and protection. A failed or truncated turn is reported as incomplete, with any already-created actions still visible.
 
 The Requests panel shows who started each request (you or the scheduler), its status, and linked action outcomes. Chat also returns a request ID. Journals distinguish requested quantity, filled quantity, and verified protection; entry intent and the original thesis are retained when later management decisions change stops. Critical incidents remain open after observation, and an acting acknowledgment must link a saved proposal. Failed, expired, or incompletely filled actions return the incident to review.
 

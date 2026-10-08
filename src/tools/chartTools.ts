@@ -1,5 +1,5 @@
 /**
- * Concierge chart tools — publish numeric series for clients to render.
+ * Assistant chart tools — publish numeric series for clients to render.
  *
  * The engine publishes the observations, labels and dates without choosing a layout.
  * Each client renders those observations in its own presentation layer. The model receives

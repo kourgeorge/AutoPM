@@ -14,6 +14,8 @@ const { updateState,getState }=require('../src/state/state');
 const { createAction }=require('../src/core/actions');
 const { closeStorage }=require('../src/core/storage');
 const { recordTick }=require('../src/features/lastTick');
+const { agentContext }=require('../src/core/agentContext');
+const asAssistant = fn => agentContext.run({ role: 'assistant', requestId: 'browser-chat', actorId: 'operator' }, fn);
 
 test('conversation tool calls expand complete inputs and outputs without losing state on updates', async () => {
   require('../src/core/storage').resetStorage();
@@ -21,13 +23,14 @@ test('conversation tool calls expand complete inputs and outputs without losing 
   const ui = new HeadlessUI();
   const input = { symbol: 'IBM', query: '<img src=x onerror=alert(1)>', nested: { flags: [true, false] } };
   const output = JSON.stringify({ points: Array.from({ length: 800 }, (_, i) => ({ value: i, note: 'complete observation' })), end: 'last output value' });
-  const tool = { id: 'chat-tool-1', requestId: 'chat-request', agent: 'concierge', name: 'get_bars', input, output };
+  const tool = { id: 'chat-tool-1', requestId: 'chat-request', agent: 'assistant', name: 'get_bars', input, output };
   ui.echoOperator('How is my portfolio doing?');
-  ui.log('TOOL', '[concierge] get_bars(symbol=IBM) → 800 bars', tool);
-  require('../src/core/agentContext').agentContext.run({ role: 'concierge', requestId: 'chat-request', actorId: 'operator' }, () => ui.reply('Your portfolio is **lightly invested**, with two open positions.\n\nI can walk you through the current exposure and the trader’s latest decision.'));
+  ui.log('TOOL', '[assistant] get_bars(symbol=IBM) → 800 bars', tool);
+  require('../src/core/agentContext').agentContext.run({ role: 'assistant', requestId: 'chat-request', actorId: 'operator' }, () => ui.reply('Your portfolio is **lightly invested**, with two open positions.\n\nI can walk you through the current exposure and the trader’s latest decision.'));
   ui.reply('Paper account connected.');
   ui.log('INFO', 'Market data refreshed.');
   ui.alert('IBM price data is stale.');
+  asAssistant(() => ui.log('INFO', 'Reviewing your portfolio question.'));
   const server = startApiServer({ ui, trader: { status: { paused: false } } });
   let browser;
   try {
@@ -41,17 +44,29 @@ test('conversation tool calls expand complete inputs and outputs without losing 
     await page.goto(base);
     const calls = page.locator('#feed .tool-call'), first = calls.first();
     await expect(first).toBeVisible();
-    await expect(first.locator('summary .tool-call-agent')).toHaveText('Concierge');
-    await expect(first).toHaveAttribute('data-source', 'concierge');
+    await expect(first.locator('summary .tool-call-agent')).toHaveText('Assistant');
+    await expect(first).toHaveAttribute('data-source', 'assistant');
     await expect(first.locator('.tool-call-type')).toHaveText('Tool result');
     await expect(page.locator('#feed .operator .message-author')).toHaveText('You');
-    await expect(page.locator('#feed .reply[data-source="concierge"] .message-author')).toHaveText('Concierge');
-    await expect(page.locator('#feed .reply[data-source="concierge"] .message-type')).toHaveText('Assistant');
-    await expect(page.locator('#feed .reply[data-source="system"] .message-author')).toHaveText('System');
-    await expect(page.locator('#feed .alert .message-author')).toHaveText('System');
+    await expect(page.locator('#feed .reply[data-source="assistant"] .message-author')).toHaveText('Assistant');
+    await expect(page.locator('#feed .reply[data-source="assistant"] .message-type')).toHaveText('Assistant');
+    await expect(page.locator('#live-feed .activity-entry.operator .activity-entity')).toHaveText('You');
+    await expect(page.locator('#live-feed .activity-entry.operator .activity-kind')).toHaveText('[MESSAGE]');
+    await expect(page.locator('#live-feed .activity-entry.tool .activity-entity')).toHaveText('Assistant');
+    await expect(page.locator('#live-feed .activity-entry.tool .activity-kind')).toHaveText('[TOOL]');
+    await expect(page.locator('#feed [data-source="system"]')).toHaveCount(0);
+    for (const message of ['Paper account connected.', 'Market data refreshed.', 'IBM price data is stale.', 'Reviewing your portfolio question.']) {
+      await expect(page.locator('#live-feed')).toContainText(message);
+      await expect(page.locator('#feed')).not.toContainText(message);
+    }
     await expect(page.locator('#feed .log')).toBeHidden();
     await page.locator('#show-log').check();
-    await expect(page.locator('#feed .log .message-author')).toHaveText('System');
+    await expect(page.locator('#feed .log')).toHaveCount(0);
+    await expect(page.locator('#feed')).not.toContainText('Reviewing your portfolio question.');
+    await expect(page.locator('#feed [data-source="system"]')).toHaveCount(0);
+    ui.reply('Account sync complete.');
+    await expect(page.locator('#live-feed')).toContainText('Account sync complete.');
+    await expect(page.locator('#feed')).not.toContainText('Account sync complete.');
     await page.locator('#show-log').uncheck();
     await expect(first.locator('summary .tool-call-params')).toContainText('symbol="IBM"');
     await expect(first.locator('summary .tool-call-params')).toContainText('nested={"flags":[true,false]}');
@@ -72,17 +87,20 @@ test('conversation tool calls expand complete inputs and outputs without losing 
     await expect(calls.last().locator('summary')).toContainText('Error');
     await expect(calls.last().locator('summary .tool-call-agent')).toHaveText('Trader');
     await expect(calls.last()).toHaveAttribute('data-source', 'trader');
+    await expect(page.locator('#live-feed .activity-entry.tool').last().locator('.activity-entity')).toHaveText('Trader');
     await expect(calls.last().locator('summary .tool-call-params')).toHaveText('()');
     assert.equal(await first.evaluate(el => el.open), true, 'new live tool calls preserve expanded calls');
-    ui.log('TOOL', '[concierge] text_tool() → plain text', { agent: 'concierge', name: 'text_tool', input: null, output: 'Plain text\n<output> is literal' });
+    ui.log('TOOL', '[assistant] text_tool() → plain text', { agent: 'assistant', name: 'text_tool', input: null, output: 'Plain text\n<output> is literal' });
     await expect(calls).toHaveCount(3);await calls.last().locator('summary').click();
     await expect(calls.last().locator('pre').last()).toHaveText('Plain text\n<output> is literal');
-    ui.log('TOOL', '[concierge] legacy_tool() → old summary');
+    asAssistant(() => ui.log('TOOL', '[assistant] legacy_tool() → old summary'));
     await expect(calls).toHaveCount(4);await calls.last().locator('summary').click();
-    await expect(calls.last().locator('summary .tool-call-agent')).toHaveText('Concierge');
+    await expect(calls.last().locator('summary .tool-call-agent')).toHaveText('Assistant');
     await expect(calls.last()).toContainText('Full input and output were not saved');
     await page.reload();
     await expect(calls).toHaveCount(4);
+    await expect(page.locator('#feed [data-source="system"]')).toHaveCount(0);
+    await expect(page.locator('#live-feed')).toContainText('Account sync complete.');
     assert.equal(await first.evaluate(el => el.open), false);
     await page.setViewportSize({ width: 390, height: 844 });
     await first.locator('summary').click();
@@ -91,12 +109,127 @@ test('conversation tool calls expand complete inputs and outputs without losing 
     await first.screenshot({ path: '/tmp/autotrade-chat-tool-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await first.screenshot({ path: '/tmp/autotrade-chat-tool-desktop.png' });
+    await page.locator('#show-log').check();
+    const ackInput = { id: 'ema_cross_down:AMZN:test', disposition: 'acknowledged', note: 'AMZN remains above its recorded stop.' };
+    const ackSummary = `[TraderTool] ack ${ackInput.id} — acknowledged: ${ackInput.note}`;
+    agentContext.run({ role: 'trader', requestId: 'ack-request', actorId: 'system' }, () => {
+      ui.log('INFO', ackSummary);
+      ui.log('TOOL', '[trader] ack_event() → acknowledged', { id: 'ack-call', agent: 'trader', name: 'ack_event', input: ackInput, output: '{"ok":true}' });
+    });
+    await expect(calls).toHaveCount(5);
+    await expect(calls.last().locator('.tool-call-name')).toHaveText('ack_event');
+    await expect(calls.last().locator('.tool-call-params')).toContainText(ackInput.note);
+    await expect(page.locator('#feed')).not.toContainText(ackSummary);
+    await expect(page.locator('#live-feed .activity-entry.info').filter({ hasText: ackSummary })).toHaveCount(1);
+    await expect(page.locator('#live-feed .activity-entry.tool').filter({ hasText: 'ack_event' })).toHaveCount(1);
+    await page.reload();
+    await expect(calls).toHaveCount(5);
+    await expect(page.locator('#show-log')).toBeChecked();
+    await expect(page.locator('#feed .log.level-info')).toHaveCount(0);
+    await expect(page.locator('#feed')).not.toContainText(ackSummary);
+    await expect(page.locator('#live-feed')).toContainText(ackSummary);
     await page.getByRole('button', { name: 'Clear conversation', exact: true }).click();
     await expect(calls).toHaveCount(0);
+    await page.locator('#show-log').check();
+    ui.log('INFO', 'Background account refresh complete.');
+    await expect(page.locator('#live-feed')).toContainText('Background account refresh complete.');
+    await expect(page.locator('#welcome')).toBeVisible();
+    await expect(page.locator('#feed .msg')).toHaveCount(0);
     await page.reload();await expect(page.locator('#live')).toHaveText('Live');
     await expect(calls).toHaveCount(0);
+    await expect(page.locator('#feed .msg')).toHaveCount(0);
     assert.deepEqual(errors, []);
   } finally { await browser?.close();await server.close();require('../src/core/storage').resetStorage(); }
+});
+
+test('terminal activity preserves full events and scroll position while bounded scrollback fills', async () => {
+  const storage = require('../src/core/storage');storage.resetStorage();
+  loadPolicy();updateState({ accountId: 'alpaca:paper:terminal-log' });
+  const ui = new HeadlessUI();
+  for (let index = 0; index < 40; index++) storage.appendActivity({
+    at: new Date(Date.now() - (40 - index) * 1000).toISOString(), kind: 'log', level: 'INFO', text: `Market update ${index + 1}`,
+  });
+  const server = startApiServer({ ui, trader: { status: { paused: false } } });
+  let browser;
+  try {
+    await new Promise(resolve => setTimeout(resolve, 30));
+    const base = 'http://127.0.0.1:' + server.address().port;
+    const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const errors = [];page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/*', route => route.request().url().startsWith(base) ? route.continue() : route.abort());
+    await page.goto(base);
+    const feed = page.locator('#live-feed'), rows = feed.locator('.activity-entry');
+    const bottomGap = () => feed.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight);
+    await expect(rows).toHaveCount(40);
+    await expect(page.locator('#live')).toHaveText('Live');
+    await expect(rows.first().locator('time')).toHaveText(/^\d{2}:\d{2}:\d{2}$/);
+    await expect(rows.first().locator('.activity-entity')).toHaveText('System');
+    await expect(rows.first().locator('.activity-kind')).toHaveText('[INFO]');
+    assert.ok(await bottomGap() < 2, 'initial history follows the newest event');
+    ui.log('WARN', 'Quote is stale; waiting for a fresh price.');
+    await expect(rows).toHaveCount(41);
+    await expect(rows.last()).toContainText('[WARN]');
+    assert.ok(await bottomGap() < 2, 'live events follow the bottom');
+
+    await feed.evaluate(el => { el.scrollTop = 0; });
+    const multiline = 'Review started\nChecking holdings\nChecking orders\nChecking limits\n<img src=x onerror=alert(1)>\nReview complete';
+    ui.reply(multiline);
+    await expect(rows).toHaveCount(42);
+    assert.equal(await feed.evaluate(el => el.scrollTop), 0, 'new events leave older lines in place');
+    await expect(rows.last().locator('p')).toHaveText(multiline);
+    await expect(rows.last().locator('img')).toHaveCount(0);
+    assert.ok(await rows.last().locator('p').evaluate(el => el.clientHeight >= el.scrollHeight), 'multiline events are fully visible without clamping');
+
+    // Replay batches exercise the same renderer used for startup and reconnect catch-up.
+    const appendBatch = count => page.evaluate(count => {
+      const after = cursor;
+      const samples = [['INFO', 'Market snapshot refreshed.'], ['INFO', 'Checking portfolio exposure.'],
+        ['TOOL', '[trader] get_positions() → 2 positions'], ['INFO', 'Risk limits checked.'],
+        ['TRADE', 'Broker order confirmed.'], ['WARN', 'Waiting for a fresh quote.']];
+      addEntries(Array.from({ length: count }, (_, index) => {
+        const [level, body] = samples[index % samples.length];
+        return { seq: after + index + 1, at: new Date().toISOString(), kind: 'log', level, text: `${body} Event ${after + index + 1}` };
+      }));
+    }, count);
+    await appendBatch(950);
+    await expect(rows).toHaveCount(992);
+    await feed.evaluate(el => { el.scrollTop = 600; });
+    const visibleLine = () => feed.evaluate(el => {
+      const top = el.getBoundingClientRect().top;
+      const row = [...el.querySelectorAll('.activity-entry')].find(row => row.getBoundingClientRect().top >= top);
+      return { seq: row.dataset.seq, offset: row.getBoundingClientRect().top - top };
+    });
+    const beforeTrim = await visibleLine();
+    await appendBatch(20);
+    await expect(rows).toHaveCount(1000);
+    const afterTrim = await visibleLine();
+    assert.equal(afterTrim.seq, beforeTrim.seq, 'trimming old scrollback preserves the line being read');
+    assert.ok(Math.abs(afterTrim.offset - beforeTrim.offset) < 1, 'the visible line stays at the same position');
+    const sequences = await rows.evaluateAll(rows => rows.map(row => Number(row.dataset.seq)));
+    assert.equal(new Set(sequences).size, sequences.length);
+    assert.deepEqual(sequences, [...sequences].sort((a, b) => a - b));
+    await feed.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await appendBatch(1);
+    assert.ok(await bottomGap() < 2, 'returning to the bottom resumes following');
+    await page.getByRole('button', { name: 'Clear conversation', exact: true }).click();
+    await expect(rows).toHaveCount(1000);
+
+    await page.locator('#live-activity').screenshot({ path: '/tmp/autotrade-terminal-log-desktop.png' });
+    await page.getByRole('button', { name: 'Switch to light theme' }).click();
+    await page.locator('#live-activity').screenshot({ path: '/tmp/autotrade-terminal-log-light.png' });
+    await page.getByRole('button', { name: 'Switch to dark theme' }).click();
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await feed.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      assert.ok(await feed.evaluate(el => el.scrollWidth <= el.clientWidth), 'activity columns fit the mobile log viewport');
+      await page.locator('#live-activity').screenshot({ path: `/tmp/autotrade-terminal-log-${width}.png` });
+      await page.locator('.chat-heading').screenshot({ path: `/tmp/autotrade-chat-heading-${width}.png` });
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser?.close();await server.close();storage.resetStorage(); }
 });
 
 test('dashboard without login: approvals, saved strategy, pause and mobile layout',async()=>{
@@ -114,7 +247,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
   require('../src/features/alertLog').appendAlertLog(event);require('../src/features/alertLog').appendAlertLog(resolved);
   require('../src/core/storage').saveValue('eventRegistry',{pending:[event],live:[event]});
   const usageDay=new Date().toISOString().slice(0,10);
-  require('../src/core/storage').saveValue('modelUsage:'+usageDay,{day:usageDay,requests:3,inputTokens:1400,outputTokens:100,missingUsage:0,byAgent:{trader:{requests:2,inputTokens:1200,outputTokens:80,missingUsage:0},concierge:{requests:1,inputTokens:200,outputTokens:20,missingUsage:0}}});
+  require('../src/core/storage').saveValue('modelUsage:'+usageDay,{day:usageDay,requests:3,inputTokens:1400,outputTokens:100,missingUsage:0,byAgent:{trader:{requests:2,inputTokens:1200,outputTokens:80,missingUsage:0},assistant:{requests:1,inputTokens:200,outputTokens:20,missingUsage:0}}});
   const tick=(equity,price)=>recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,positions:{MSFT:{symbol:'MSFT',qty:3,entryPrice:410,price,stopLevel:null}},orders:[],watchlist:{AAPL:{symbol:'AAPL',price:100}},account:{equity,cash:98000},portfolio:{},session:'open'});
   tick(100000,415);
 
@@ -168,7 +301,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('html')).toHaveAttribute('data-theme','light');
     await page.getByRole('button',{name:'Switch to dark theme'}).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
-    ui.reply('Your account is **ready for review**.\n\n### Portfolio context\n- Check `MSFT` concentration.\n- <img src=x onerror=alert(1)>');
+    asAssistant(() => ui.reply('Your account is **ready for review**.\n\n### Portfolio context\n- Check `MSFT` concentration.\n- <img src=x onerror=alert(1)>'));
     await expect(page.locator('#welcome')).toBeHidden();
     await expect(page.locator('.reply-body strong')).toHaveText('ready for review');
     await expect(page.locator('.reply-body h3')).toHaveText('Portfolio context');
@@ -342,7 +475,10 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(menu).toBeHidden();
     await input.press('Enter');
     await expect(input).toHaveValue('');
-    await expect(page.locator('#feed')).toContainText('Lessons requested: 2');
+    await expect(page.locator('#live-feed')).toContainText('Lessons requested: 2');
+    await expect(page.locator('#feed')).not.toContainText('Lessons requested: 2');
+    await expect(page.locator('#live-feed .activity-entry.operator').last().locator('.activity-entity')).toHaveText('You');
+    await expect(page.locator('#live-feed .activity-entry.operator').last().locator('.activity-kind')).toHaveText('[COMMAND]');
     assert.equal(commandRuns.at(-1),'lessons 2');
     await input.fill('/pos');
     await expect(menu.getByRole('option')).toHaveCount(1);
@@ -353,7 +489,8 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await menu.getByRole('option').click();
     await expect(input).toHaveValue('/positions ');
     await input.press('Enter');
-    await expect(page.locator('#feed')).toContainText('Positions command complete.');
+    await expect(page.locator('#live-feed')).toContainText('Positions command complete.');
+    await expect(page.locator('#feed')).not.toContainText('Positions command complete.');
     await expect(input).toHaveValue('');
     await input.fill('/');
     await input.press('ArrowUp');
@@ -366,12 +503,12 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await input.press('Enter');
     await expect(page.locator('#notice')).toContainText('Unknown or unavailable command');
     await expect(input).toHaveValue('/unknown');
-    assert.equal(require('../src/core/requests').listRequests().length,queuedBefore,'slash commands never enter the concierge queue');
+    assert.equal(require('../src/core/requests').listRequests().length,queuedBefore,'slash commands never enter the assistant queue');
     await input.fill('/');
     await page.locator('#activity').screenshot({path:'/tmp/autotrade-slash-commands-desktop.png'});
     await input.press('Tab');
     await page.screenshot({path:'/tmp/autotrade-desktop.png',fullPage:true});
-    ui.showChart({kind:'price',label:'IBM',values:[232.76,227.21,225,220.56,219.45,219.45,225,222.78,221.67,221.67,220.56,219.45],dates:['2026-09-23','2026-09-24','2026-09-25','2026-09-28','2026-09-29','2026-09-30','2026-10-01','2026-10-02','2026-10-05','2026-10-06','2026-10-07','2026-10-08']});
+    asAssistant(() => ui.showChart({kind:'price',label:'IBM',values:[232.76,227.21,225,220.56,219.45,219.45,225,222.78,221.67,221.67,220.56,219.45],dates:['2026-09-23','2026-09-24','2026-09-25','2026-09-28','2026-09-29','2026-09-30','2026-10-01','2026-10-02','2026-10-05','2026-10-06','2026-10-07','2026-10-08']}));
     await expect(page.locator('.chat-series-plot .price-trend')).toHaveCount(1);
     assert.ok((await page.locator('.chat-series-plot').boundingBox()).width > 500,'short histories fill the desktop chat width');
     await page.locator('.chat-series-chart').screenshot({path:'/tmp/autotrade-chat-chart-desktop.png'});
@@ -416,7 +553,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(mobile.locator('#message-text')).toHaveValue('/positions ');
     await expect(mobile.getByRole('listbox',{name:'Commands'})).toBeHidden();
     await mobileContext.close();
-    ui.showChart({kind:'comparison',a:{label:'IBM',values:[100,120,110]},b:{label:'SPY',values:[100,95,100]}});
+    asAssistant(() => ui.showChart({kind:'comparison',a:{label:'IBM',values:[100,120,110]},b:{label:'SPY',values:[100,95,100]}}));
     await expect(page.locator('.chat-series-plot .price-trend')).toHaveCount(3);
     assert.deepEqual(await page.locator('.chat-series-plot').nth(1).locator('.price-axis').allTextContents(),await page.locator('.chat-series-plot').nth(2).locator('.price-axis').allTextContents(),'comparison charts share a percent scale');
     assert.deepEqual(errors,[]);

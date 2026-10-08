@@ -23,6 +23,7 @@ import {
   renderStatus,
   renderStripExpanded,
   type Cycle,
+  type DailyUsage,
   type DashboardModel,
   type Environment,
   type EventRow,
@@ -248,8 +249,9 @@ export class TerminalUI implements OperatorUI {
   private venueOpen: boolean | null = null;
   private env: Environment = { broker: '', venue: '', provider: '', model: '' };
   private traderLane: Lane = { state: 'starting' };
-  private conciergeLane: Lane = { state: 'idle' };
+  private assistantLane: Lane = { state: 'idle' };
   private cycleInfo: Cycle = { n: 0 };
+  private dailyUsage?: DailyUsage;
   /** Advances once a second. Drives the spinner and the session blink — nothing else. */
   private frame = 0;
   private paintFailed = false;
@@ -418,8 +420,8 @@ export class TerminalUI implements OperatorUI {
 
     this.input.onSubmit((line) => {
       if (!this.remote) this.appendUserMessage(line);
-      // Matched HERE, before anything reaches the concierge: the decision to act on an action
-      // must not pass through a language model, and the concierge has no decide tool precisely
+      // Matched HERE, before anything reaches the assistant: the decision to act on an action
+      // must not pass through a language model, and the assistant has no decide tool precisely
       // so it cannot answer on the operator's behalf. Anything that doesn't match the command
       // syntax falls through to the conversation exactly as it always did.
       const trimmed = line.trim();
@@ -610,8 +612,8 @@ export class TerminalUI implements OperatorUI {
     this.paint();
   }
 
-  setConciergeActivity(lane: Lane): void {
-    this.conciergeLane = lane;
+  setAssistantActivity(lane: Lane): void {
+    this.assistantLane = lane;
     this.paint();
   }
 
@@ -620,11 +622,16 @@ export class TerminalUI implements OperatorUI {
     this.paint();
   }
 
+  setDailyUsage(usage: DailyUsage): void {
+    this.dailyUsage = usage;
+    this.paint();
+  }
+
   /**
    * Back-compat shim for callers that still push a bare string.
    *
    * It lands on the TRADER lane, which is where every historical caller meant it to go — and
-   * why it is a shim rather than the API: the concierge writing 'ready' used to erase
+   * why it is a shim rather than the API: the assistant writing 'ready' used to erase
    * 'sleeping — next cycle in 7 min', because one line held two agents' states.
    */
   setStatus(text: string): void {
@@ -648,7 +655,7 @@ export class TerminalUI implements OperatorUI {
   }
 
   /**
-   * Never falls through to the concierge, even for an unknown name: a mistyped `/pasue` sent on
+   * Never falls through to the assistant, even for an unknown name: a mistyped `/pasue` sent on
    * as chat would be answered by a model that cannot pause anything, which reads as if it had.
    */
   private runCommand(line: string): void {
@@ -684,7 +691,7 @@ export class TerminalUI implements OperatorUI {
         });
         const width = Math.max(...rows.map((r) => r.usage.length)) + 2;
         this.reply([
-          'Commands (anything not starting with / goes to the concierge):',
+          'Commands (anything not starting with / goes to the assistant):',
           '',
           ...rows.map((r) => `${r.usage.padEnd(width)}${r.text}`),
           '',
@@ -810,7 +817,7 @@ export class TerminalUI implements OperatorUI {
   echoOperator(msg: string): void { this.appendUserMessage(msg); }
 
   private appendUserMessage(msg: string): void {
-    // Trimmed for the ECHO only: the full text is what reaches the concierge (`onSubmit`, above),
+    // Trimmed for the ECHO only: the full text is what reaches the assistant (`onSubmit`, above),
     // and what was left out is always stated rather than quietly dropped.
     const lines = msg.split('\n');
     const extra = lines.length - USER_ECHO_LINES;
@@ -859,7 +866,7 @@ export class TerminalUI implements OperatorUI {
   /**
    * The single door to the log box, so that the blank rows framing a chat block can never
    * double up — the operator's trailing blank and the reply's leading one are the same row, and
-   * the concierge emits one `reply()` per content block.
+   * the assistant emits one `reply()` per content block.
    */
   private emit(line: string): void {
     if (line === '') {
@@ -1062,8 +1069,9 @@ export class TerminalUI implements OperatorUI {
       tick: this.tick,
       venueOpen: this.venueOpen,
       trader: this.traderLane,
-      concierge: this.conciergeLane,
+      assistant: this.assistantLane,
       cycle: this.cycleInfo,
+      usage: this.dailyUsage,
       now: Date.now(),
       frame: this.frame,
       glyphs: this.glyphs,

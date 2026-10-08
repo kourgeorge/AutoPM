@@ -7,7 +7,7 @@ const { ui } = require('../../src/ui/ui');
 const { registerOperatorCommands } = require('../../src/core/operatorCommands');
 
 async function run() {
-  ui.onMessage(() => assert.fail('Slash commands must not reach the concierge'));
+  ui.onMessage(() => assert.fail('Slash commands must not reach the assistant'));
   registerOperatorCommands({ status: { paused: true } });
   const type = async bytes => { process.stdin.emit('data', Buffer.from(bytes)); await nextTurn(); };
   const capture = () => stripVTControlCharacters(ui.screen.screenshot(0, 100, 0, 28));
@@ -26,7 +26,7 @@ async function run() {
   await type('\r');
   assert.equal(ui.input.value, '');
   assert.match(capture(), /Commands \(anything not starting/);
-  assert.match(capture(), /with \/ goes to the concierge/);
+  assert.match(capture(), /with \/ goes to the assistant/);
 }
 
 run().then(() => { ui.close(); process.exit(0); }, error => {

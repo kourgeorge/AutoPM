@@ -351,7 +351,7 @@ errors the mean return sits above **zero**, not above the sample's own mean, bec
 is an artificially low bar. `perTradeSharpe` is documented as *not* the Sharpe ratio: there is no
 time in it, so an hourly and a weekly strategy score identically.
 
-**Tool `get_benchmark(days?)`**, added to the concierge's shared set too. PLAYBOOK.md ADAPTATION:
+**Tool `get_benchmark(days?)`**, added to the assistant's shared set too. PLAYBOOK.md ADAPTATION:
 *the benchmark is the scoreboard, the scorecard explains it* — plus the line that losing to the
 index while making money is the finding most worth a `write_lesson`, since it is invisible without
 the call.

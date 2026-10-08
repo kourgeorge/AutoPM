@@ -30,13 +30,13 @@ const lessons = from('journal/lessons');
 const events = from('features/eventBus');
 const eventLog = from('features/alertLog');
 const { ui } = from('ui/ui');
-const { ConciergeAgent } = from('agents/concierge');
+const { AssistantAgent } = from('agents/assistant');
 const { Trader, buildCycleContext } = from('agents/trader');
 const { logger } = from('core/logger');
 for (const name of ['info', 'warn', 'error', 'trade', 'tool']) logger[name] = () => {};
 ui.reply = () => {};
 ui.replyChart = () => {};
-ui.setConciergeActivity = () => {};
+ui.setAssistantActivity = () => {};
 traderTools.getAccountSnapshot = async () => ({ equity: 10000, cash: 10000, buyingPower: 10000, startOfDayEquity: 10000, dailyPnL: 0, dailyPnLPct: 0, maxPositions: 5 });
 traderTools.getMarketStatusSnapshot = async () => ({ isOpen: true, etTime: '10:00', minutesUntilChange: 390, changeLabel: 'close' });
 traderTools.brokerOrderView = async () => ({ orders: [], byPosition: [], ordersWithoutPosition: [], stopMismatches: [] });
@@ -59,32 +59,32 @@ beforeEach(() => {
 });
 after(() => storage.closeStorage());
 
-test('concierge rejects undeclared mutations and malformed tool inputs', async () => {
+test('assistant rejects undeclared mutations and malformed tool inputs', async () => {
   let handoffs = 0;
-  const concierge = new ConciergeAgent(() => { handoffs++; });
+  const assistant = new AssistantAgent(() => { handoffs++; });
   for (const name of ['execute_exit','execute_entry','write_lesson','ack_event']) {
-    const result = JSON.parse(await concierge.executeTool(name, { symbol: 'AAPL' }));
+    const result = JSON.parse(await assistant.executeTool(name, { symbol: 'AAPL' }));
     assert.match(result.error, /not permitted/);
   }
   for (const input of [null, {}, { message: 42 }, { message: 'x', extra: true }]) {
-    assert.equal(JSON.parse(await concierge.executeTool('send_to_trader', input)).ok, false);
+    assert.equal(JSON.parse(await assistant.executeTool('send_to_trader', input)).ok, false);
   }
   assert.equal(handoffs, 0);
   assert.equal(lessons.readLessons().length, 0);
 });
 
-test('concierge settings reads are fresh, local and unaffected by conflicting playbook prose', async () => {
+test('assistant settings reads are fresh, local and unaffected by conflicting playbook prose', async () => {
   let handoffs = 0;
-  const concierge = new ConciergeAgent(() => { handoffs++; });
+  const assistant = new AssistantAgent(() => { handoffs++; });
   const before = policy.getPolicySnapshot();
-  const original = JSON.parse(await concierge.executeTool('get_strategy_settings', {}));
+  const original = JSON.parse(await assistant.executeTool('get_strategy_settings', {}));
   assert.equal(original.profile, 'Balanced');
   assert.equal(original.risk.riskPerTradePctOfEquity, 0.5);
   const next = structuredClone(before.policy);
   next.risk.riskPerTradePct = 0.35;
   next.automation.level.entry = 'auto';
   const changed = policy.saveStrategy(next, before.hash, 'alice', before.playbook + '\nLegacy note: risk per trade is 9%.');
-  const fresh = JSON.parse(await concierge.executeTool('get_strategy_settings', {}));
+  const fresh = JSON.parse(await assistant.executeTool('get_strategy_settings', {}));
   assert.equal(fresh.profile, 'Custom');
   assert.equal(fresh.risk.riskPerTradePctOfEquity, 0.35);
   assert.equal(fresh.strategyHash, changed.hash);
@@ -92,33 +92,33 @@ test('concierge settings reads are fresh, local and unaffected by conflicting pl
   assert.doesNotMatch(fresh.summary, /9%/);
   assert.equal(policy.getPolicyHash(), changed.hash);
   assert.equal(handoffs, 0);
-  assert.equal(JSON.parse(await concierge.executeTool('get_strategy_settings', { activate: true })).ok, false);
+  assert.equal(JSON.parse(await assistant.executeTool('get_strategy_settings', { activate: true })).ok, false);
 });
 
-test('concierge saves requested settings changes and refuses invalid ones', async () => {
-  const concierge = new ConciergeAgent(() => assert.fail('Settings changes must not wake the trader'));
+test('assistant saves requested settings changes and refuses invalid ones', async () => {
+  const assistant = new AssistantAgent(() => assert.fail('Settings changes must not wake the trader'));
   const before = policy.getPolicySnapshot();
   const values = { riskPerTradePct: 0.75, targetVolatilityPct: 20, minRewardRisk: 2.5, maxSectorWeightPct: 20 };
-  const result = JSON.parse(await concierge.executeTool('update_trading_settings', values));
+  const result = JSON.parse(await assistant.executeTool('update_trading_settings', values));
   assert.equal(result.ok, true);
   assert.ok(result.applied.some(line => /riskPerTradePct: 0\.5 → 0\.75/.test(line)));
   assert.equal(result.saved.risk.riskPerTradePctOfEquity, 0.75);
   assert.notEqual(policy.getPolicyHash(), before.hash);
-  const fresh = JSON.parse(await concierge.executeTool('get_strategy_settings', {}));
+  const fresh = JSON.parse(await assistant.executeTool('get_strategy_settings', {}));
   assert.equal(fresh.risk.riskPerTradePctOfEquity, 0.75);
   assert.equal(fresh.risk.annualizedPortfolioVolatilityTargetPct, 20);
   assert.deepEqual(policy.getPolicy().automation, before.policy.automation);
   const hash = policy.getPolicyHash();
-  assert.equal(JSON.parse(await concierge.executeTool('update_trading_settings', { riskPerTradePct: 50 })).ok, false);
+  assert.equal(JSON.parse(await assistant.executeTool('update_trading_settings', { riskPerTradePct: 50 })).ok, false);
   assert.equal(policy.getPolicyHash(), hash);
   assert.equal(commands.pendingRequests('trader').length, 0);
   policy.saveStrategy(before.policy, hash, 'test', before.playbook);
 });
 
 test('a settings explanation reaches the account conversation without a trader handoff', async () => {
-  const concierge = new ConciergeAgent(() => assert.fail('No trader action was requested'));
+  const assistant = new AssistantAgent(() => assert.fail('No trader action was requested'));
   let rounds = 0;
-  concierge.provider = { chat: async request => {
+  assistant.provider = { chat: async request => {
     assert.match(request.systemPrompt, /Read get_strategy_settings afresh/);
     assert.match(request.systemPrompt, /Settings questions do not wake the trader/);
     assert.ok(request.tools.some(tool => tool.name === 'get_strategy_settings'));
@@ -129,14 +129,14 @@ test('a settings explanation reaches the account conversation without a trader h
     return { ...textResponse(), content: [{ type: 'text', text: settings.summary }] };
   } };
   const hash = policy.getPolicyHash();
-  const receipt = concierge.handleMessage('Explain my strategy settings clearly', 'alice');
-  await concierge.active;
+  const receipt = assistant.handleMessage('Explain my strategy settings clearly', 'alice');
+  await assistant.active;
   const command = commands.getRequest(receipt.id);
   assert.equal(command.status, 'completed');
   assert.match(command.result, /Saved strategy: Balanced/);
   assert.match(command.result, /0.5% of equity at the planned stop/);
   assert.match(command.result, /Human approval|human approval/);
-  assert.ok(storage.readActivity(0, 100).some(entry => entry.kind === 'reply' && entry.source === 'concierge' && entry.text.includes(command.result)));
+  assert.ok(storage.readActivity(0, 100).some(entry => entry.kind === 'reply' && entry.source === 'assistant' && entry.text.includes(command.result)));
   commands.updateRequest(commands.enqueueRequest('trader', 'Review', 'system').id, { status: 'completed', result: 'Review completed; no trade action was queued.' });
   assert.ok(!storage.readActivity(0, 1000).some(entry => entry.kind === 'reply' && /no trade action/.test(entry.text)), 'trader results are not chat replies');
   assert.ok(storage.readActivity(0, 1000).some(entry => entry.kind === 'log' && entry.source === 'trader' && /no trade action/.test(entry.text)));
@@ -144,13 +144,13 @@ test('a settings explanation reaches the account conversation without a trader h
   assert.equal(commands.pendingRequests('trader').length, 0);
 });
 
-test('a failed chart returns a paired error and the concierge can answer the next message', async () => {
+test('a failed chart returns a paired error and the assistant can answer the next message', async () => {
   let rounds = 0;
   const trader = new Trader();
-  const concierge = new ConciergeAgent(message => trader.wake(message));
+  const assistant = new AssistantAgent(message => trader.wake(message));
   const realChart = chartTools.executeChartTool;
   chartTools.executeChartTool = async () => { throw new Error('Chart unavailable'); };
-  concierge.provider = { chat: async request => {
+  assistant.provider = { chat: async request => {
     if (rounds++ === 0) return toolResponse([['send_to_trader', { message: 'Review AAPL' }], ['show_price_history', { symbol: 'AAPL' }]]);
     const assistant = request.messages.find(m => m.role === 'assistant');
     assert.equal(assistant.content.filter(b => b.type === 'tool_use').length, 2);
@@ -159,12 +159,12 @@ test('a failed chart returns a paired error and the concierge can answer the nex
     return textResponse();
   } };
   try {
-    const first = concierge.handleMessage('Review AAPL and chart it', 'alice');
-    await concierge.active;
+    const first = assistant.handleMessage('Review AAPL and chart it', 'alice');
+    await assistant.active;
     assert.equal(commands.getRequest(first.id).status, 'completed');
     assert.equal(commands.pendingRequests('trader')[0].actorId, 'alice');
-    const second = concierge.handleMessage('What happened?', 'bob');
-    await concierge.active;
+    const second = assistant.handleMessage('What happened?', 'bob');
+    await assistant.active;
     assert.equal(commands.getRequest(second.id).status, 'completed');
     // The second chat continues from the first chat's saved turn.
     const firstTurn = storage.readRecord('transcripts', first.id).messages, secondTurn = storage.readRecord('transcripts', second.id).messages;
@@ -204,7 +204,7 @@ test('full tool receipts survive reload while model context stays bounded', asyn
   const output = JSON.stringify({ observations: 'long observation '.repeat(1500), end: 'complete' });
   let executions = 0, modelCalls = 0;
   const registry = new ToolRegistry([{ name: 'read', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { executions++;return output; });
-  const run = await runAgentLoop({ context: { requestId: 'full-receipt', actorId: 'test', role: 'concierge' }, registry,
+  const run = await runAgentLoop({ context: { requestId: 'full-receipt', actorId: 'test', role: 'assistant' }, registry,
     provider: { chat: async request => {
       if (modelCalls++ === 0) return toolResponse([['read', {}]]);
       const receipt = request.messages.flatMap(m => m.content).find(b => b.type === 'tool_result');
@@ -340,7 +340,7 @@ test('chat budget exhaustion preserves a separate allocation for trader work', a
   try {
     const provider = withModelBudget({ chat: async () => textResponse() });
     const params = { systemPrompt: '', messages: [], tools: [], maxTokens: 100 };
-    await agentContext.run({ role: 'concierge', actorId: 'alice', requestId: 'budget' }, async () => {
+    await agentContext.run({ role: 'assistant', actorId: 'alice', requestId: 'budget' }, async () => {
       await provider.chat(params); await provider.chat(params);
       await assert.rejects(() => provider.chat(params), /reserved for the trader/);
     });
@@ -370,7 +370,7 @@ test('a model timeout fails the turn with a plain message instead of interruptin
   const { SLOW_MODEL_MESSAGE } = from('agents/agentLoop');
   const registry = new ToolRegistry([], async () => '{}');
   const timeout = () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); };
-  const result = await runAgentLoop({ context: { role: 'concierge', requestId: 'slow-model', actorId: 'alice' }, registry,
+  const result = await runAgentLoop({ context: { role: 'assistant', requestId: 'slow-model', actorId: 'alice' }, registry,
     provider: { chat: async () => timeout() }, messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100,
     signal: new AbortController().signal });
   assert.equal(result.status, 'failed'); assert.equal(result.error, SLOW_MODEL_MESSAGE);

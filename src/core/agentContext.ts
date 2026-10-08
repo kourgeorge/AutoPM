@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { readRecord, saveRecord } from './storage';
 
-export type AgentRole = 'trader' | 'concierge';
+export type AgentRole = 'trader' | 'assistant';
 export interface AgentContext {
   role: AgentRole;
   requestId: string;

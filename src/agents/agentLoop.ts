@@ -148,7 +148,7 @@ export async function runAgentLoop(opts: {
       }
     } catch (err: any) {
       // Only the caller's own stop counts as an interruption: an interrupted request stays queued
-      // and halts the concierge's queue, so a timeout marked that way would stall the chat and
+      // and halts the assistant's queue, so a timeout marked that way would stall the chat and
       // later re-run a question the operator has already given up on.
       current.status = opts.signal?.aborted ? 'interrupted' : 'failed';
       current.error = isTimeout(err) ? SLOW_MODEL_MESSAGE : err?.message ?? String(err);

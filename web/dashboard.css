@@ -98,7 +98,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .topbar-divider { height: 16px; width: 1px; background: var(--line); }
 .live-dot { font-size: 12px; color: var(--ink-3); white-space: nowrap; }.live-dot::before { content: '●'; font-size: 9px; margin-right: 7px; }.live-dot.on { color: var(--up); }
 #notice, #health:not(:empty) { margin: 16px 32px 0; background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 25%, transparent); border-radius: 8px; padding: 10px 14px; font-size: 13px; white-space: pre-line; }
-#notice { position: sticky; top: 8px; z-index: 15; }
+#notice { position: fixed; top: 86px; right: 32px; z-index: 100; width: max-content; max-width: min(520px, calc(100vw - 64px)); margin: 0; box-shadow: 0 8px 28px rgb(0 0 0 / 22%); }
 #notice.ok { background: var(--up-soft); color: var(--up); border-color: color-mix(in srgb, var(--up) 25%, transparent); }
 main { padding: 30px 32px 40px; max-width: 1800px; margin: 0 auto; }
 .live-view { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); gap: 22px; align-items: start; }
@@ -267,18 +267,30 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
 #broker-panel details { margin: 16px 0 0; }
 #broker-panel summary { font-size: 12px; color: var(--ink-3); }
 #broker-panel details p { font-size: 13px; }
-#live-activity { padding-bottom: 0; }
-#live-feed { height: 300px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; padding-bottom: 14px; overflow-wrap: anywhere; }
-.activity-empty { padding: 18px 0; font-size: 13px; color: var(--ink-3); }
-.activity-entry { display: grid; grid-template-columns: 61px 45px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.activity-entry time { color: var(--ink-3); font-size: 10px; white-space: nowrap; }
-.activity-kind { color: var(--ink-3); font-size: 10px; letter-spacing: .4px; }
-.activity-entry p { color: var(--ink-2); margin: 0; white-space: pre-wrap; }
-.activity-entry.reply p, .activity-entry.chart p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+#live-activity { padding: 0; overflow: hidden; background: var(--chat-bg); border-color: var(--chat-line); }
+#live-activity .pane-title { flex: none; gap: 8px; padding: 8px 10px; margin: 0; background: var(--chat-chrome); border-bottom: 1px solid var(--chat-line); }
+#live-activity h2 { font: 600 12px/1.5 var(--font-mono); }
+#live-activity h2::before { content: '> '; color: var(--ink-3); }
+#live-activity #open-conversation { padding: 0; font: 10px/1.5 var(--font-mono); }
+#live-feed { height: 300px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--chat-line) transparent; padding: 8px 10px; overflow-wrap: anywhere; overscroll-behavior: contain; overflow-anchor: none; font: 11px/1.6 var(--font-mono); }
+#live-feed:focus-visible { outline-offset: -2px; }
+.activity-empty { margin: 0; font: inherit; color: var(--ink-3); }
+.activity-entry { display: grid; grid-template-columns: 8ch 9ch 9ch minmax(20ch, 1fr); align-items: baseline; gap: 8px; padding: 1px 0; font: inherit; }
+.activity-entry time { color: var(--ink-3); font: inherit; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-entity { color: var(--ink-3); font: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.activity-entry[data-source="operator"] .activity-entity { color: var(--ink-2); }
+.activity-entry[data-source="assistant"] .activity-entity { color: var(--accent); }
+.activity-entry[data-source="trader"] .activity-entity { color: var(--trader-ink); }
+.activity-kind { color: var(--ink-3); font: inherit; white-space: nowrap; }
+.activity-entry p { color: var(--ink-2); margin: 0; font: inherit; white-space: pre-wrap; }
 .activity-entry.reply .activity-kind, .activity-entry.trade .activity-kind { color: var(--accent); }
 .activity-entry.operator .activity-kind { color: var(--ink); }
 .activity-entry.warn p, .activity-entry.warn .activity-kind { color: var(--warn); }
 .activity-entry.error p, .activity-entry.error .activity-kind, .activity-entry.alert p, .activity-entry.alert .activity-kind { color: var(--down); }
+@media (max-width: 600px) {
+  #live-feed { font-size: 10px; }
+  .activity-entry { grid-template-columns: 8ch 9ch 9ch minmax(0, 1fr); gap: 6px; }
+}
 #agent-now .pane-title { margin-bottom: 5px; }
 .current-agent { padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
 .current-agent-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; }
@@ -296,7 +308,6 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   .live-view { grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); gap: 14px; }
   .live-main, .live-aside { gap: 14px; }
   .live-view .panel { padding: 14px; }
-  .activity-entry { grid-template-columns: 55px 38px minmax(0, 1fr); gap: 7px; font-size: 11px; }
 }
 @media (max-width: 800px) {
   .live-view { grid-template-columns: minmax(0, 1fr); }
@@ -327,9 +338,6 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   #holdings .pane-title { display: block; }
   #holdings .pane-title > span { display: block; text-align: left; max-width: none; margin-top: 5px; }
   #live-feed { height: 290px; }
-  .activity-entry { grid-template-columns: 53px minmax(0, 1fr); gap: 4px 8px; }
-  .activity-kind { grid-column: 2; }
-  .activity-entry p { grid-column: 1 / -1; }
   #current-agents { grid-template-columns: 1fr; gap: 0; }
 }
 
@@ -369,7 +377,6 @@ main { padding: 10px 14px 16px; }
 #holdings button.link { padding: 0; }
 #live-activity { flex: 1; min-height: 120px; display: flex; flex-direction: column; padding-bottom: 0; }
 #live-feed { height: auto; flex: 1; min-height: 0; }
-.activity-entry { grid-template-columns: 55px 39px minmax(0, 1fr); gap: 7px; font-size: 11px; padding: 7px 0; }
 .live-view > .chat { position: static; height: var(--live-workspace-height); max-height: none; border-radius: 9px; }
 .chat-heading { padding: 12px 14px; }
 .agent-avatar { width: 29px; height: 29px; border-radius: 8px; }
@@ -392,7 +399,7 @@ main { padding: 10px 14px 16px; }
 .starter-grid strong { font-size: 11px; }
 .starter-grid span { font-size: 10px; }
 .live-secondary { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px; min-width: 0; }
-.live-secondary #live-activity { grid-column: 1; grid-row: 1; height: 220px; order: 0; }
+.live-secondary #live-activity { grid-column: 1; grid-row: 1; height: 280px; order: 0; }
 .live-secondary #broker-panel { grid-column: 1; grid-row: 2; }
 .live-secondary #decisions { grid-column: 2; grid-row: 1 / span 2; }
 .live-secondary #chart { grid-column: 1; }
@@ -436,9 +443,6 @@ main { padding: 10px 14px 16px; }
   .workspace-intro h1 { font-size: 19px; }
   .metrics strong { font-size: 19px; }
   #holdings .table-wrap { max-height: 165px; }
-  .activity-entry { grid-template-columns: 52px 35px minmax(0, 1fr); }
-  .activity-kind { grid-column: auto; }
-  .activity-entry p { grid-column: auto; }
 }
 
 /* On-demand ticker detail keeps price charts out of the compact overview. */
@@ -662,35 +666,35 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .chat-heading-actions { display: flex; align-items: center; gap: 10px; }
 .chat #clear-conversation { padding: 4px 6px; font: 10px/1.5 var(--font-mono); border-radius: 3px; border-color: transparent; color: var(--ink-3); background: transparent; }
 .chat #clear-conversation:hover { background: var(--chat-raised); color: var(--ink); }
-.chat #feed { gap: 16px; padding: 18px 16px; background: var(--chat-bg); scroll-padding: 16px; }
+.chat #feed { gap: 10px; padding: 14px 16px; background: var(--chat-bg); scroll-padding: 14px; }
 .chat .msg { flex: none; width: 100%; max-width: 100%; min-width: 0; animation: none; }
-.chat .message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font: 11px/1.5 var(--font-mono); color: var(--ink-3); }
+.chat .message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; font: 11px/1.4 var(--font-mono); color: var(--ink-3); }
 .chat .message-author { font-weight: 600; color: var(--ink); }
 .chat .message-author::before { content: '['; }
 .chat .message-author::after { content: ']'; }
 .chat .message-type { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; }
 .chat .message-meta time { display: block; margin: 0 0 0 auto; font: 10px/1.5 var(--font-mono); color: var(--ink-3); }
 .chat .msg[data-source="operator"] .message-author { color: var(--chat-accent); }
-.chat .msg[data-source="concierge"] .message-author { color: var(--accent); }
+.chat .msg[data-source="assistant"] .message-author { color: var(--accent); }
 .chat .msg[data-source="trader"] .message-author { color: var(--trader-ink); }
 .chat .msg[data-source="system"] .message-author { color: var(--ink-3); }
 .chat .msg.reply, .chat .msg.chart { align-self: flex-start; padding-left: 20px; position: relative; }
 .chat .msg.reply::before, .chat .msg.chart::before { content: '›'; position: absolute; left: 0; top: -1px; display: block; width: auto; height: auto; border: 0; border-radius: 0; background: transparent; color: var(--accent); font: 600 16px/1.2 var(--font-mono); }
-.chat .reply-body { background: transparent; border: 0; padding: 0; font: 13px/1.75 var(--font-mono); color: var(--ink); }
-.chat .reply-body h3 { font: 600 13px/1.7 var(--font-mono); }
+.chat .reply-body { background: transparent; border: 0; padding: 0; font: 13px/1.5 var(--font-mono); color: var(--ink); }
+.chat .reply-body h3 { font: 600 13px/1.5 var(--font-mono); }
 .chat .reply-body code, .chat .reply-body pre { background: var(--chat-input); border-radius: 3px; }
 .chat .msg.chart > pre { background: var(--chat-input); border: 1px solid var(--line-soft); border-radius: 3px; padding: 8px 10px; }
-.chat .msg.operator { align-self: stretch; max-width: 100%; min-width: 0; text-align: left; padding: 9px 12px; background: var(--chat-soft); border-left: 2px solid var(--chat-accent); border-radius: 0; }
-.chat .msg.operator p { position: relative; display: block; border: 0; border-radius: 0; padding: 0 0 0 20px; background: transparent; color: var(--ink); font: 13px/1.75 var(--font-mono); }
+.chat .msg.operator { align-self: stretch; max-width: 100%; min-width: 0; text-align: left; padding: 7px 12px; background: var(--chat-soft); border-left: 2px solid var(--chat-accent); border-radius: 0; }
+.chat .msg.operator p { position: relative; display: block; border: 0; border-radius: 0; padding: 0 0 0 20px; background: transparent; color: var(--ink); font: 13px/1.5 var(--font-mono); }
 .chat .msg.operator p::before { content: '>'; position: absolute; left: 0; color: var(--chat-accent); font-weight: 600; }
-.chat .msg.log { display: block; width: 100%; max-width: 100%; font: 11px/1.7 var(--font-mono); padding: 8px 10px; border-left: 1px solid var(--chat-line); background: var(--chat-chrome); }
+.chat .msg.log { display: block; width: 100%; max-width: 100%; font: 11px/1.5 var(--font-mono); padding: 6px 10px; border-left: 1px solid var(--chat-line); background: var(--chat-chrome); }
 .chat .msg.log .message-meta { margin-bottom: 3px; }
 .chat .msg.reply[data-source="system"]::before { content: '·'; color: var(--ink-3); }
 .chat .msg.reply[data-source="system"] .reply-body { color: var(--ink-2); font-size: 12px; }
 .chat .msg.reply[data-source="trader"]::before { color: var(--trader-ink); }
-.chat .msg.alert { max-width: 100%; background: color-mix(in srgb, var(--warn-soft) 65%, var(--chat-bg)); border-color: color-mix(in srgb, var(--warn) 35%, transparent); border-left: 2px solid var(--warn); border-radius: 3px; padding: 8px 10px; }
-.chat .msg.alert p { font: 12px/1.7 var(--font-mono); }
-.chat .msg.alert .message-meta { margin-bottom: 4px; }
+.chat .msg.alert { max-width: 100%; background: color-mix(in srgb, var(--warn-soft) 65%, var(--chat-bg)); border-color: color-mix(in srgb, var(--warn) 35%, transparent); border-left: 2px solid var(--warn); border-radius: 3px; padding: 6px 10px; }
+.chat .msg.alert p { font: 12px/1.5 var(--font-mono); }
+.chat .msg.alert .message-meta { margin-bottom: 3px; }
 .chat .composer { flex: none; margin: 0; padding: 10px 12px; background: var(--chat-chrome); border-top: 1px solid var(--chat-line); }
 .chat .suggestions { margin: 0 0 8px; gap: 6px; }
 .chat .chip { border-radius: 3px; padding: 3px 6px; font: 10px/1.5 var(--font-mono); border-color: var(--line-soft); background: transparent; color: var(--ink-3); }
@@ -719,17 +723,18 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
   .chat .agent-identity h2 { font-size: 12px; }.chat .agent-identity div > span { font-size: 9px; }
   .chat .chat-participants { font-size: 9px; }
   .chat .agent-avatar { width: 24px; height: 24px; flex: none; }
-  .chat .toggle { font-size: 9px; }.chat #feed { padding: 14px 10px; gap: 14px; }
+  .chat .toggle { font-size: 9px; }.chat #feed { padding: 12px 10px; gap: 10px; }
   .chat-heading-actions { gap: 3px; flex: none; }
   .chat #clear-conversation { font-size: 9px; padding: 4px; }
   .chat .msg.reply, .chat .msg.chart { padding-left: 16px; }
-  .chat .msg.operator { padding: 8px 9px; }
+  .chat .msg.operator { padding: 6px 9px; }
   .chat .reply-body, .chat .msg.operator p { font-size: 12px; }
   .chat .composer { padding: 9px; }.chat .chip { font-size: 9px; padding: 3px 5px; }
   .chat #message input { font-size: 16px; }.chat .welcome h2 { font-size: 18px; }
 }
 @media (max-width: 360px) { .chat .agent-avatar { display: none; } }
 @media (prefers-reduced-motion: reduce) { .chat .dots i { animation: none; } }
+@media (max-width: 600px) { #notice { top: 67px; left: 14px; right: 14px; width: auto; max-width: none; margin: 0; } }
 
 /* Model and account connection belong to the shared status panel. */
 #status-panel { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; }
@@ -803,8 +808,6 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .price-trend, #equity-chart .line { stroke-width: 2.25; }
 .live-statusline .agent-state, .live-statusline #agent-now #tick-age, .live-statusline .runtime-footer { font-size: 12px; }
 #status-panel .status-readout:focus-visible { outline-offset: -2px; }
-.activity-entry { font: 13px/1.4 var(--font-ui); grid-template-columns: 62px 40px minmax(0,1fr); padding: 5px 0; }
-.activity-entry time, .activity-kind { font: 11px/1.8 var(--font-mono); }
 #holdings .pane-title > span, #watchlist-status { font-size: 12px; }
 #holdings th, #watchlist-panel th, th { font-size: 11px; text-transform: none; letter-spacing: .1px; background: var(--surface-2); }
 #holdings th, #holdings td, #watchlist-panel th, #watchlist-panel td { padding: 4px 6px; }
@@ -871,15 +874,15 @@ dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .card pre { line-height: 1.5; }
 .watchlist-legend { margin-top: 5px; }
 .exposure { margin-top: 7px; }
-.chat .reply-body p { margin-bottom: 7px; }
-.chat .reply-body h3 { margin: 10px 0 4px; }
-.chat .reply-body ul { margin: 4px 0 7px; }
-.chat .reply-body li { margin: 2px 0; }
+.chat .reply-body p { margin-bottom: 5px; }
+.chat .reply-body h3 { margin: 8px 0 3px; }
+.chat .reply-body ul { margin: 3px 0 5px; }
+.chat .reply-body li { margin: 1px 0; }
 .chat .reply-body > :last-child { margin-bottom: 0; }
 /* One quiet row per tool call; complete payloads are available on expansion. */
 .chat .msg.tool { width: 100%; max-width: 100%; min-width: 0; }
 .tool-call { margin: 0; border: 1px solid var(--line-soft); border-radius: 3px; background: var(--chat-chrome); overflow: hidden; }
-.tool-call[data-source="concierge"] { border-left: 2px solid var(--accent); }
+.tool-call[data-source="assistant"] { border-left: 2px solid var(--accent); }
 .tool-call[data-source="trader"] { border-left: 2px solid var(--trader-ink); }
 .tool-call > summary { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 6px 9px; list-style: none; font: 11px/1.5 var(--font-mono); }
 .tool-call > summary::-webkit-details-marker { display: none; }
@@ -892,7 +895,7 @@ dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .tool-call-params { color: var(--ink-3); }
 .tool-call .tool-call-agent { flex: none; font: 600 10px/1.5 var(--font-mono); padding: 0; border: 0; background: transparent; color: var(--ink-3); white-space: nowrap; }
 .tool-call .tool-call-agent::before { content: '['; }.tool-call .tool-call-agent::after { content: ']'; }
-.tool-call .tool-call-agent[data-agent="concierge"] { color: var(--accent); }
+.tool-call .tool-call-agent[data-agent="assistant"] { color: var(--accent); }
 .tool-call .tool-call-agent[data-agent="trader"] { color: var(--trader-ink); }
 .tool-call-type { flex: none; font: 9px/1.5 var(--font-mono); color: var(--ink-3); white-space: nowrap; }
 .tool-call > summary time { flex: none; margin: 0 0 0 auto; color: var(--ink-3); font: 10px/1.5 var(--font-mono); white-space: nowrap; }

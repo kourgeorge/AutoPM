@@ -382,7 +382,7 @@ async function dispatchTraderTool(
       case 'get_price_stats':     return await toolGetPriceStats(input);
       case 'write_lesson':        return toolWriteLesson(input);
       // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
-      // delay, which only the agent loop can do), and it is not a concierge tool.
+      // delay, which only the agent loop can do), and it is not an assistant tool.
       default:
         if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
         return (await executeResearchTool(name, input))
@@ -999,7 +999,7 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
   const invalidation = String(input.invalidation ?? '').trim();
   if (why.length < 20) return JSON.stringify({ ok: false, error: 'reason must say, in a sentence, why you are buying now and what measured evidence supports it.' });
   if (invalidation.length < 10) return JSON.stringify({ ok: false, error: 'invalidation is required: the condition that would mean the entry reason is no longer true.' });
-  // One string so the journal, RECENT DECISIONS and the concierge all carry both halves.
+  // One string so the journal, RECENT DECISIONS and the assistant all carry both halves.
   const reason = `${why} Invalidated if: ${invalidation}`;
   try {
     const result = await enterPosition({ symbol, signal: 'buy', price, stopLoss, takeProfit, atr, reason }, qty, resolveEventId(eventId, symbol) ?? undefined);

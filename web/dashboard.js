@@ -19,6 +19,7 @@ const signedMoney = n => n == null ? '—' : (n > 0 ? '+' : '') + money(n);
 const signedPct = n => n == null ? '' : `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
 const direction = n => n > 0 ? 'up' : n < 0 ? 'down' : '';
 const clock = at => new Date(at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+const logClock = new Intl.DateTimeFormat([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'});
 const text = (tag, value, cls) => { const e = document.createElement(tag); e.textContent = value; if(cls)e.className=cls; return e; };
 let noticeTimer;
 /** Errors stay until replaced; confirmations fade after a few seconds. */
@@ -168,20 +169,20 @@ messageInput.addEventListener('keydown',event=>{
 });
 
 // ── Conversation ───────────────────────────────────────────────────────────
-const speakers = { operator:'You', concierge:'Concierge', trader:'Trader', system:'System' };
+const speakers = { operator:'You', assistant:'Assistant', trader:'Trader', system:'System' };
 function entrySource(entry) {
   if (entry.kind === 'operator') return 'operator';
   if (entry.source || entry.tool?.agent) return entry.source || entry.tool.agent;
   // Older history predates explicit source metadata.
   if (/^(?:trader request |\[Trader(?:Tool)?\])/i.test(entry.text)) return 'trader';
-  if (entry.kind === 'reply' || entry.kind === 'chart' || /^\[concierge\]/i.test(entry.text)) return 'concierge';
+  if (entry.kind === 'reply' || entry.kind === 'chart' || /^\[assistant\]/i.test(entry.text)) return 'assistant';
   return 'system';
 }
 function messageMeta(entry, source) {
   const meta = text('div', '', 'message-meta');
   meta.append(text('span', speakers[source] || source, 'message-author'));
   const kind = entry.kind === 'alert' ? 'Alert' : entry.kind === 'log' ? (entry.level || 'Event')
-    : entry.kind === 'chart' ? 'Chart' : source === 'concierge' ? 'Assistant' : source === 'system' ? 'Update' : '';
+    : entry.kind === 'chart' ? 'Chart' : source === 'system' ? 'Update' : '';
   if (kind) meta.append(text('span', kind, 'message-type'));
   const time = text('time', clock(entry.at));time.dateTime = entry.at;time.title = new Date(entry.at).toLocaleString();
   meta.append(time);
@@ -219,7 +220,7 @@ function toolCallEntry(entry) {
   const legacy = /^\[([^\]]+)\]\s+([^\s(]+)\((.*?)\)\s*(?:→|$)/s.exec(entry.text);
   const name = tool?.name || legacy?.[2] || 'Tool call';
   const caller = tool?.agent || legacy?.[1];
-  const agent = { concierge: 'Concierge', trader: 'Trader' }[caller] || caller || 'Unknown caller';
+  const agent = { assistant: 'Assistant', trader: 'Trader' }[caller] || caller || 'Unknown caller';
   details.dataset.source = caller || 'system';
   const parameters = tool
     ? tool.input && typeof tool.input === 'object' && !Array.isArray(tool.input)
@@ -296,38 +297,60 @@ $('clear-conversation').onclick = () => {
   notice('Conversation view cleared. Saved history and assistant memory are unchanged.',true);
 };
 
-function addLiveEntry(entry, body) {
-  const feed=$('live-feed'), atBottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<50;
-  $('live-feed-empty').hidden=true;
+function liveEntry(entry, body) {
   const row=text('div','',`activity-entry ${entry.kind} ${entry.level?.toLowerCase() || ''}`);
-  const time=text('time',clock(entry.at));time.dateTime=entry.at;time.title=new Date(entry.at).toLocaleString();
-  const label=text('span',entry.kind==='log'?(entry.level || 'LOG'):({operator:'YOU',reply:'AGENT',chart:'CHART',alert:'ALERT'}[entry.kind] || entry.kind),'activity-kind');
+  row.dataset.seq=entry.seq;
+  const source=entrySource(entry);row.dataset.source=source;
+  const time=text('time',logClock.format(new Date(entry.at)));time.dateTime=entry.at;time.title=new Date(entry.at).toLocaleString();
+  const entity=text('span',speakers[source] || source,'activity-entity');entity.title=entity.textContent;
+  const kind=entry.kind==='log'?(entry.level || 'LOG'):entry.kind==='operator'
+    ? (/^\s*(?:\/\S+|(?:approve|reject)\b)/i.test(entry.text) ? 'COMMAND' : 'MESSAGE')
+    : ({reply:'REPLY',chart:'CHART',alert:'ALERT'}[entry.kind] || entry.kind.toUpperCase());
+  const label=text('span',`[${kind}]`,'activity-kind');
   const content=text('p',body);
-  row.append(time,label,content);feed.append(row);
-  while(feed.querySelectorAll('.activity-entry').length>200)feed.querySelector('.activity-entry').remove();
-  if(atBottom)feed.scrollTop=feed.scrollHeight;
+  row.append(time,entity,label,content);
+  return row;
+}
+function appendLiveEntries(fragment) {
+  if (!fragment.hasChildNodes()) return;
+  const feed=$('live-feed'), scrollTop=feed.scrollTop;
+  const atBottom=feed.scrollHeight-scrollTop-feed.clientHeight<24;
+  $('live-feed-empty').hidden=true;
+  feed.append(fragment);
+  const rows=feed.querySelectorAll('.activity-entry');
+  let removedHeight=0;
+  for (let index=0; index<rows.length-1000; index++) {
+    removedHeight+=rows[index].getBoundingClientRect().height;
+  }
+  for (let index=0; index<rows.length-1000; index++) rows[index].remove();
+  // Preserve the line being read when old scrollback is trimmed.
+  feed.scrollTop=atBottom ? feed.scrollHeight : Math.max(0,scrollTop-removedHeight);
 }
 $('open-conversation').onclick=()=>{showView('live');messageInput.focus();};
 
 function addEntries(entries) {
   const feed = $('feed'), atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  const liveRows = document.createDocumentFragment();
   for (const entry of entries) {
     if (entry.seq <= cursor) continue;
     cursor = entry.seq;
     if (entry.kind === 'reply' || entry.kind === 'chart') awaitingReply = 0;
     // Older stored replies include a request label; keep it out of the conversation too.
-    const body = entry.kind === 'reply' ? entry.text.replace(/^(?:concierge|trader) request [A-Za-z0-9:_-]+: /, '') : entry.text;
-    addLiveEntry(entry, body);
-    if (entry.seq <= conversationClearedThrough) continue;
+    const body = entry.kind === 'reply' ? entry.text.replace(/^(?:assistant|trader) request [A-Za-z0-9:_-]+: /, '') : entry.text;
+    liveRows.append(liveEntry(entry, body));
+    const source = entrySource(entry);
+    const isOperationalInfo = entry.kind === 'log' && entry.level === 'INFO';
+    if (source === 'system' || isOperationalInfo || entry.seq <= conversationClearedThrough) continue;
     const isTool = entry.kind === 'log' && entry.level === 'TOOL';
     const row = text('div', '', `msg ${isTool ? 'tool' : entry.kind}${entry.level ? ' level-' + entry.level.toLowerCase() : ''}`);
     row.dataset.seq = entry.seq;
-    const source = entrySource(entry);row.dataset.source = source;
+    row.dataset.source = source;
     const meta = messageMeta(entry, source);
     if (isTool) row.append(toolCallEntry(entry));
     else row.append(meta, entry.kind === 'chart' && entry.chart ? chatChart(entry.chart) : entry.kind === 'reply' ? replyBody(body) : text(entry.kind === 'chart' ? 'pre' : 'p', body));
     feed.append(row);
   }
+  appendLiveEntries(liveRows);
   while (feed.querySelectorAll('.msg').length > 400) {
     const oldest = feed.querySelector('.msg');
     for (const chart of oldest.querySelectorAll('.chat-series-plot')) chatChartObserver.unobserve(chart);
@@ -345,11 +368,11 @@ $('show-log').onchange = () => {
 };
 try { if (localStorage.getItem('autotrade.showLog') === '1') { $('show-log').checked = true; $('feed').classList.remove('hide-log'); } } catch {}
 function renderThinking() {
-  const concierge = status?.concierge?.lane?.state === 'thinking';
+  const assistant = status?.assistant?.lane?.state === 'thinking';
   // A reply normally arrives well inside two minutes; stop claiming one is coming after that.
   const waiting = awaitingReply && Date.now() - awaitingReply < 120000;
-  $('thinking').hidden = !(concierge || waiting);
-  $('thinking-text').textContent = concierge ? 'The assistant is thinking…' : 'Waiting for the assistant…';
+  $('thinking').hidden = !(assistant || waiting);
+  $('thinking-text').textContent = assistant ? 'The assistant is thinking…' : 'Waiting for the assistant…';
 }
 async function sendMessage(value) {
   const slash = /^\s*\/(\S+)(?:\s+([\s\S]*))?$/.exec(value);
@@ -359,9 +382,8 @@ async function sendMessage(value) {
     notice(`/${slash[1]} completed.`, true);
   } else if (value.trimStart().startsWith('/')) { throw new Error('Choose a command from the list.'); }
   else {
-    const receipt = await api('messages', {text: value});
+    await api('messages', {text: value});
     awaitingReply = Date.now();
-    notice(`Sent. Request ${receipt.status}.`, true);
   }
   await refresh();
 }
@@ -450,7 +472,7 @@ function laneText(name, lane, cycle) {
 }
 function renderLanes() {
   if (!status) return;
-  $('current-agents').replaceChildren(...[['Trader',status.trader.lane,'trader'],['Assistant',status.concierge.lane,'concierge']].map(([name,lane,role])=>{
+  $('current-agents').replaceChildren(...[['Trader',status.trader.lane,'trader'],['Assistant',status.assistant.lane,'assistant']].map(([name,lane,role])=>{
     const card=text('div','','current-agent');
     const head=text('div','','current-agent-head');
     head.append(text('strong',name),text('span',laneText(name,lane).slice(name.length+2),'agent-state '+(lane?.state || '')));
@@ -943,8 +965,8 @@ function historyReference(id) {
   return button;
 }
 function renderRequests(list) {
-  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${command.role === 'concierge' ? 'Assistant' : 'Trader'} request: ${command.text}`,
-    [recordTime(command.createdAt),command.role === 'concierge' ? 'Assistant' : 'Trader',command.actorId,text('span',command.status,'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
+  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${command.role === 'assistant' ? 'Assistant' : 'Trader'} request: ${command.text}`,
+    [recordTime(command.createdAt),command.role === 'assistant' ? 'Assistant' : 'Trader',command.actorId,text('span',command.status,'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
       const detail = text('div','','history-detail request-detail');
       detail.append(historyFacts([['Request',command.text],['Outcome',command.result || 'No outcome recorded yet.']]));
       if (command.actionIds?.length) { const links = text('div','','record-links');links.append(text('span','Actions'),...command.actionIds.map(historyReference));detail.append(links); }

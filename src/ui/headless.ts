@@ -22,7 +22,7 @@ import { notifyAccount } from '../core/notifications';
 import { appendActivity, readActivity } from '../core/storage';
 import { AsyncLocalStorage } from 'async_hooks';
 import { decideAction } from '../core/actions';
-import type { Cycle, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
+import type { Cycle, DailyUsage, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
 import { DECIDE_COMMAND, type LogLevel, type OperatorUI, type SlashCommand } from './surface';
 import type { ChartData } from './chart';
 import type { ToolCallDetails } from '../core/types';
@@ -52,12 +52,13 @@ export interface HeadlessSnapshot {
   env: Environment;
   venueOpen: boolean | null;
   traderLane: Lane;
-  conciergeLane: Lane;
+  assistantLane: Lane;
   cycle: Cycle;
   tick: TickSnapshot | null;
   events: EventRow[];
   activity: EventRow[];
   actions: ActionRow[];
+  usage?: DailyUsage;
 }
 
 export interface CommandResult {
@@ -86,7 +87,7 @@ export class HeadlessUI implements OperatorUI {
     env: { broker: '', venue: '', provider: '', model: '' },
     venueOpen: null,
     traderLane: { state: 'starting' },
-    conciergeLane: { state: 'idle' },
+    assistantLane: { state: 'idle' },
     cycle: { n: 0 },
     tick: null,
     events: [],
@@ -179,12 +180,16 @@ export class HeadlessUI implements OperatorUI {
     this.state.traderLane = lane;
   }
 
-  setConciergeActivity(lane: Lane): void {
-    this.state.conciergeLane = lane;
+  setAssistantActivity(lane: Lane): void {
+    this.state.assistantLane = lane;
   }
 
   setCycle(cycle: Cycle): void {
     this.state.cycle = cycle;
+  }
+
+  setDailyUsage(usage: DailyUsage): void {
+    this.state = { ...this.state, usage };
   }
 
   setStatus(text: string): void {
@@ -229,7 +234,7 @@ export class HeadlessUI implements OperatorUI {
 
   /**
    * One typed line, exactly as the terminal would take it: `/command`, `approve <id>`,
-   * `reject <id> [reason]`, or else a chat message for the concierge.
+   * `reject <id> [reason]`, or else a chat message for the assistant.
    */
   submit(line: string): void {
     const trimmed = line.trim();
@@ -252,7 +257,7 @@ export class HeadlessUI implements OperatorUI {
     this.onSubmit?.(trimmed);
   }
 
-  /** Run one slash command and hand back what it said. Unknown names never reach the concierge. */
+  /** Run one slash command and hand back what it said. Unknown names never reach the assistant. */
   async runCommand(name: string, args: string): Promise<CommandResult> {
     const output: FeedEntry[] = [];
     const cmd = this.commands.get(name.toLowerCase());

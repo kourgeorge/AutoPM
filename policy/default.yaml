@@ -110,7 +110,7 @@ automation:
   # The level applies the same on paper and live — there is no venue-based exemption; to run
   # unattended, set the level to auto rather than relying on which account you're connected to.
   # A human decides a proposal by typing `approve <id>` / `reject <id>` in the terminal UI; the
-  # match is exact and deterministic, so the concierge never sees it and cannot decide on your
+  # match is exact and deterministic, so the assistant never sees it and cannot decide on your
   # behalf.
   level:
     entry: manual
