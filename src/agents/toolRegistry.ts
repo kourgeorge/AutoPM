@@ -1,5 +1,6 @@
 import type { ToolDefinition } from '../core/types';
 import { assertAgentActive } from '../core/agentContext';
+import { SAVED_RESULT_TOOLS, readSavedResult } from './savedResults';
 
 /** The same bounded schema is advertised to the model and enforced before dispatch. */
 function bounded(schema: any, key = ''): any {
@@ -32,14 +33,14 @@ function validate(s: any, value: unknown, at = 'input'): void {
       break;
     case 'boolean': if (typeof value !== 'boolean') throw new Error(`${at}: expected a boolean`); break;
     case 'array':
-      if (!Array.isArray(value) || value.length > s.maxItems) throw new Error(`${at}: invalid list`);
+      if (!Array.isArray(value) || value.length > s.maxItems || value.length < (s.minItems ?? 0)) throw new Error(`${at}: invalid list`);
       value.forEach((v,i) => validate(s.items,v,`${at}[${i}]`)); break;
   }
 }
 export class ToolRegistry {
   readonly definitions: ToolDefinition[];
   constructor(definitions: ToolDefinition[], private readonly handler: (name: string, input: Record<string, unknown>) => Promise<string>) {
-    this.definitions = definitions.map(t => ({ ...t, input_schema: bounded(t.input_schema) }));
+    this.definitions = [...definitions, ...SAVED_RESULT_TOOLS.filter(t => !definitions.some(d => d.name === t.name))].map(t => ({ ...t, input_schema: bounded(t.input_schema) }));
     if (new Set(definitions.map(t => t.name)).size !== definitions.length) throw new Error('Duplicate tool name');
   }
   async execute(name: string, input: unknown): Promise<string> {
@@ -48,6 +49,7 @@ export class ToolRegistry {
     try {
       assertAgentActive();
       validate(def.input_schema, input);
+      if (SAVED_RESULT_TOOLS.some(t => t.name === name)) return readSavedResult(name, input as Record<string, unknown>);
       return await this.handler(name, input as Record<string, unknown>);
     } catch (err: any) {
       return JSON.stringify({ ok: false, error: err?.message ?? String(err) });

@@ -31,17 +31,7 @@ import { Maybe, missing, observe } from './types';
 const ALPACA_SOURCE = 'alpaca' as const;
 const YAHOO_SOURCE  = 'yahoo'  as const;
 
-/**
- * Bars age by their own interval, not by the quote threshold — a daily series is not stale
- * at 90 seconds.
- *
- * The `1Day` entry is a FALLBACK, used only when the trading calendar cannot be reached.
- * Four days is what "tolerates a long weekend" actually costs: a series ending on Thursday
- * reads fresh all through Saturday, Sunday, Monday and most of Tuesday. That is how the
- * missing-Friday bug above went unreported for as long as it did — the data was a day short
- * and the freshness gate had no opinion about it. When the calendar is reachable,
- * `dailyMaxAgeMs` replaces this with the question actually worth asking.
- */
+/** Intraday age budgets. Daily observations additionally require the exact completed session. */
 export const DEFAULT_MAX_BAR_AGE_MS: Record<Timeframe, number> = {
   '1Min': 5 * 60_000,
   '5Min': 15 * 60_000,
@@ -50,18 +40,7 @@ export const DEFAULT_MAX_BAR_AGE_MS: Record<Timeframe, number> = {
   '1Day': 4 * 24 * 60 * 60_000,
 };
 
-/**
- * How much slop to allow either side of the session anchor.
- *
- * The daily threshold is really a date comparison — "does this series include the last
- * completed session?" — expressed as an age, so that `observe()` remains the single place in
- * L1 that decides what `stale` means. Anchoring on midnight UTC of the session date and
- * allowing half a day absorbs every bar-stamping convention in play without ever admitting a
- * bar from the session before: Alpaca stamps a daily equity bar at midnight ET (04:00Z in
- * summer, 05:00Z in winter), a crypto bar at 00:00Z, and Yahoo stamps the session OPEN at
- * 13:30Z. All four sit within twelve hours of the anchor, while the preceding session is
- * twenty or more hours outside it.
- */
+/** Timestamp allowance accommodates vendor stamping ONLY after exact session validation. */
 const SESSION_ANCHOR_SLACK_MS = 12 * 60 * 60_000;
 
 /**
@@ -90,30 +69,8 @@ async function dailyAnchorDate(symbol: string, now: Date): Promise<string> {
   if (isCryptoSymbol(symbol)) {
     return new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
   }
-  return (await lastCompletedSession(now)).date;
-}
-
-async function dailyMaxAgeMs(symbol: string, now: Date): Promise<number> {
-  try {
-    const anchor = Date.parse(`${await dailyAnchorDate(symbol, now)}T00:00:00Z`);
-    return now.getTime() - anchor + SESSION_ANCHOR_SLACK_MS;
-  } catch (err) {
-    // Louder than a silent widening, because the fallback is the threshold that hid a
-    // missing session: from here on the gate cannot tell a day-short series from a current
-    // one, and that is worth seeing in the log rather than inferring later.
-    const message = err instanceof Error ? err.message : String(err);
-    logger.warn(
-      `bar staleness: trading calendar unavailable (${message}) — falling back to the fixed ` +
-      `4-day daily threshold, which cannot detect a series that is one session short`,
-    );
-    return DEFAULT_MAX_BAR_AGE_MS['1Day'];
-  }
-}
-
-async function maxAgeFor(symbol: string, timeframe: Timeframe, now: Date): Promise<number> {
-  return timeframe === '1Day'
-    ? dailyMaxAgeMs(symbol, now)
-    : DEFAULT_MAX_BAR_AGE_MS[timeframe];
+  // The consolidated daily bar is complete only once the delayed tape reaches the close.
+  return (await lastCompletedSession(new Date(now.getTime() - SIP_EMBARGO_MS))).date;
 }
 
 function startFor(limit: number, timeframe: Timeframe, now: Date): string {
@@ -195,7 +152,7 @@ async function fetchAlpacaBars(
   // Crypto trades on Alpaca's own book: one feed, no entitlement tiers, no embargo.
   if (!crypto) {
     params.end = new Date(now.getTime() - SIP_EMBARGO_MS).toISOString();
-    if (adjustment) params.adjustment = adjustment;
+    if (adjustment || timeframe === '1Day') params.adjustment = adjustment ?? 'split';
   }
 
   const res = await alpacaData.get<any>(
@@ -226,18 +183,23 @@ export async function collectBars(
   adjustment?: 'split',
 ): Promise<Maybe<Bar[]>> {
   const now = new Date();
-  const threshold = maxAgeMs ?? (await maxAgeFor(symbol, timeframe, now));
-
+  let anchor: string | null = null;
+  if (timeframe === '1Day') {
+    try { anchor = await dailyAnchorDate(symbol, now); }
+    catch (err) { return missing(ALPACA_SOURCE, 'Completed session unavailable: ' + (err instanceof Error ? err.message : String(err))); }
+  }
+  const threshold = maxAgeMs ?? (anchor ? now.getTime() - Date.parse(anchor + 'T00:00:00Z') + SESSION_ANCHOR_SLACK_MS : DEFAULT_MAX_BAR_AGE_MS[timeframe]);
+  const select = (bars: Bar[]) => anchor ? completedDailyBars(bars, anchor, limit) : bars;
   let alpacaError: unknown;
   try {
-    const bars = await fetchAlpacaBars(symbol, limit, timeframe, now, adjustment);
+    const bars = select(await fetchAlpacaBars(symbol, anchor ? limit + 1 : limit, timeframe, now, adjustment));
     return observe(bars, ALPACA_SOURCE, bars[bars.length - 1].t, threshold);
   } catch (err) {
     alpacaError = err;
   }
 
   try {
-    const bars = await getBarsRaw(symbol, limit, timeframe);
+    const bars = select(await getBarsRaw(symbol, anchor ? limit + 1 : limit, timeframe));
     return observe(bars, YAHOO_SOURCE, bars[bars.length - 1].t, threshold);
   } catch (yahooError) {
     // Attributed to Alpaca because that is the source that was supposed to answer, but both
@@ -247,4 +209,12 @@ export async function collectBars(
     const secondary = yahooError instanceof Error ? yahooError.message : String(yahooError);
     return missing(ALPACA_SOURCE, `alpaca: ${primary}; yahoo fallback: ${secondary}`);
   }
+}
+
+/** Keep completed sessions only. A partial volume reading must not enter daily indicators. */
+export function completedDailyBars(bars: Bar[], asOf: string, limit = 60): Bar[] {
+  const completed = bars.filter(b => b.t.slice(0, 10) <= asOf).slice(-limit);
+  if (!completed.length) throw new Error('No completed daily bars');
+  if (completed.at(-1)!.t.slice(0, 10) !== asOf) throw new Error(`Daily history does not reach completed session ${asOf}`);
+  return completed;
 }

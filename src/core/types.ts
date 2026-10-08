@@ -16,6 +16,9 @@ export interface SignalResult {
   atr: number;
   stopLoss: number;
   takeProfit: number;
+  thesis?: import('../journal/thesis').EntryThesis | null;
+  observationIds?: string[];
+  contextVariant?: string;
 }
 
 export interface ChatMessage {
@@ -46,7 +49,7 @@ export interface ToolCallDetails {
 export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
+  | { type: 'tool_result'; tool_use_id: string; content: string; receiptId?: string };
 
 export interface ModelResponse {
   stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence';
@@ -62,4 +65,3 @@ export interface AiConfig {
   maxTokensPerTurn: number;
   maxToolRounds: number;
 }
-

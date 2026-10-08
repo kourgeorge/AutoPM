@@ -22,7 +22,7 @@ import { computeSignals, signalTally } from './signals';
 import { Bar, SignalResult } from '../core/types';
 import { getPolicy } from '../policy/load';
 import type { Policy } from '../policy/types';
-import { getRegime, getCachedRegime } from '../macro/regime';
+import { getCachedRegime } from '../macro/regime';
 import type { Regime } from '../macro/regime';
 import {
   dailyLossStatus,
@@ -135,14 +135,12 @@ export function entrySignalVeto(
  * The threshold is resolved from the CACHED regime only, exactly as `entrySignalDetector` resolves
  * its RSI floor. Two reasons, and both matter: the detector and the guard must agree about which
  * regime it is, or attention and permission drift apart again; and the order path never waits on
- * the network for a regime (see `applyRegimeSizing` — a cold `getRegime()` has been measured at
- * 15s, which is pure drift on a market order that has already cleared every other guard).
+ * the network for a regime. A missing cache applies the base strategy and no regime overlay.
  */
-async function refuseUnlessSignalsSupport(symbol: string): Promise<void> {
+async function refuseUnlessSignalsSupport(symbol: string, regime: Regime | null): Promise<void> {
   const policy = getPolicy();
-  const regime = getCachedRegime();
   const compositeMin = regime
-    ? policy.regime[regime.regime].compositeMin
+    ? policy.regime[regime].compositeMin
     : policy.strategy.compositeMin;
 
   // Same request shape as `get_signals` and as the tick, so a guard, a tool and an event can
@@ -349,6 +347,7 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   const { symbol, stopLoss, takeProfit, atr } = signal;
   let price = signal.price;
   const validationStarted = Date.now();
+  const observedRegime = getCachedRegime()?.regime ?? null;
 
   // Local and free, so first: a NaN qty must be reported as a malformed intent, not as
   // insufficient buying power for `NaN × NaN`.
@@ -487,12 +486,12 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   // PLAYBOOK.md stated this threshold as prose for as long as it existed and nothing enforced it,
   // while the entry_signal detector armed on an EMA cross that made no reference to it. The two
   // layers genuinely disagreed about what "entry-worthy" meant; this is the side that refuses.
-  await refuseUnlessSignalsSupport(symbol);
+  await refuseUnlessSignalsSupport(symbol, observedRegime);
 
   // Regime enforcement: cap qty by regime sizeMult (Ang et al. 2026 pattern).
   // The trader LLM calculates qty at full size; the guard applies the regime multiplier
   // so late_cycle/recession positions are automatically smaller.
-  const regimeQty = Math.min(await applyRegimeSizing(qty), approvedMaxQty);
+  const regimeQty = Math.min(await applyRegimeSizing(qty, observedRegime), approvedMaxQty);
   let riskAssessment: RiskAssessment | undefined;
   const policy = getPolicy();
   if (hasRiskProfile(policy.risk)) {
@@ -538,19 +537,13 @@ export async function enterPosition(signal: SignalResult, qty: number, eventId?:
  *
  * Fails open (returns the original qty if the regime is unavailable).
  */
-async function applyRegimeSizing(qty: number): Promise<number> {
+async function applyRegimeSizing(qty: number, regime: Regime | null): Promise<number> {
   try {
-    // THE ORDER PATH NEVER WAITS ON THE NETWORK. A cold `getRegime()` can spend ~15s when
-    // FRED is slow — one attempt plus a retry, six series in parallel — and every second of
-    // it is drift on a market order that has already cleared every guard. Measured
-    // 2026-08-26: 15.5s on a timeout storm. The scheduler already refreshes the regime once
-    // a cycle off this path, so the cached label is at most one cycle old, and a stale
-    // multiplier costs a fraction of a position while a late fill costs the entry price.
-    // Only a genuine cold start, with nothing cached at all, pays for a fetch — there is no
-    // alternative there, and it happens once.
-    const regime = getCachedRegime() ?? (await getRegime());
+    // Use the same cached regime as the signal guard. A cold or expired backdrop
+    // cannot introduce a different regime halfway through this price validation.
+    if (!regime) return qty;
     const policy = getPolicy();
-    const override = policy.regime[regime.regime];
+    const override = policy.regime[regime];
     const mult = Math.min(override.sizeMult, 1.0); // never increase
 
     // Whole-share requests stay whole; a fractional one stays fractional. Rounding a
@@ -563,11 +556,11 @@ async function applyRegimeSizing(qty: number): Promise<number> {
     const adjusted = scaled > 0 ? Math.min(scaled, qty) : qty;
 
     if (adjusted < qty) {
-      logger.info(`[Guard] Regime ${regime.regime} — size reduced from ${qty} to ${adjusted} (×${mult})`);
+      logger.info(`[Guard] Regime ${regime} — size reduced from ${qty} to ${adjusted} (×${mult})`);
     }
     return adjusted;
   } catch {
-    // Fail open: if regime fetch fails, use original qty
+    // No advisory overlay can enlarge the request when unavailable.
     return qty;
   }
 }
@@ -737,11 +730,11 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
  * that moment and only then calls `actExit` — the point in the code where cancellation happens,
  * unchanged from before this split.
  */
-export async function exitPosition(symbol: string, reason: string, qty?: number, eventId?: string): Promise<QueuedAction> {
+export async function exitPosition(symbol: string, reason: string, qty?: number, eventId?: string, observationIds?: string[]): Promise<QueuedAction> {
   const validated = await validateExit(symbol, qty);
   const automatic = automationLevel('exit') === 'auto';
   const action = createAction({ kind: 'exit', symbol, venue: config.venue, reason, eventId, automatic,
-    params: { qty: validated.sellQty, price: validated.price, pnl: validated.pnl },
+    params: { qty: validated.sellQty, price: validated.price, pnl: validated.pnl, observationIds },
     timeoutMs: getPolicy().automation.timeoutMs });
   return { status: action.status, actionId: action.id, automatic: action.automatic ?? false };
 }

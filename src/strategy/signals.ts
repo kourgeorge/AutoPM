@@ -227,7 +227,7 @@ function macdSignal(bars: Bar[]): SignalScore {
  * `signalTally` reports a `composite` — averaging cannot make correlated evidence independent,
  * but it stops a vote count from advertising five confirmations that are not there.
  *
- * The genuinely decorrelated reading lives in `strategy/reversal.ts`, deliberately outside
+ * A contrarian reading lives in `strategy/reversal.ts`, deliberately outside
  * this array and outside the composite: it is contrarian and monthly, so it answers "has this
  * already run?" rather than "is this trending?".
  */

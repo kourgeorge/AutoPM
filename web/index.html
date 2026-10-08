@@ -83,9 +83,9 @@
     </section>
     <section id="holdings" class="panel">
       <div class="pane-title"><div><h2>Current positions</h2></div><span id="positions-status"></span></div>
-      <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Shares</th><th>Cost</th><th>Price</th><th>P&amp;L</th><th>Stop / target</th><th>Management</th></tr></thead><tbody id="positions"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Shares</th><th>Cost</th><th>Price</th><th>P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div>
     </section>
-    <section id="watchlist-panel" class="panel" aria-label="Watchlist indicators"><div class="pane-title"><h2>Watchlist</h2><span id="watchlist-status">Waiting for data</span></div><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Price</th><th>Day %</th><th title="Mean trend signal score, from -1 to +1">Trend</th><th title="Mean-reversion signal score, from -1 to +1">MR</th><th title="Relative strength index">RSI</th></tr></thead><tbody id="watchlist-rows"></tbody></table></div><p class="watchlist-legend">Trend / MR: −1 to +1 · select ticker for candles</p></section>
+    <section id="watchlist-panel" class="panel" aria-label="Watchlist indicators"><div class="pane-title"><h2>Watchlist</h2><span id="watchlist-status">Waiting for data</span></div><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Price</th><th>Day %</th><th title="Mean trend signal score, from -1 to +1">Trend</th><th title="Mean-reversion signal score, from -1 to +1">MR</th><th title="Relative strength index">RSI</th></tr></thead><tbody id="watchlist-rows"></tbody></table></div><p class="watchlist-legend">Trend / MR: −1 to +1 · select a ticker for its details, chart and saved assessment</p></section>
   </div>
   <div class="live-secondary">
     <section id="live-activity" class="panel"><div class="pane-title"><h2>Activity stream</h2><button id="open-conversation" class="text-button">Focus conversation ↗</button></div><div id="live-feed" role="log" aria-label="Live activity" aria-live="polite" tabindex="0"><p id="live-feed-empty" class="activity-empty">Waiting for events…</p></div></section>
@@ -123,7 +123,7 @@
 <div id="view-review" class="view" role="tabpanel" aria-labelledby="tab-review" hidden>
 <div class="view-heading"><h1>Performance &amp; review</h1></div>
 <section id="performance" class="panel"><div class="pane-title"><h2>Performance</h2><select id="score-days" aria-label="Performance window"><option value="">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div><div id="scorecard" class="score-grid"></div><ul id="score-caveats" class="caveats"></ul></section>
-<section id="requests" class="panel"><div class="pane-title"><h2 id="requests-title">Agent requests</h2></div><p class="section-description">Who asked, what was requested, and the outcome. Open a row for the full request and response.</p><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Agent requests"><table class="history-table" aria-labelledby="requests-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Agent</th><th scope="col">Requested by</th><th scope="col">Status</th><th scope="col">Request</th><th scope="col">Outcome</th></tr></thead><tbody id="agent-commands"></tbody></table></div></section>
+<section id="requests" class="panel"><div class="pane-title"><h2 id="requests-title">Agent tasks</h2></div><p class="section-description">Instructions given to the assistant or trader. Open a task to follow its research, decisions, requested actions and confirmed fills.</p><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Agent tasks"><table class="history-table" aria-labelledby="requests-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Agent</th><th scope="col">Started by</th><th scope="col">Progress</th><th scope="col">Task</th><th scope="col">Outcome</th></tr></thead><tbody id="agent-commands"></tbody></table></div></section>
 <section id="lessons" class="panel"><div class="pane-title"><h2 id="lessons-title">Lessons</h2></div><p class="section-description">Saved observations that guide future reviews. Open a lesson to read its evidence, edit it, or retire it.</p><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Lessons"><table class="history-table" aria-labelledby="lessons-title"><thead><tr><th scope="col">Details</th><th scope="col">Recorded</th><th scope="col">Status</th><th scope="col">Lesson</th><th scope="col">Evidence</th><th scope="col">Added by</th></tr></thead><tbody id="lesson-list"></tbody></table></div></section>
 </div>
 <div id="view-activity" class="view" role="tabpanel" aria-labelledby="tab-activity" hidden>
@@ -155,13 +155,25 @@
 </div>
 <dialog id="review"><form method="dialog"><h2>Review strategy changes</h2><pre id="review-text"></pre><p>Automatic actions may place real orders when this is a live account. Unanswered manual approvals expire.</p><div class="actions"><button value="cancel">Keep editing</button><button class="primary" value="save">Save this revision</button></div></form></dialog>
 <dialog id="adopt"><form id="adopt-form"><h2>Manage an existing holding</h2><p>AutoTrade will place protection for this holding and may propose exits under your strategy.</p><label>Symbol<input name="symbol" readonly required></label><label>Stop price<input name="stop" type="number" step="0.01" min="0.01" required></label><label>Target price (optional)<input name="target" type="number" step="0.01" min="0.01"></label><div class="actions"><button type="button" id="cancel-adopt">Cancel</button><button class="primary">Adopt holding</button></div></form></dialog>
-<dialog id="ticker-chart-dialog" aria-labelledby="ticker-chart-title">
-  <div class="pane-title"><div><span class="eyebrow">PRICE HISTORY</span><h2 id="ticker-chart-title">Ticker chart</h2></div><button id="close-ticker-chart" aria-label="Close price chart">✕</button></div>
+<dialog id="position-review-dialog" class="decision-drawer" aria-labelledby="position-review-title">
+  <div class="pane-title drawer-heading"><div><span class="eyebrow">POSITION / CANDIDATE DETAILS</span><h2 id="position-review-title">Position details</h2></div><button id="close-position-review" aria-label="Close position details">✕</button></div>
+  <div class="position-window-body">
+  <p id="position-review-status" role="status"></p><div id="position-review-overview"></div>
+  <section id="ticker-chart-panel" class="position-chart" aria-labelledby="ticker-chart-title">
+  <div class="pane-title"><h3 id="ticker-chart-title">Price history</h3><span class="review-meta">Price and volume</span></div>
   <div class="ticker-chart-controls"><label>Interval<select id="ticker-interval"><option value="1Day">Daily</option><option value="1Hour">Hourly</option><option value="15Min">15 minutes</option><option value="5Min">5 minutes</option></select></label><div class="chart-modes" role="group" aria-label="Chart style"><button id="chart-candles" aria-pressed="true">Candles</button><button id="chart-trend" aria-pressed="false">Trend</button></div><button id="refresh-ticker-chart">Refresh</button></div>
   <p id="ticker-chart-status" role="status">Select a ticker to view its price history.</p>
-  <svg id="ticker-chart" viewBox="0 0 900 350" role="img" aria-label="Ticker price history" tabindex="0" aria-describedby="ticker-chart-help"></svg>
+  <svg id="ticker-chart" viewBox="0 0 900 350" role="img" aria-label="Ticker price history" tabindex="0" aria-describedby="ticker-chart-help" hidden></svg>
   <p id="ticker-chart-help" class="chart-help">Hover, tap, or use ← → on the chart to inspect a bar.</p>
   <div id="ticker-ohlc" class="ticker-ohlc" aria-live="polite"></div>
-  <div class="ticker-chart-footer"><span>Historical market data may be delayed. The latest bar may be incomplete.</span><button id="ask-ticker" class="text-button">Discuss with agent ↗</button></div>
+  <div class="ticker-chart-footer"><span>Historical market data may be delayed. The latest bar may be incomplete.</span></div>
+  </section>
+  <div id="position-review-content" class="position-detail-tabs"></div>
+  </div>
+  <div class="drawer-footer"><span>Assessments and research use saved records. Dates show when they were recorded.</span><button id="refresh-position-review">Refresh saved view</button><button id="ask-position-review" class="primary">Ask trader to review</button><p id="position-review-task" role="status"></p></div>
+</dialog>
+<dialog id="record-inspector" class="record-inspector" aria-labelledby="record-inspector-title">
+  <div class="pane-title drawer-heading"><h2 id="record-inspector-title">Saved record</h2><button id="close-record-inspector" aria-label="Close saved record">✕</button></div>
+  <div id="record-inspector-content" aria-live="polite"></div>
 </dialog>
 </body></html>

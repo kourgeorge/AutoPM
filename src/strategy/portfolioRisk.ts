@@ -21,7 +21,9 @@
  */
 
 import { collectBars } from '../collect/barSource';
-import { isPresent } from '../collect/types';
+import { isUsable } from '../collect/types';
+import { lastCompletedSession } from '../collect/marketCalendar';
+import { datedReturns } from './returnSeries';
 import { getPolicy } from '../policy/load';
 import { broker } from '../broker';
 import { logger } from '../core/logger';
@@ -54,7 +56,7 @@ const MIN_RETURNS = 15;
  * asks about, and entries are replaced rather than accumulated per call.
  */
 const RETURNS_CACHE_MS = 10 * 60 * 1000;
-const _returnsCache = new Map<string, { at: number; returns: number[] }>();
+const _returnsCache = new Map<string, { at: number; session: string; returns: Map<string, number> }>();
 
 /**
  * Fetch bars ONCE PER SYMBOL, concurrently, and reduce each to its return series.
@@ -65,49 +67,41 @@ const _returnsCache = new Map<string, { at: number; returns: number[] }>();
  * missing or too short are simply absent from the map; the caller decides whether that is a
  * caveat or a fail-open.
  */
-export async function returnsMatrix(symbols: string[]): Promise<Map<string, number[]>> {
+export async function returnsMatrix(symbols: string[]): Promise<Map<string, Map<string, number>>> {
   const unique = [...new Set(symbols)];
   const now = Date.now();
-
-  const fetched = await Promise.all(
-    unique.map(async (symbol) => {
-      const hit = _returnsCache.get(symbol);
-      if (hit && now - hit.at < RETURNS_CACHE_MS) return { symbol, returns: hit.returns };
-
-      const bars = await collectBars(symbol, LOOKBACK_DAYS);
-      const returns = isPresent(bars) ? dailyReturns(bars.value) : null;
-      // A failed or too-short fetch is NOT cached: it would pin a fail-open for the window,
-      // and unlike a bar series a failure can change on the next call.
-      if (returns && returns.length >= MIN_RETURNS) _returnsCache.set(symbol, { at: now, returns });
-      return { symbol, returns };
-    }),
-  );
-
-  const out = new Map<string, number[]>();
-  for (const { symbol, returns } of fetched) {
-    if (returns && returns.length >= MIN_RETURNS) out.set(symbol, returns);
-  }
-  return out;
+  const session = (await lastCompletedSession()).date;
+  const pairs = await Promise.all(unique.map(async symbol => {
+    const hit = _returnsCache.get(symbol);
+    if (hit && hit.session === session && now - hit.at < RETURNS_CACHE_MS) return [symbol, hit.returns] as const;
+    try {
+      const bars = await collectBars(symbol, LOOKBACK_DAYS + 1, '1Day', undefined, 'split');
+      if (!isUsable(bars)) return null;
+      const returns = datedReturns(bars.value, session, LOOKBACK_DAYS);
+      if (returns.size < MIN_RETURNS) return null;
+      _returnsCache.set(symbol, { at: now, session, returns });
+      return [symbol, returns] as const;
+    } catch { return null; }
+  }));
+  return new Map(pairs.filter((p): p is NonNullable<typeof p> => p !== null));
 }
 
-/**
- * Correlate two return series, aligning them on their common tail.
- *
- * `null` means "not enough overlap to say", which is not the same fact as 0 — a zero
- * correlation is a measurement, and reporting one for an unmeasurable pair would put a
- * number the data does not support in front of the model.
- */
-export function correlate(ra: number[], rb: number[]): number | null {
-  const len = Math.min(ra.length, rb.length);
-  if (len < MIN_RETURNS) return null;
-  return pearsonCorrelation(ra.slice(-len), rb.slice(-len));
+/** Correlate identical completed return intervals. Unknown is never zero. */
+export function correlate(ra: Map<string, number>, rb: Map<string, number>): number | null {
+  const dates = [...ra.keys()].filter(d => rb.has(d)).sort().slice(-LOOKBACK_DAYS);
+  if (dates.length < MIN_RETURNS) return null;
+  return pearsonCorrelation(dates.map(d => ra.get(d)!), dates.map(d => rb.get(d)!));
 }
 
 // ── Correlation-aware entry gating ───────────────────────────────────────────
 
 export interface CorrelationResult {
   allowed: boolean;
-  maxCorrelation: number;
+  maxCorrelation: number | null;
+  minCorrelation?: number | null;
+  mostNegativelyCorrelatedWith?: string | null;
+  measuredPairs?: number;
+  missingSymbols?: string[];
   mostCorrelatedWith: string | null;
   sizeMultiplier: number; // 1.0 = full size, <1.0 = downsize due to correlation
   detail: string;
@@ -116,7 +110,7 @@ export interface CorrelationResult {
 /**
  * Check whether a new entry is too correlated with existing holdings.
  *
- * Uses trailing 30-day daily returns to compute pairwise Pearson correlation
+ * Uses trailing 60-session dated daily returns to compute pairwise Pearson correlation
  * between the candidate and each current position. If any pair exceeds a
  * threshold, the position is downsized or vetoed.
  *
@@ -125,7 +119,7 @@ export interface CorrelationResult {
  *  - correlation > 0.70: downsize to 50%
  *  - correlation <= 0.70: full size
  *
- * Fails open: if bars can't be fetched, allows entry at full size.
+ * Missing, stale or unaligned histories do not establish diversification.
  */
 export async function correlationGate(
   candidateSymbol: string,
@@ -136,7 +130,7 @@ export async function correlationGate(
 
   const pass = (detail: string): CorrelationResult => ({
     allowed: true,
-    maxCorrelation: 0,
+    maxCorrelation: null,
     mostCorrelatedWith: null,
     sizeMultiplier: 1.0,
     detail,
@@ -164,29 +158,37 @@ export async function correlationGate(
 
     const candidateReturns = returns.get(candidateSymbol);
     if (!candidateReturns) {
-      return pass('candidate bars or return history unavailable — fail open');
+      return { ...pass('candidate fresh, dated return history unavailable'), allowed: false, sizeMultiplier: 0, missingSymbols: [candidateSymbol] };
     }
 
-    let maxCorr = 0;
+    let maxCorr: number | null = null;
     let maxCorrSymbol: string | null = null;
+    let minCorr: number | null = null, minCorrSymbol: string | null = null;
+    let measuredPairs = 0;
+    const missingSymbols: string[] = [];
 
     for (const symbol of others) {
       const held = returns.get(symbol);
-      if (!held) continue;
+      if (!held) { missingSymbols.push(symbol); continue; }
 
       const corr = correlate(candidateReturns, held);
-      if (corr === null) continue;
+      if (corr === null) { missingSymbols.push(symbol); continue; }
+      measuredPairs++;
+      if (minCorr === null || corr < minCorr) { minCorr = corr; minCorrSymbol = symbol; }
 
-      if (Math.abs(corr) > Math.abs(maxCorr)) {
+      if (maxCorr === null || corr > maxCorr) {
         maxCorr = corr;
         maxCorrSymbol = symbol;
       }
     }
 
+    const measured = { maxCorrelation: maxCorr, mostCorrelatedWith: maxCorrSymbol, minCorrelation: minCorr, mostNegativelyCorrelatedWith: minCorrSymbol, measuredPairs, missingSymbols };
+    if (missingSymbols.length || maxCorr === null) return { ...measured, allowed: false, sizeMultiplier: 0, detail: 'Correlation coverage is incomplete; fresh aligned histories are required' };
+
     if (maxCorr > VETO_THRESHOLD) {
       logger.info(`[PortfolioRisk] Correlation veto: ${candidateSymbol} \u2194 ${maxCorrSymbol} = ${maxCorr.toFixed(3)}`);
       return {
-        allowed: false,
+        ...measured, allowed: false,
         maxCorrelation: maxCorr,
         mostCorrelatedWith: maxCorrSymbol,
         sizeMultiplier: 0,
@@ -197,7 +199,7 @@ export async function correlationGate(
     if (maxCorr > DOWNSIZE_THRESHOLD) {
       logger.info(`[PortfolioRisk] Correlation downsize: ${candidateSymbol} \u2194 ${maxCorrSymbol} = ${maxCorr.toFixed(3)} \u2014 sizing \u00d7${DOWNSIZE_MULT}`);
       return {
-        allowed: true,
+        ...measured, allowed: true,
         maxCorrelation: maxCorr,
         mostCorrelatedWith: maxCorrSymbol,
         sizeMultiplier: DOWNSIZE_MULT,
@@ -206,7 +208,7 @@ export async function correlationGate(
     }
 
     return {
-      allowed: true,
+      ...measured, allowed: true,
       maxCorrelation: maxCorr,
       mostCorrelatedWith: maxCorrSymbol,
       sizeMultiplier: 1.0,
@@ -215,47 +217,24 @@ export async function correlationGate(
         : 'no correlations computed',
     };
   } catch (err: any) {
-    logger.warn(`[PortfolioRisk] Correlation check failed \u2014 fail open: ${err.message}`);
-    return { allowed: true, maxCorrelation: 0, mostCorrelatedWith: null, sizeMultiplier: 1.0, detail: `error: ${err.message} \u2014 fail open` };
+    logger.warn(`[PortfolioRisk] Correlation check unavailable: ${err.message}`);
+    return { allowed: false, maxCorrelation: null, mostCorrelatedWith: null, sizeMultiplier: 0, detail: `Correlation unavailable: ${err.message}` };
   }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Compute daily log returns from a bar series.
- *
- * Module-private: `returnsMatrix` is the only way in. Held-vs-held correlation and the entry
- * correlation gate MUST share this arithmetic — two implementations would report two different
- * numbers for the same pair and the model would get two truths — and the way to guarantee that
- * is to leave callers no arithmetic to re-do, not to export the pieces and hope they agree.
- */
-function dailyReturns(bars: { c: number }[]): number[] {
-  const returns: number[] = [];
-  for (let i = 1; i < bars.length; i++) {
-    if (bars[i - 1].c > 0) {
-      returns.push(Math.log(bars[i].c / bars[i - 1].c));
-    }
-  }
-  return returns;
-}
-
 /** Pearson correlation coefficient between two equal-length arrays. Reached via `correlate`. */
-function pearsonCorrelation(x: number[], y: number[]): number {
+function pearsonCorrelation(x: number[], y: number[]): number | null {
   const n = x.length;
-  if (n === 0) return 0;
-
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+  if (n === 0 || ![...x, ...y].every(Number.isFinite) || x.every(v => v === x[0]) || y.every(v => v === y[0])) return null;
+  const meanX = x.reduce((a, b) => a + b, 0) / n, meanY = y.reduce((a, b) => a + b, 0) / n;
+  let sumXY = 0, sumX2 = 0, sumY2 = 0;
   for (let i = 0; i < n; i++) {
-    sumX += x[i];
-    sumY += y[i];
-    sumXY += x[i] * y[i];
-    sumX2 += x[i] * x[i];
-    sumY2 += y[i] * y[i];
+    const dx = x[i] - meanX, dy = y[i] - meanY;
+    sumXY += dx * dy; sumX2 += dx * dx; sumY2 += dy * dy;
   }
-
-  const denom = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-  if (denom === 0) return 0;
-
-  return (n * sumXY - sumX * sumY) / denom;
+  const denom = Math.sqrt(sumX2 * sumY2);
+  if (denom === 0 || !Number.isFinite(denom)) return null;
+  return Math.max(-1, Math.min(1, sumXY / denom));
 }

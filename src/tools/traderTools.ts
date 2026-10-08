@@ -1,4 +1,8 @@
 import { readAccount, readPositions, readOrders } from '../core/accountRead';
+import { DECISION_TOOL_DEFINITIONS, DECISION_TOOL_NAMES, executeDecisionTool, THESIS_SCHEMA } from './decisionTools';
+import { evidenceResult, validateEvidenceIds } from '../journal/evidence';
+import { validateThesis, evaluatePremises, type EntryThesis } from '../journal/thesis';
+import { recordPage } from './paging';
 import { validateAnnotation, actAnnotation } from '../strategy/annotation';
 export { validateAnnotation, actAnnotation } from '../strategy/annotation';
 export type { AnnotateInput, AnnotationValidation } from '../strategy/annotation';
@@ -62,7 +66,7 @@ import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
 import { openedAtFromFills } from '../review/fills';
 import type { DecisionInput } from '../journal/types';
-import { getPolicy } from '../policy/load';
+import { getPolicy, getPolicyHash } from '../policy/load';
 import { logger } from '../core/logger';
 import type { ToolDefinition, SignalResult } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
@@ -82,6 +86,7 @@ const HOLD_LANGUAGE = /\bretain(s|ed|ing)?\b|\bno exit\b|\b(keep|keeping|continu
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
+  ...DECISION_TOOL_DEFINITIONS,
   {
     name: 'get_entry_plan',
     description: 'Size a proposed long equity trade against the user risk profile using the IOC entry limit, stop loss, reward:risk, current holdings, sector limits and estimated portfolio volatility. Returns maxQty and measured risk. Choose a supported stop and target first; never move them merely to pass a budget. This is a read-only plan, not an order or an approval.',
@@ -125,10 +130,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
         takeProfit: { type: 'number', description: 'Absolute take-profit price.' },
         atr: { type: 'number', description: 'ATR at entry. Recorded as the baseline the stop was sized against.' },
         reason: { type: 'string', description: 'Why you are buying now: the setup and the measured numbers behind it (signals, levels), in one or two sentences.' },
+        thesis: THESIS_SCHEMA,
         invalidation: { type: 'string', description: 'What would make you exit besides the stop and target: the condition that would mean the reason above is no longer true. Later exits are judged against this.' },
         eventId: { type: 'string', description: 'Optional — the MACHINE EVENTS id this entry answers, verbatim. Links the decision to what prompted it.' },
       },
-      required: ['symbol', 'qty', 'price', 'stopLoss', 'takeProfit', 'atr', 'reason', 'invalidation'],
+      required: ['symbol', 'qty', 'price', 'stopLoss', 'takeProfit', 'atr', 'reason', 'invalidation', 'thesis'],
     },
   },
   {
@@ -148,11 +154,12 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_exit',
-    description: "Queue an exit from a managed position — this SELLS. To keep a position, do not call this; record the hold with ack_event instead. Omit qty to request the whole holding, or provide whole shares to sell part. Existing protection stays until the executor attempts the exit. Inspect action status for approval, submission and fills.",
+    description: "Queue an exit from a managed position. Omit qty to request the whole holding, or provide whole shares to sell part. Use record_position_review for a material holding assessment and ack_event for event handling. Existing protection stays until the executor attempts the exit. Inspect action status for approval, submission and fills.",
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string' },
+        evidenceIds: { type: 'array', maxItems: 10, items: { type: 'string' }, description: 'Observation IDs supporting this exit. Required for thesis_broken and risk_reduction.' },
         basis: {
           type: 'string',
           enum: [...EXIT_BASES],
@@ -254,6 +261,9 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'IDs of existing journal decisions supporting this observation.' },
+        counterEvidenceIds: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Distinct journal decisions contradicting this observation.' },
+        reviewAfter: { type: 'string', description: 'Future review datetime within one year; defaults to 30 days.' },
+        scope: { type: 'string', maxLength: 300, description: 'Market regime, setup or circumstances where this observation applies.' },
         lesson: {
           type: 'string',
           description: 'The lesson in prose: what happened, what it generalizes to, and what you will do differently. Markdown is fine.',
@@ -280,10 +290,10 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_watchlist_scan',
-    description: 'Read the WHOLE watchlist as one table: every non-held watchlist symbol with its five signal scores, tally (including composite, their mean), the reversal filter, ATR, RSI, both EMAs, price and price staleness. Use this INSTEAD of calling get_signals once per symbol when you are scanning for a candidate — it is one call rather than eighteen, and the numbers are identical because both come from the same deterministic computation. These are the exact figures the machine judged on its last 60-second pass, not a fresh fetch: tickAt and ageMs say when, and a caveat appears if the table is older than a few tick intervals. Held names are NOT rows — they are listed in heldExcluded, so their absence means held, not off the watchlist. A symbol the machine declined to score (too little bar history) is still a row, with notScored naming why, so silence never stands in for missing data. priceStale is about the PRICE only; signals come from bars, so a row can have no price and full scores. With a configured risk profile, rows include riskFit and riskAdjustedScore, calculated against current holdings, and sort feasible setups first by signal per incremental volatility budget. Without a configured profile rows sort by composite. Risk fit uses an ATR stop as a preview; confirm actual supported levels with get_entry_plan. A scan is not an entry approval. The five signals are one trend family and correlated, so read composite rather than counting votes, and read reversal separately — it is the only reading here that can disagree with them. Before the first tick of a process there is no table at all and this returns an error rather than an empty list. For a symbol that is not on the watchlist, or for a fresh reading right now, use get_signals(symbol).',
+    description: 'Read compact stable pages of the last computed watchlist. Follow nextOffset with snapshotId until null. Compact rows include composite, meanReversionComposite, price staleness, RSI, ATR and risk fit; details:true retrieves full signal evidence from the SAME snapshot. All non-held symbols are preserved, including notScored rows; heldExcluded identifies holdings. tickAt and ageMs describe freshness. Signals and riskAdjustedScore are measured heuristics, not independent confirmations or expected returns. Get fresh get_signals and an entry plan with supported levels for a researched candidate.',
     input_schema: {
       type: 'object',
-      properties: {},
+      properties: { snapshotId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, details: { type: 'boolean' } },
       required: [],
     },
   },
@@ -364,7 +374,12 @@ async function dispatchTraderTool(
       case 'get_open_orders':     return await toolGetOpenOrders();
       case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'get_signals':         return await toolGetSignals(input);
-      case 'get_watchlist_scan':  return JSON.stringify(await riskAwareWatchlistScan());
+      case 'get_watchlist_scan': {
+        const scan = input.snapshotId ? { rows: [] } : await riskAwareWatchlistScan();
+        const page = recordPage(name, scan, 'rows', input);
+        const result = input.details ? page : { ...page, rows: page.rows.map((r: any) => ({ symbol: r.symbol, price: r.price, priceStale: r.priceStale, notScored: r.notScored, composite: r.tally.composite, meanReversionComposite: r.meanReversionTally.composite, chasing: r.reversal.chasing, atr: r.atr, rsi: r.rsi, riskAdjustedScore: r.riskAdjustedScore ?? null, riskFit: r.riskFit ? { allowed: r.riskFit.allowed, maxQty: r.riskFit.maxQty, violations: r.riskFit.violations } : null })) };
+        return JSON.stringify(result);
+      }
       case 'get_entry_plan':     return JSON.stringify(await entryPlan(input as { symbol: string; price: number; stopLoss: number; takeProfit: number }));
       case 'get_correlation':     return await toolGetCorrelation(input);
       case 'get_exposure':        return await toolGetExposure();
@@ -384,6 +399,7 @@ async function dispatchTraderTool(
       // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
       // delay, which only the agent loop can do), and it is not an assistant tool.
       default:
+        if (DECISION_TOOL_NAMES.has(name)) return executeDecisionTool(name, input);
         if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
         return (await executeResearchTool(name, input))
           ?? JSON.stringify({ error: `Unknown tool: ${name}` });
@@ -413,7 +429,11 @@ async function dispatchTraderTool(
   }
 }
 
-export const TRADER_REGISTRY = new ToolRegistry(TRADER_TOOL_DEFINITIONS, dispatchTraderTool);
+const OBSERVATION_TOOLS = new Set(['get_market_status','get_account','get_positions','get_open_orders','get_macro_regime','get_signals','get_watchlist_scan','get_entry_plan','get_correlation','get_exposure','get_calendar','get_fundamentals','get_pending_events', ...ALPACA_DATA_TOOL_NAMES, 'web_search']);
+export const TRADER_REGISTRY = new ToolRegistry(TRADER_TOOL_DEFINITIONS, async (name, input) => {
+  const result = await dispatchTraderTool(name, input);
+  return OBSERVATION_TOOLS.has(name) ? evidenceResult(name, result, typeof input.symbol === 'string' ? canonicalSymbol(input.symbol) : undefined) : result;
+});
 export const executeTraderTool = (name: string, input: Record<string, unknown>) => TRADER_REGISTRY.execute(name, input);
 
 // ── Implementations ───────────────────────────────────────────────────────────
@@ -554,7 +574,7 @@ async function toolGetSignals(input: Record<string, unknown>): Promise<string> {
     caveats: [
       'The five signals all measure trend and are highly correlated, so their counts inflate: a 5/5 tally is closer to one confirmation counted five times. tally.composite is their mean and is the number to threshold on.',
       'reversal is NOT in the composite. Its score reads the opposite way to a signal score — negative means the name has already run — and it answers "is this too late to chase" over about a month, not "is this a good entry today".',
-      'meanReversion is a second, decorrelated signal family — it answers a different question (has this run too far from its own recent history) than the trend family does (is this trending). Do not average it into tally.composite; read the two composites separately.',
+      'meanReversion is a second price-derived signal family; independence from trend has not been measured — it answers a different question (has this run too far from its own recent history) than the trend family does (is this trending). Do not average it into tally.composite; read the two composites separately.',
     ],
   });
 }
@@ -564,7 +584,11 @@ async function toolGetCorrelation(input: Record<string, unknown>): Promise<strin
   const result = await correlationGate(symbol);
   return JSON.stringify({
     symbol,
-    maxCorrelation: parseFloat(result.maxCorrelation.toFixed(3)),
+    maxCorrelation: result.maxCorrelation == null ? null : parseFloat(result.maxCorrelation.toFixed(3)),
+    minCorrelation: result.minCorrelation ?? null,
+    mostNegativelyCorrelatedWith: result.mostNegativelyCorrelatedWith ?? null,
+    measuredPairs: result.measuredPairs ?? 0,
+    missingSymbols: result.missingSymbols ?? [],
     mostCorrelatedWith: result.mostCorrelatedWith,
     recommendation: !result.allowed ? 'SKIP' : result.sizeMultiplier < 1.0 ? 'REDUCE' : 'OK',
     sizeMultiplier: result.sizeMultiplier,
@@ -598,7 +622,7 @@ async function toolGetExposure(): Promise<string> {
     maxSectorWeightPct: r(e.maxSectorWeightPct),
     maxSectorName: e.maxSectorName,
     correlations: e.correlations.map(c => ({ a: c.a, b: c.b, corr: r(c.corr, 3) })),
-    maxHeldCorrelation: r(e.maxHeldCorrelation, 3),
+    maxHeldCorrelation: e.maxHeldCorrelation == null ? null : r(e.maxHeldCorrelation, 3),
     maxHeldPair: e.maxHeldPair,
     caveats: e.caveats,
   });
@@ -619,6 +643,7 @@ async function toolGetCalendar(input: Record<string, unknown>): Promise<string> 
   return JSON.stringify({
     symbol: f.symbol,
     ...f.calendar,
+    fetchedAt: f.fetchedAt ?? null,
     source: f.source,
     caveats: f.caveats,
   });
@@ -634,6 +659,7 @@ async function toolGetFundamentals(input: Record<string, unknown>): Promise<stri
     balanceSheet: f.balanceSheet,
     revisions: f.revisions,
     modulesPresent: f.modulesPresent,
+    fetchedAt: f.fetchedAt ?? null,
     source: f.source,
     caveats: f.caveats,
   });
@@ -1000,9 +1026,22 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
   if (why.length < 20) return JSON.stringify({ ok: false, error: 'reason must say, in a sentence, why you are buying now and what measured evidence supports it.' });
   if (invalidation.length < 10) return JSON.stringify({ ok: false, error: 'invalidation is required: the condition that would mean the entry reason is no longer true.' });
   // One string so the journal, RECENT DECISIONS and the assistant all carry both halves.
+  const thesis = validateThesis(input.thesis as EntryThesis, canonicalSymbol(symbol));
+  const observationIds = [...new Set(thesis.premises.flatMap(p => p.evidenceIds))];
+  const evidence = validateEvidenceIds(observationIds, canonicalSymbol(symbol));
+  const supporting = evidence.filter(e => e.tool === 'get_position_review' && Date.now() - Date.parse(e.recordedAt) <= 15 * 60000);
+  if (!supporting.length) return JSON.stringify({ ok: false, error: 'Read a fresh candidate get_position_review dossier before entering' });
+  const current = supporting.at(-1)!;
+  if (current.data.policyHash !== getPolicyHash()) return JSON.stringify({ ok: false, error: 'Strategy changed since the candidate dossier; refresh it' });
+  if (current.data.positionKnown !== true || current.data.holding) return JSON.stringify({ ok: false, error: 'Candidate dossier must confirm that this symbol is not held' });
+  const status = evaluatePremises(thesis, current.data.metrics);
+  if (status.status === 'contradicted') return JSON.stringify({ ok: false, error: 'A recorded entry premise is already contradicted', thesisStatus: status });
+  if (status.premises.some(p => p.metric !== 'qualitative' && p.status === 'unknown')) return JSON.stringify({ ok: false, error: 'A numeric entry premise is not currently measured', thesisStatus: status });
+  const earnings = current.data.fundamentals?.calendar.daysUntil;
+  if (earnings != null && earnings >= 0 && earnings <= thesis.horizonDays && !thesis.catalystRiskAccepted) return JSON.stringify({ ok: false, error: 'Earnings fall within the holding horizon; state whether that gap risk is accepted' });
   const reason = `${why} Invalidated if: ${invalidation}`;
   try {
-    const result = await enterPosition({ symbol, signal: 'buy', price, stopLoss, takeProfit, atr, reason }, qty, resolveEventId(eventId, symbol) ?? undefined);
+    const result = await enterPosition({ symbol, signal: 'buy', price, stopLoss, takeProfit, atr, reason, thesis, observationIds, contextVariant: 'decision-context-v1' }, qty, resolveEventId(eventId, symbol) ?? undefined);
     return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Action queued. Read its status to distinguish approval, submission, and fills.' });
   } catch (err) { const refusal = journalRefusal(err, { symbol, rationale: reason, qty, price }); if (refusal) return refusal; throw err; }
 }
@@ -1017,9 +1056,12 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   if (basis === 'operator_request' && (agentContext.getStore()?.actorId ?? 'system') === 'system') {
     return refuse('operator_request needs an instruction from the operator. This cycle is a scheduled review; choose the basis that actually applies, or hold.');
   }
+  const observationIds = input.evidenceIds as string[] | undefined;
+  if (['thesis_broken','risk_reduction'].includes(basis) && !observationIds?.length) return refuse('Discretionary exits require the observation IDs showing what changed');
+  if (observationIds?.length) validateEvidenceIds(observationIds, canonicalSymbol(symbol));
   const reason = `${basis.replace('_', ' ')}: ${stated}`;
   try {
-    const result = await exitPosition(symbol, reason, qty, resolveEventId(eventId, symbol) ?? undefined);
+    const result = await exitPosition(symbol, reason, qty, resolveEventId(eventId, symbol) ?? undefined, observationIds);
     return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Exit queued. Existing protection is preserved until execution.' });
   } catch (err) { const refusal = journalRefusal(err, { symbol, rationale: reason, qty }); if (refusal) return refusal; throw err; }
 }
@@ -1202,7 +1244,7 @@ async function toolGetPriceStats(input: Record<string, unknown>): Promise<string
  * every cycle that is visible in `data/LESSONS.md` on the first read.
  */
 function toolWriteLesson(input: Record<string, unknown>): string {
-  const lesson = recordLesson(String(input.lesson ?? ''), input.evidenceIds as string[] ?? []);
+  const lesson = recordLesson(String(input.lesson ?? ''), input.evidenceIds as string[] ?? [], { counterEvidenceIds: input.counterEvidenceIds as string[] | undefined, reviewAfter: input.reviewAfter as string | undefined, scope: input.scope as string | undefined });
   return JSON.stringify({
     ok: true,
     stored: lesson,

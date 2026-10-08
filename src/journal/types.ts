@@ -8,6 +8,8 @@
  * are greps rather than readings.
  */
 
+import type { EntryThesis } from './thesis';
+
 export type DecisionKind =
   | 'adjustment'
   /** Intent to open a position; orderStatus describes its outcome. */
@@ -87,6 +89,10 @@ export interface DecisionRecord {
   protectionStatus?: 'pending' | 'confirmed' | 'unknown';
   protectionCheckedAt?: string;
   protectionStopLevel?: number | null;
+  thesis?: EntryThesis | null;
+  observationIds?: string[];
+  reviewId?: string | null;
+  contextVariant?: string;
 }
 
 /** Everything a caller must supply. `id` and `at` are stamped by `recordDecision`. */

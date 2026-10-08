@@ -2,6 +2,9 @@ import { withAccountRead } from '../core/accountRead';
 import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
 import { runAgentLoop } from './agentLoop';
+import { boundedCycleContext } from './savedResults';
+import { ToolRegistry } from './toolRegistry';
+import { buildDecisionBrief } from './decisionBrief';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest } from '../core/requests';
 import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
@@ -37,6 +40,20 @@ const DEFAULT_SLEEP_MS = 60 * 60_000;
 const ERROR_RECOVERY_SLEEP_MS = 60_000;
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
 const PAUSED_RECHECK_MS = 60 * 60_000;
+
+// Restrict assessment tasks at dispatch, even if a model asks for an unavailable tool.
+const REVIEW_TOOLS = new Set(['get_entry_plan', 'get_lessons', 'get_requests', 'get_market_status',
+  'get_account', 'get_positions', 'get_open_orders', 'get_actions', 'get_journal', 'get_scorecard',
+  'get_benchmark', 'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan',
+  'get_correlation', 'get_exposure', 'get_calendar', 'get_fundamentals', 'get_position_review',
+  'get_thesis_status', 'get_market_context', 'get_intraday_volume', 'get_economic_calendar',
+  'get_company_filings', 'get_research_updates', 'get_evidence', 'get_decision_followup',
+  'get_stock_bars', 'get_stock_snapshot', 'get_stock_latest_quote', 'get_most_active_stocks',
+  'get_market_movers', 'get_news', 'get_portfolio_history', 'web_search', 'read_source',
+  'compare_position_actions', 'record_position_review', 'record_candidate_review',
+  'record_research_review', 'sleep']);
+const REVIEW_REGISTRY = new ToolRegistry(TRADER_REGISTRY.definitions.filter(tool => REVIEW_TOOLS.has(tool.name)),
+  (name, input) => TRADER_REGISTRY.execute(name, input));
 
 /** Policy activation validates the prompt; a later render error stops the cycle. */
 function systemPrompt(): string { return runtimeContract() + "\n\nACCOUNT STRATEGY\n" + renderPolicy(); }
@@ -105,10 +122,14 @@ export class Trader {
     updateRequest(command.id, { status: 'running' });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
-      provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
+      provider: this.provider, registry: command.mode === 'review_only' ? REVIEW_REGISTRY : TRADER_REGISTRY,
+      systemPrompt: systemPrompt() + (command.mode === 'review_only'
+        ? '\nThis is an assessment-only task. Research the requested symbol and record a material position or candidate review when appropriate. Trading, protection changes, event acknowledgements and agent handoffs are unavailable. Report the assessment and unknowns; do not request an order.' : ''), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: command.mode === 'review_only'
+        ? `${command.text}\nStart with get_position_review for the requested symbol. Missing evidence is unknown. Keep this task focused on that symbol; this task does not authorize orders or event handling.`
+        : await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
       maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
@@ -311,9 +332,9 @@ async function buildPortfolioContext(
     // left in it.
     const cal = e ? earnings[e.symbol]?.calendar : undefined;
     const dUntil = cal?.daysUntil;
-    const earningsFlag = dUntil != null && dUntil <= EARNINGS_HORIZON_DAYS
-      ? `  ${dUntil <= 0 ? 'EARNINGS TODAY' : `EARNINGS IN ${dUntil}D`}${cal!.isEstimate === true ? ' (est)' : ''}`
-      : '';
+    const earningsFlag = dUntil != null && dUntil < 0 ? '  REPORTED EARNINGS DATE HAS PASSED — NEXT DATE UNKNOWN' : dUntil != null && dUntil <= EARNINGS_HORIZON_DAYS
+      ? `  ${dUntil === 0 ? 'EARNINGS TODAY' : `EARNINGS IN ${dUntil}D`}${cal!.isEstimate === true ? ' (est)' : ''}`
+      : !cal ? '  CALENDAR UNAVAILABLE — get_calendar' : cal.nextEarningsAt == null ? '  NO EARNINGS DATE REPORTED' : '';
     lines.push(`  ${label.padEnd(8)}${entry}${stop}${tp}${qty}${livePnl}${weight}${sector}${age ? `  age ${age}` : ''}${flag}${earningsFlag}`);
 
     // MFE/MAE from the same three fields `compute.ts` uses, so the numbers agree. A missing
@@ -348,7 +369,7 @@ async function buildPortfolioContext(
     // Keep the position's own recent decision trail beside its live state. The account-wide
     // RECENT DECISIONS block can omit a ticker's latest hold when other symbols are busy.
     if (e) {
-      const recent = readDecisions({ symbol: e.symbol, limit: 5 }).reverse();
+      const recent = readDecisions({ symbol: e.symbol, limit: 2 }).reverse();
       if (recent.length > 0) {
         lines.push('          Latest decisions for this position (newest first):');
         for (const decision of recent) {
@@ -383,7 +404,7 @@ async function buildPortfolioContext(
       (exp.maxSectorName ? ` Max sector ${exp.maxSectorName} ${exp.maxSectorWeightPct.toFixed(1)}%.` : '') +
       ` HHI ${exp.hhi.toFixed(2)}.`,
     );
-    if (exp.maxHeldPair) {
+    if (exp.maxHeldPair && exp.maxHeldCorrelation != null) {
       lines.push(`Max held correlation ${exp.maxHeldCorrelation.toFixed(2)} (${exp.maxHeldPair[0]}/${exp.maxHeldPair[1]}).`);
     }
     if (exp.caveats.length > 0) {
@@ -705,6 +726,9 @@ async function renderCycleContext(
   // saying.
   lines.push('');
   lines.push(await buildBrokerOrders());
+  lines.push('');
+  try { lines.push(await buildDecisionBrief()); }
+  catch (err: any) { lines.push('Decision review unavailable: ' + err.message + '. Read get_position_review before a material decision.'); }
 
   const historyCtx = buildDecisionHistory();
   if (historyCtx) { lines.push(''); lines.push(historyCtx); }
@@ -722,5 +746,5 @@ async function renderCycleContext(
 
 
 export function buildCycleContext(state: ReturnType<typeof getState>, pendingMessages: string[]): Promise<string> {
-  return withAccountRead(() => renderCycleContext(state, pendingMessages));
+  return withAccountRead(async () => boundedCycleContext(await renderCycleContext(state, pendingMessages)));
 }
