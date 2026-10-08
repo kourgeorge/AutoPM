@@ -24,7 +24,7 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         symbols:   { type: 'string',  description: 'Ticker symbol, e.g. "AAPL".' },
-        timeframe: { type: 'string',  description: 'Bar size: "1Min", "5Min", "15Min", "1Hour", "1Day". Default "1Day".' },
+        timeframe: { type: 'string',  description: 'Bar size: "1Min", "5Min", "15Min", "1Hour", "1Day", "1Week", "1Month". Default "1Day". Use "1Week"/"1Month" for the longer-term trend.' },
         limit:     { type: 'integer', description: 'Bars to return, newest last (default 20, max 100).' },
         start:     { type: 'string',  description: 'ISO 8601 start date, e.g. "2025-01-01". Defaults to a window wide enough for `limit` bars.' },
         end:       { type: 'string',  description: 'ISO 8601 end date. Defaults to 16 minutes ago, the earliest the consolidated tape may be queried.' },
@@ -133,8 +133,8 @@ export async function executeAlpacaDataTool(
 /**
  * Trading days per bar, for turning a bar count into a default `start`.
  *
- * Only `1Day` needs more than a day of window per bar; the intraday sizes all fit many bars
- * into one session, so one calendar day per bar is generous for them.
+ * The intraday sizes all fit many bars into one session; `1Week` is 5 sessions and `1Month`
+ * about 21. An unknown size falls back to one session per bar.
  */
 const DAYS_PER_BAR: Record<string, number> = {
   '1Min': 1 / 390,
@@ -142,6 +142,8 @@ const DAYS_PER_BAR: Record<string, number> = {
   '15Min': 1 / 26,
   '1Hour': 1 / 7,
   '1Day': 1,
+  '1Week': 5,
+  '1Month': 21,
 };
 
 /**
