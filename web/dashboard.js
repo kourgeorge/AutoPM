@@ -317,14 +317,13 @@ function appendLiveEntries(fragment) {
   const atBottom=feed.scrollHeight-scrollTop-feed.clientHeight<24;
   $('live-feed-empty').hidden=true;
   feed.append(fragment);
-  const rows=feed.querySelectorAll('.activity-entry');
-  let removedHeight=0;
-  for (let index=0; index<rows.length-1000; index++) {
-    removedHeight+=rows[index].getBoundingClientRect().height;
-  }
-  for (let index=0; index<rows.length-1000; index++) rows[index].remove();
+  const rows=feed.querySelectorAll('.activity-entry'), cut=Math.max(0,rows.length-1000);
+  // Measure how far the first kept row moves in layout pixels (the units of
+  // scrollTop); on-screen rect heights are scaled by the text-size zoom.
+  const anchor=rows[cut], anchorTop=anchor.offsetTop;
+  for (let index=0; index<cut; index++) rows[index].remove();
   // Preserve the line being read when old scrollback is trimmed.
-  feed.scrollTop=atBottom ? feed.scrollHeight : Math.max(0,scrollTop-removedHeight);
+  feed.scrollTop=atBottom ? feed.scrollHeight : Math.max(0,scrollTop-(anchorTop-anchor.offsetTop));
 }
 $('open-conversation').onclick=()=>{showView('live');messageInput.focus();};
 
@@ -1072,6 +1071,23 @@ $('theme-toggle').onclick=()=>{
   const theme=document.documentElement.dataset.theme==='light'?'dark':'light';setTheme(theme);
   try { localStorage.setItem('autotrade.theme',theme); } catch {}
 };
+const TEXT_SIZES=[0.9,1,1.1,1.25,1.4,1.6],DEFAULT_TEXT_SIZE=1.1;
+function setTextSize(size) {
+  const value=TEXT_SIZES.includes(size)?size:DEFAULT_TEXT_SIZE;
+  document.documentElement.style.setProperty('--text-zoom',String(value));
+  $('text-size-value').textContent=`${Math.round(value*100)}%`;
+  $('text-smaller').disabled=value===TEXT_SIZES[0];
+  $('text-larger').disabled=value===TEXT_SIZES[TEXT_SIZES.length-1];
+  return value;
+}
+try { setTextSize(Number(localStorage.getItem('autotrade.textSize'))||DEFAULT_TEXT_SIZE); } catch { setTextSize(DEFAULT_TEXT_SIZE); }
+function stepTextSize(step) {
+  const current=TEXT_SIZES.indexOf(Number(document.documentElement.style.getPropertyValue('--text-zoom'))||DEFAULT_TEXT_SIZE);
+  const value=setTextSize(TEXT_SIZES[Math.min(TEXT_SIZES.length-1,Math.max(0,current+step))]);
+  try { localStorage.setItem('autotrade.textSize',String(value)); } catch {}
+}
+$('text-smaller').onclick=()=>stepTextSize(-1);
+$('text-larger').onclick=()=>stepTextSize(1);
 function fillRiskFields(risk) {
   const f=$('settings').elements;
   for(const [key,value] of Object.entries(risk))if(f[key])f[key].value=value==null?'':riskFractions.includes(key)?Number((value*100).toFixed(4)):value;
