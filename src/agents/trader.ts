@@ -122,8 +122,27 @@ export class Trader {
 
 // ── Context builder ───────────────────────────────────────────────────────────
 
-/** Beyond this a rationale stops being a reminder and starts being the block. */
-const MAX_RATIONALE_CHARS = 140;
+/**
+ * Reasons, exit conditions, hold theses and lessons are rendered IN FULL — never truncated.
+ * They are the trader's own statements, and a cut one is a different statement: a 140-char
+ * limit on the entry rationale used to cut from the end, and `toolExecuteEntry` stores the
+ * reason and its exit condition as one string, so the half exits are judged against was the
+ * half that vanished. If the block grows too long, show fewer rows — never shorter text.
+ *
+ * `toolExecuteEntry` stores `<reason> Invalidated if: <condition>`; it is split back here so
+ * the condition gets a line of its own.
+ */
+const INVALIDATION_MARKER = ' Invalidated if: ';
+
+/** Split a stored entry rationale back into its reason and its exit condition, when it has one. */
+function splitEntryRationale(rationale: string): { reason: string; invalidation: string | null } {
+  const at = rationale.lastIndexOf(INVALIDATION_MARKER);
+  if (at < 0) return { reason: rationale, invalidation: null };
+  return {
+    reason: rationale.slice(0, at).trim(),
+    invalidation: rationale.slice(at + INVALIDATION_MARKER.length).trim() || null,
+  };
+}
 
 /**
  * How close a print has to be before it is worth a line on a held row. Fourteen days is roughly
@@ -132,10 +151,6 @@ const MAX_RATIONALE_CHARS = 140;
  * any date at any distance; this is only about what is worth saying unasked.
  */
 const EARNINGS_HORIZON_DAYS = 14;
-
-function truncate(s: string, max: number): string {
-  return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '…';
-}
 
 /** "3d" / "4h" / "12m". Coarse on purpose — the decision turns on the order of magnitude. */
 function ageOf(openedAt: string): string | null {
@@ -232,8 +247,11 @@ async function buildPortfolioContext(
   // theses that matter most: a two-day-old position sits behind a busy day's ~100 hold
   // records, so a 200-record page rendered its thesis as "not recorded" while the link was
   // sitting in the journal. Read once per cycle, and not at all when nothing is linked.
+  // The latest management thesis is resolved the same way: written by `actAnnotation` each time
+  // a stop or target moves, and the more current statement of why the position is still held.
   const needed = new Set(
-    rows.map(r => r.snap?.entryDecisionId).filter((id): id is string => id != null),
+    rows.flatMap(r => [r.snap?.entryDecisionId, r.snap?.managementDecisionId])
+      .filter((id): id is string => id != null),
   );
   const theses = new Map(
     needed.size === 0
@@ -311,10 +329,22 @@ async function buildPortfolioContext(
       }
     }
     const thesis = snap?.entryDecisionId ? theses.get(snap.entryDecisionId) : undefined;
+    const entryParts = thesis ? splitEntryRationale(thesis.rationale) : null;
     parts.push(
-      thesis ? `"${truncate(thesis.rationale, MAX_RATIONALE_CHARS)}"` : 'rationale not recorded',
+      entryParts ? `"${entryParts.reason}"` : 'rationale not recorded',
     );
     lines.push(`          ${parts.join(' — ')}`);
+    if (entryParts?.invalidation) {
+      lines.push(`          Invalidated if: "${entryParts.invalidation}"`);
+    }
+    // Only when it is a different record from the entry: a snapshot created by adoption may point
+    // both ids at the same decision, and printing it twice would read as two statements.
+    const mgmt = snap?.managementDecisionId && snap.managementDecisionId !== snap.entryDecisionId
+      ? theses.get(snap.managementDecisionId) : undefined;
+    if (mgmt) {
+      const mgmtAge = ageOf(mgmt.at);
+      lines.push(`          Latest hold thesis${mgmtAge ? ` (${mgmtAge} ago)` : ''}: "${mgmt.rationale}"`);
+    }
   }
 
   // Counted at the VENUE when exposure answered, not from the snapshot map. The two can differ —
@@ -615,7 +645,7 @@ function buildLessons(): string {
   lines.push('Research observations from previous cycles. These are suggestions, not permissions or binding rules. The active strategy and account mandate always take precedence.');
   for (const lesson of shown) {
     lines.push('');
-    lines.push(lesson.slice(0,600));
+    lines.push(lesson);
   }
   lines.push('=== END LESSONS ===');
   return lines.join('\n');
