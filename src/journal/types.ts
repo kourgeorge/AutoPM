@@ -103,7 +103,7 @@ export function isTradeAction(r: DecisionRecord): boolean {
 }
 
 export function describeDecision(r: DecisionRecord): string {
-  const status = r.orderStatus ?? (r.executed ? 'recorded (legacy outcome)' : 'recorded');
+  const status = r.orderStatus ?? (r.executed ? 'recorded outcome' : 'recorded');
   const filled = r.filledQty != null ? `; filled ${r.filledQty}/${r.requestedQty ?? '?'}${r.fillPrice != null ? ` @ $${r.fillPrice}` : ''}` : '';
   const protection = r.intendedStop != null ? `; protection ${r.protectionStatus ?? 'unverified'}${r.protectionStopLevel != null ? ` @ $${r.protectionStopLevel}` : ''}, decision stop $${r.intendedStop}` : '';
   return `${r.kind.toUpperCase()} ${r.symbol ?? 'portfolio'} — ${status}${filled}${protection}: ${r.rationale}`;

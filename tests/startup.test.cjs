@@ -23,7 +23,7 @@ async function launch({ state = legacy, env = {}, invalidPolicy = false } = {}) 
       BROKER: 'alpaca', AI_PROVIDER: 'ollama', AI_API_KEY: 'test',
       AI_MODEL: 'test', AI_BASE_URL: '', AI_MAX_TOKENS: '4096', AI_MAX_TOOL_ROUNDS: '10',
       ALPACA_KEY_ID: 'test', ALPACA_SECRET_KEY: 'test', ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
-      IBKR_PORT: '7497', API_PORT: '18787', ALERT_WEBHOOK_URL: '', ...env },
+      IBKR_PORT: '7497', ENGINE_PORT: '18787', ALERT_WEBHOOK_URL: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   let stdout = '', stderr = '', ready = false;
@@ -45,6 +45,7 @@ async function launch({ state = legacy, env = {}, invalidPolicy = false } = {}) 
     });
   } finally { clearTimeout(deadline); }
   assert.equal(signal, null, stderr || stdout);
+  assert.equal(fs.existsSync(path.join(dir, '.engine-lock')), false, 'normal exit releases engine ownership');
   const probe = JSON.parse(fs.readFileSync(path.join(dir, 'probe.json'), 'utf8'));
   assert.equal(probe.mutations, 0, 'Startup tests must never trade');
   const read = name => { const file = path.join(dir, 'db', name); return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}; };
@@ -81,7 +82,7 @@ test('configuration and policy errors before boot remain visible', async () => {
   assert.equal(policy.accountReads, 0);
 });
 
-test('headless startup opens the local dashboard without any login setup', async () => {
+test('engine startup works without a terminal or login setup', async () => {
   const result = await launch({ state: { paused: true }, env: { HEADLESS: '1' } });
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.ready, true);

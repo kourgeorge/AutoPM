@@ -214,7 +214,7 @@ export function isEphemeralStorage(): boolean { return ephemeral; }
 /** Replay only: start a scenario with no actions left over from the previous one. */
 export function forgetEphemeralRecords(kind: string): void { if (ephemeral) kinds.delete(kind); }
 
-export function appendActivity(value: { at: string; kind: string; text: string; level?: string }): number {
+export function appendActivity(value: { at: string; kind: string; text: string; level?: string; source?: string }): number {
   const seq = appendRecord('activity', require('crypto').randomUUID(), value.at, value);
   const publish = () => { for (const listener of activityListeners) { try { listener({ ...value, seq }); } catch {} } };
   if (depth) committed.push(publish); else publish();

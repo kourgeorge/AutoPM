@@ -19,6 +19,22 @@ test('backtests use unique account-owned job paths',()=>{
   const one=newJobDirectory('backtest'),two=newJobDirectory('backtest');
   assert.notEqual(one,two);assert.equal(one.startsWith(process.env.DATA_DIR),true);assert.equal(fs.existsSync(path.join(one,'job.json')),true);
 });
+test('daily per-agent token counts persist without assigning legacy usage to an agent',async()=>{
+  const {withModelBudget,modelUsage}=require('../src/core/modelBudget');
+  const {agentContext}=require('../src/core/agentContext');
+  const previous=process.env.AI_MAX_REQUESTS_PER_DAY;process.env.AI_MAX_REQUESTS_PER_DAY='20';
+  const day=new Date().toISOString().slice(0,10);
+  storage.saveValue('modelUsage:'+day,{day,requests:2,inputTokens:100,outputTokens:20,missingUsage:0});
+  try {
+    const provider=withModelBudget({chat:async params=>({content:[],stopReason:'end_turn',usage:{inputTokens:params.maxTokens,outputTokens:5}})});
+    await Promise.all(['trader','concierge'].map((role,i)=>agentContext.run({role,actorId:'test',requestId:role},()=>provider.chat({systemPrompt:'test',messages:[],tools:[],maxTokens:10+i}))));
+    storage.closeStorage();
+    const usage=modelUsage();
+    assert.equal(usage.inputTokens,121);assert.equal(usage.outputTokens,30);
+    assert.deepEqual(usage.byAgent.trader,{requests:1,inputTokens:10,outputTokens:5,missingUsage:0});
+    assert.deepEqual(usage.byAgent.concierge,{requests:1,inputTokens:11,outputTokens:5,missingUsage:0});
+  } finally {process.env.AI_MAX_REQUESTS_PER_DAY=previous;}
+});
 test('notification retries preserve delivery identity until the receiver acknowledges',async()=>{
   const {notifyAccount,NotificationDelivery,pendingNotifications}=require('../src/core/notifications');
   const prior=global.fetch;process.env.ALERT_WEBHOOK_URL='https://test.invalid/notifications';

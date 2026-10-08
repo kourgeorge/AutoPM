@@ -1,10 +1,10 @@
 # AutoTrade
 
-A local, single-user trading app with a terminal or browser dashboard, a deterministic execution queue, and an AI research agent. It supports Alpaca and Interactive Brokers; automated entries are restricted to whole-share long equities during regular market hours.
+A local, single-user trading app with independent engine, terminal, and web processes, a deterministic execution queue, and an AI research agent. It supports Alpaca and Interactive Brokers; automated entries are restricted to whole-share long equities during regular market hours.
 
 ## Run locally
 
-Requires Node 22.13 or newer. All account data lives in `data/`. Run one copy of the app at a time.
+Requires Node 22.13 or newer. All account data lives in `data/`. Run one engine per account data directory. Terminal and web clients connect to that engine.
 
 ```sh
 npm ci
@@ -21,14 +21,34 @@ ALPACA_SECRET_KEY=your-paper-secret
 AI_PROVIDER=anthropic
 AI_MODEL=claude-sonnet-4-6
 AI_API_KEY=your-model-key
-HEADLESS=1
 ```
 
-Start it, then open `http://127.0.0.1:8787`:
+Start the engine, then start either or both interfaces in separate terminals:
 
 ```sh
-npm run start:headless
+npm run start:engine   # Trading engine and local API on 127.0.0.1:8788
+npm run start:tui      # Terminal client; connects to the engine
+npm run start:web      # Browser server on http://127.0.0.1:8787
 ```
+
+For a single-command session, use either shortcut:
+
+```sh
+npm run start:engine+tui
+npm run start:engine+web
+```
+
+Each shortcut starts the engine and the selected interface as separate child processes. Ctrl+C, `/quit` in the paired TUI, or either process exiting stops the pair; the engine gets its normal graceful shutdown. An existing engine is never stopped or reused by these shortcuts—use the standalone UI command to connect to one already running. The matching development shortcuts are `dev:engine+tui` and `dev:engine+web`.
+
+These are three independent processes. Only the engine reads account storage, connects to the broker, and runs research and execution. The TUI sends commands and reads snapshots from the engine; the web server serves the dashboard and proxies its API and event stream. Both interfaces show the same account and action outcomes. Closing or restarting a UI leaves the engine running. Stop the engine with Ctrl+C or SIGTERM in its own terminal.
+
+Clients may start before the engine. The TUI reconnects automatically; the browser shows the unavailable connection and recovers when the engine starts. Failed command requests are never automatically replayed. If a connection drops after submission, check the action or request outcome before submitting again.
+
+`ENGINE_PORT` sets the engine listener (default `8788`). `ENGINE_URL` selects the local engine for both clients (default `http://127.0.0.1:8788`, or the configured `ENGINE_PORT`). `WEB_PORT` sets the browser listener (default `8787`; the older `API_PORT` remains a web-port fallback). UI processes do not need broker or AI credentials. Use `dev:engine`, `dev:tui`, and `dev:web` to run the same roles through TypeScript.
+
+`npm start`, `npm run dev`, and the older `start:headless` / `dev:headless` commands now start the engine only; `HEADLESS` no longer selects a combined engine/TUI startup. When upgrading from a combined process, stop it before starting the separate engine.
+
+The engine acquires `DATA_DIR/.engine-lock` before loading account storage. A second engine using that directory fails immediately, even if it selects another port. Normal shutdown releases the lock. After a crash or SIGKILL, the lock is intentionally retained: inspect `owner.json`, verify the recorded process has stopped, then remove only `.engine-lock` before restarting. This is an operational lock; existing account files need no migration.
 
 AutoTrade is a local, single-user app: there is no login. The dashboard only answers on this computer (127.0.0.1), and refuses requests from other sites. New accounts start with entries and exits set to manual approval; you can switch either to automatic in Strategy settings.
 
@@ -108,7 +128,7 @@ Lessons require source decision IDs when written by an agent. Administrators can
 | `lessons.jsonl` | Lessons the trader keeps across cycles |
 | `operator-commands.jsonl`, `strategy-changes.jsonl`, `stop-requests.jsonl`, `notifications.jsonl`, `notifications-sent.jsonl` | Created when first needed |
 
-A `.jsonl` line is `{"seq","id","at","value"}`; an update appends a new line for the same id, the last one wins, and older lines are dropped when the app next starts. Run one copy of the app at a time.
+A `.jsonl` line is `{"seq","id","at","value"}`; an update appends a new line for the same id, the last one wins, and older lines are dropped when the app next starts. Run one engine per account data directory. Terminal and web clients connect to that engine.
 
 Invalid JSON in `db/` stops startup; it never resets the account to an empty state. On first start `data/` is bound to the connected broker account, saved in `db/settings.json`. Startup refuses a different broker, venue, or account, so paper and live records never mix. Startup errors remain visible after the terminal dashboard closes.
 

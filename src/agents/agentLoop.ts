@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import Anthropic from '@anthropic-ai/sdk';
 import type { ChatMessage, ContentBlock } from '../core/types';
 import type { ModelProvider } from '../core/modelProvider';
 import { agentContext, type AgentContext } from '../core/agentContext';
@@ -15,6 +16,14 @@ export interface Transcript {
 }
 type ToolCall = Extract<ContentBlock, { type: 'tool_use' }>;
 interface ToolCallRecord { name: string; input: unknown; result?: string }
+/** Room for a few full-length model requests plus tools — must stay well above MODEL_CALL_TIMEOUT_MS. */
+const TURN_TIMEOUT_MS = 300_000;
+/** What the operator reads instead of the platform's "The operation was aborted due to timeout". */
+export const SLOW_MODEL_MESSAGE = 'The AI service is responding slowly right now and this request timed out. Please try again in a minute.';
+/** Both the fetch/turn deadline (DOMException TimeoutError) and the Anthropic SDK's own timeout error. */
+function isTimeout(err: any): boolean {
+  return err?.name === 'TimeoutError' || err instanceof Anthropic.APIConnectionTimeoutError;
+}
 const errorResult = (error: string) => JSON.stringify({ ok: false, error });
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
@@ -65,7 +74,7 @@ export async function runAgentLoop(opts: {
   const id = opts.context.requestId;
   let run = readRecord<Transcript>('transcripts', id);
   if (run && ['completed','waiting','failed'].includes(run.status)) return run;
-  const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(120000)]);
+  const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]);
   const context = { ...opts.context, signal };
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
@@ -99,11 +108,13 @@ export async function runAgentLoop(opts: {
             if (saved?.name !== undefined && (saved.name !== call.name || JSON.stringify(saved.input) !== JSON.stringify(call.input))) throw new Error('Saved tool identity mismatch');
             let result = saved?.result;
             if (result === undefined) {
-              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, startedAt: new Date().toISOString() });
+              const startedAt = new Date().toISOString();
+              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, startedAt });
               result = finish ? errorResult('Turn has ended; this call was not executed')
                 : await abortable(agentContext.run({ ...context, toolCallId }, () => opts.registry.execute(call.name, call.input)), signal);
-              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result: boundedResult(result), finishedAt: new Date().toISOString() });
-              logger.tool(context.role, call.name, result, call.input);
+              // Keep the complete receipt; only the model's context is size-bounded below.
+              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result, startedAt, finishedAt: new Date().toISOString() });
+              logger.tool(context.role, call.name, result, call.input, { id: toolCallId, requestId: id });
             }
             results.push({ type: 'tool_result', tool_use_id: call.id, content: boundedResult(result) });
             if (call.name === 'sleep') {
@@ -136,8 +147,11 @@ export async function runAgentLoop(opts: {
         current.status = 'completed'; break;
       }
     } catch (err: any) {
-      current.status = signal.aborted ? 'interrupted' : 'failed';
-      current.error = err?.message ?? String(err);
+      // Only the caller's own stop counts as an interruption: an interrupted request stays queued
+      // and halts the concierge's queue, so a timeout marked that way would stall the chat and
+      // later re-run a question the operator has already given up on.
+      current.status = opts.signal?.aborted ? 'interrupted' : 'failed';
+      current.error = isTimeout(err) ? SLOW_MODEL_MESSAGE : err?.message ?? String(err);
     }
     checkpoint();
     return current;

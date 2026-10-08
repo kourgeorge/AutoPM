@@ -8,10 +8,13 @@ import { modelUsage } from '../core/modelBudget';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
-import { readRecords, readRecordPage, appendRecord } from '../core/storage';
+import { readRecords, readRecordPage, appendRecord, listRecords } from '../core/storage';
 import { broker } from '../broker';
 import { canonicalSymbol } from '../core/symbols';
-import { confirmProtection } from '../strategy/protectionIntent';
+import { collectBars } from '../collect/barSource';
+import { isPresent } from '../collect/types';
+import type { Timeframe } from '../collect/yahoo';
+import { confirmProtection, clearUnplacedProtection } from '../strategy/protectionIntent';
 import { adoptHolding, AdoptRefused } from '../strategy/adopt';
 import { sweepActions } from '../strategy/actionExecutor';
 import http from 'http';
@@ -22,6 +25,7 @@ import { automationSummary } from '../core/automation';
 import { getAllActions, getOpenActions } from '../core/actions';
 import { getLastTick } from '../features/lastTick';
 import { scorecard } from '../review/metrics';
+import { activityHistory } from '../review/activity';
 import type { Trader } from '../agents/trader';
 import type { FeedEntry, HeadlessUI } from '../ui/headless';
 
@@ -31,6 +35,8 @@ const MAX_FEED_LIMIT = 1000;
 const DEFAULT_FEED_LIMIT = 200;
 /** Keeps proxies and load balancers from closing an idle event stream. */
 const SSE_HEARTBEAT_MS = 25_000;
+/** Equity points kept for the live chart — at one tick a minute, well over a trading day. */
+const EQUITY_HISTORY_POINTS = 1500;
 /** Every request is made by the one local user. */
 const OPERATOR = 'operator';
 
@@ -59,6 +65,8 @@ interface Route {
 
 export interface ApiServerDeps {
   ui: HeadlessUI;
+  /** The standalone engine serves API routes only; the web process owns assets. */
+  serveWeb?: boolean;
   trader: Trader;
   messageService?: (text: string, actor: string) => AgentRequest;
 }
@@ -74,7 +82,17 @@ export interface ApiServer {
  */
 export function startApiServer(deps: ApiServerDeps): ApiServer {
   const { port } = config.api;
-  const routes = buildRoutes(deps);
+  // In memory only: the chart shows this run of the app, not the account's whole history.
+  const equityHistory: Array<{ at: string; equity: number }> = [];
+  const recordEquity = (): void => {
+    const tick = getLastTick();
+    if (tick?.account?.equity == null || tick.account.stale || equityHistory.at(-1)?.at === tick.tickAt) return;
+    equityHistory.push({ at: tick.tickAt, equity: tick.account.equity });
+    if (equityHistory.length > EQUITY_HISTORY_POINTS) equityHistory.shift();
+  };
+  recordEquity();
+  const unsubscribeEquity = deps.ui.subscribeTicks(recordEquity);
+  const routes = buildRoutes(deps, equityHistory);
   const streams = new Set<http.ServerResponse>();
 
   const server = http.createServer((req, res) => {
@@ -95,9 +113,9 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Referrer-Policy', 'no-referrer');
     const url = new URL(req.url ?? '/', 'http://localhost');
-    if (req.method === 'GET' && ['/', '/dashboard.js', '/dashboard.css'].includes(url.pathname)) {
+    if (deps.serveWeb !== false && req.method === 'GET' && ['/', '/dashboard.js', '/dashboard.css', '/favicon.svg'].includes(url.pathname)) {
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-      res.writeHead(200, { 'Content-Type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.svg') ? 'image/svg+xml' : 'text/html; charset=utf-8' });
       res.end(fs.readFileSync(path.join(__dirname, '../../web', file))); return;
     }
     const match = matchRoute(routes, req.method ?? 'GET', url.pathname);
@@ -141,6 +159,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     address: () => server.address(),
     close: () =>
       new Promise<void>((resolve) => {
+        unsubscribeEquity();
         for (const s of streams) s.end();
         server.close(() => resolve());
         server.closeIdleConnections();
@@ -150,8 +169,10 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
+function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistory: ReadonlyArray<{ at: string; equity: number }>): Route[] {
   const routes: Route[] = [];
+  const instanceId = crypto.randomUUID();
+  const priceHistoryCache = new Map<string, { until: number; result: Promise<unknown> }>();
   const add = (method: string, path: string, handler: Handler): void => {
     const keys: string[] = [];
     const pattern = new RegExp(
@@ -162,6 +183,16 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     );
     routes.push({ method, pattern, keys, handler });
   };
+
+  // Read-only projection for the terminal client. The client never opens account storage.
+  add('GET', '/api/terminal', ({ url }) => {
+    const after = url.searchParams.has('after') ? parseNonNegativeInt(url.searchParams.get('after'), 0, 'after') : null;
+    const entries = after == null
+      ? listRecords<FeedEntry>('activity', { desc: true, limit: 200 }).reverse().map(r => ({ ...r.value, seq: r.seq }))
+      : ui.feedAfter(after, 200);
+    return { instanceId, snapshot: { ...ui.snapshot(), tick: getLastTick() ?? ui.snapshot().tick,
+      actions: getOpenActions() }, health: serviceStatus(), entries };
+  });
 
   add('GET', '/api/status', () => {
     const snap = ui.snapshot();
@@ -194,6 +225,36 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     };
   });
 
+  // Read-only chart data. Short-lived, bounded caching also coalesces concurrent requests.
+  add('GET', '/api/price-history', ({ url }) => {
+    const symbol = (url.searchParams.get('symbol') ?? '').trim().toUpperCase();
+    const timeframe = url.searchParams.get('timeframe') ?? '1Day';
+    if (!/^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(symbol)) throw new HttpError(400, 'A valid ticker is required');
+    if (!['5Min', '15Min', '1Hour', '1Day'].includes(timeframe)) throw new HttpError(400, 'Unsupported chart interval');
+    const key = `${symbol}:${timeframe}`, cached = priceHistoryCache.get(key);
+    if (cached && cached.until > Date.now()) return cached.result;
+    const result = (async () => {
+      try {
+        const observation = await collectBars(symbol, 120, timeframe as Timeframe);
+        if (!isPresent(observation)) return { symbol, timeframe, available: false, bars: [], error: 'Price history is unavailable from the market-data providers.' };
+        const bars = [...new Map(observation.value.filter(b =>
+          Number.isFinite(Date.parse(b.t)) && [b.o,b.h,b.l,b.c].every(n => Number.isFinite(n) && n > 0) &&
+          Number.isFinite(b.v) && b.v >= 0 && b.h >= Math.max(b.o,b.c) && b.l <= Math.min(b.o,b.c) && b.h >= b.l
+        ).map(b => [Date.parse(b.t), b])).values()].sort((a,b) => Date.parse(a.t)-Date.parse(b.t)).slice(-120);
+        return { symbol, timeframe, available: bars.length > 0, bars, source: observation.source,
+          asOf: bars.at(-1)?.t ?? null, fetchedAt: observation.fetchedAt, stale: observation.stale,
+          ...(bars.length ? {} : { error: 'No usable price bars are available.' }) };
+      } catch {
+        return { symbol, timeframe, available: false, bars: [], error: 'Price history could not be loaded. Try again shortly.' };
+      }
+    })();
+    if (priceHistoryCache.size >= 64) priceHistoryCache.delete(priceHistoryCache.keys().next().value!);
+    priceHistoryCache.set(key, { until: Date.now() + 60_000, result });
+    return result;
+  });
+
+  add('GET', '/api/equity-history', () => ({ points: equityHistory }));
+
   add('GET', '/api/watchlist', () => {
     const tick = getLastTick();
     return {
@@ -224,6 +285,13 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
   add('POST', '/api/actions/:id/reject', decide('reject'));
 
   add('GET', '/api/notifications', () => ({ notifications: readRecords('notifications', 100) }));
+  add('GET', '/api/activity-history', ({ url }) => {
+    const type = url.searchParams.get('type') ?? 'all';
+    if (!['all', 'decision', 'fill', 'event'].includes(type)) throw new HttpError(400, 'type must be all, decision, fill or event');
+    const offset = parseNonNegativeInt(url.searchParams.get('offset'), 0, 'offset');
+    const limit = Math.max(1, Math.min(parseNonNegativeInt(url.searchParams.get('limit'), 50, 'limit'), 100));
+    return activityHistory({ type, query: url.searchParams.get('q') ?? '', offset, limit });
+  });
   add('GET', '/api/history/:kind', ({ params, url }) => {
     if (!['journal','fills','action-history','operator-commands','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
     const after = parseNonNegativeInt(url.searchParams.get('after'), 0, 'after');
@@ -245,6 +313,11 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
   });
 
   add('GET', '/api/feed', ({ url }) => {
+    // `tail=N` returns the newest N entries, so a chat opens on the latest messages.
+    if (url.searchParams.has('tail')) {
+      const tail = Math.min(parseNonNegativeInt(url.searchParams.get('tail'), DEFAULT_FEED_LIMIT, 'tail'), MAX_FEED_LIMIT);
+      return { entries: listRecords<FeedEntry>('activity', { desc: true, limit: tail }).reverse().map(r => ({ ...r.value, seq: r.seq })) };
+    }
     const after = parseNonNegativeInt(url.searchParams.get('after'), 0, 'after');
     const limit = Math.min(parseNonNegativeInt(url.searchParams.get('limit'), DEFAULT_FEED_LIMIT, 'limit'), MAX_FEED_LIMIT);
     return { entries: ui.feedAfter(after, limit) };
@@ -265,6 +338,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     const args = optionalString((await body()).args, 'args') ?? '';
     if (args.length > 4000) throw new HttpError(400, 'Command arguments must be at most 4000 characters');
     appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { actorId: OPERATOR, action: command.name, args });
+    ui.echoOperator(`/${command.name}${args ? ' ' + args : ''}`);
     return ui.runCommand(command.name, args);
   });
 
@@ -281,6 +355,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     if (text.length > 4000) throw new HttpError(400, 'Messages must be at most 4000 characters');
     if (/^\s*(\/|approve\b|reject\b)/i.test(text)) throw new HttpError(400, 'Use the explicit account controls for commands and approvals');
     const command = messageService ? messageService(text, OPERATOR) : enqueueRequest('concierge', text, OPERATOR);
+    ui.echoOperator(text);
     return { accepted: true, requestId: command.id, status: command.status };
   });
 
@@ -306,6 +381,12 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps): Route[] {
     catch (err: any) { throw new HttpError(409, err.message); }
     return { ok: true, note: 'Protection verified. Trading remains paused until resumed.' };
   });
+  add('POST', '/api/positions/:symbol/rearm', async ({ params }) => {
+    try { await clearUnplacedProtection(params.symbol, OPERATOR); }
+    catch (err: any) { throw new HttpError(400, err.message); }
+    return { ok: true };
+  });
+
   add('POST', '/api/reconcile', async () => { await sweepActions(); return serviceStatus(); });
   return routes;
 }
@@ -325,6 +406,8 @@ function openStream(
     // Stops nginx from buffering the stream into silence.
     'X-Accel-Buffering': 'no',
   });
+  // Node holds the headers until the first write; send one now so the browser knows it is connected.
+  res.write(': connected\n\n');
 
   const send = (e: FeedEntry): void => {
     if (!res.write(`id: ${e.seq}\nevent: feed\ndata: ${JSON.stringify(e)}\n\n`)) res.end();

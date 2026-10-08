@@ -4,6 +4,13 @@ import { AiConfig, ChatMessage, ContentBlock, ModelResponse, ToolDefinition } fr
 
 // ── Provider interface ────────────────────────────────────────────────────────
 
+/**
+ * How long one model request may take. 60s was too tight for the LiteLLM proxy on a slow day:
+ * a two-word prompt took 12–14s there (2026-10-07), so a full chat request with history and tools
+ * ran past 60s and the operator got a bare timeout instead of an answer.
+ */
+export const MODEL_CALL_TIMEOUT_MS = 120_000;
+
 export interface ModelProvider {
   chat(params: {
     systemPrompt: string;
@@ -24,7 +31,7 @@ export class AnthropicProvider implements ModelProvider {
 
   constructor(cfg: AiConfig) {
     this.client = new Anthropic({
-      timeout: 60_000, maxRetries: 1,
+      timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1,
       apiKey: cfg.apiKey,
       ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
     });
@@ -268,7 +275,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Make the API request
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
-      signal: AbortSignal.any([params.signal ?? new AbortController().signal, AbortSignal.timeout(60_000)]),
+      signal: AbortSignal.any([params.signal ?? new AbortController().signal, AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS)]),
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',

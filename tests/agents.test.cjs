@@ -136,9 +136,10 @@ test('a settings explanation reaches the account conversation without a trader h
   assert.match(command.result, /Saved strategy: Balanced/);
   assert.match(command.result, /0.5% of equity at the planned stop/);
   assert.match(command.result, /Human approval|human approval/);
-  assert.ok(storage.readActivity(0, 100).some(entry => entry.kind === 'reply' && entry.text.includes(command.result)));
+  assert.ok(storage.readActivity(0, 100).some(entry => entry.kind === 'reply' && entry.source === 'concierge' && entry.text.includes(command.result)));
   commands.updateRequest(commands.enqueueRequest('trader', 'Review', 'system').id, { status: 'completed', result: 'Review completed; no trade action was queued.' });
   assert.ok(!storage.readActivity(0, 1000).some(entry => entry.kind === 'reply' && /no trade action/.test(entry.text)), 'trader results are not chat replies');
+  assert.ok(storage.readActivity(0, 1000).some(entry => entry.kind === 'log' && entry.source === 'trader' && /no trade action/.test(entry.text)));
   assert.equal(policy.getPolicyHash(), hash);
   assert.equal(commands.pendingRequests('trader').length, 0);
 });
@@ -198,6 +199,22 @@ test('sleep rejects later calls and truncated model output executes no tools', a
     provider: { chat: async () => ({ ...toolResponse([['write', {}]]), stopReason: 'max_tokens' }) },
     systemPrompt: '', messages: async () => [], maxRounds: 2, maxTokens: 100 });
   assert.equal(result.status, 'failed'); assert.equal(executed, 0);
+});
+test('full tool receipts survive reload while model context stays bounded', async () => {
+  const output = JSON.stringify({ observations: 'long observation '.repeat(1500), end: 'complete' });
+  let executions = 0, modelCalls = 0;
+  const registry = new ToolRegistry([{ name: 'read', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { executions++;return output; });
+  const run = await runAgentLoop({ context: { requestId: 'full-receipt', actorId: 'test', role: 'concierge' }, registry,
+    provider: { chat: async request => {
+      if (modelCalls++ === 0) return toolResponse([['read', {}]]);
+      const receipt = request.messages.flatMap(m => m.content).find(b => b.type === 'tool_result');
+      assert.equal(JSON.parse(receipt.content).truncated, true);
+      return textResponse();
+    } }, messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100 });
+  assert.equal(run.status, 'completed');assert.equal(executions, 1);
+  storage.closeStorage();
+  const receipt = storage.readRecord('tool-calls', 'full-receipt:1:0');
+  assert.equal(receipt.result, output);assert.ok(receipt.startedAt);assert.ok(receipt.finishedAt);
 });
 
 test('critical observation remains open and acting requires a linked action', async () => {
@@ -347,6 +364,16 @@ test('stopping a turn during an awaited tool prevents a later local mutation', a
   await began; abort.abort(); release();
   const result = await work;
   assert.equal(result.status, 'interrupted'); assert.equal(actions.getAllActions().length, 0);
+});
+
+test('a model timeout fails the turn with a plain message instead of interrupting it', async () => {
+  const { SLOW_MODEL_MESSAGE } = from('agents/agentLoop');
+  const registry = new ToolRegistry([], async () => '{}');
+  const timeout = () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); };
+  const result = await runAgentLoop({ context: { role: 'concierge', requestId: 'slow-model', actorId: 'alice' }, registry,
+    provider: { chat: async () => timeout() }, messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100,
+    signal: new AbortController().signal });
+  assert.equal(result.status, 'failed'); assert.equal(result.error, SLOW_MODEL_MESSAGE);
 });
 
 test('restart honors saved truncation and terminal model responses', async () => {
