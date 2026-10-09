@@ -3,13 +3,17 @@ import { appendActivity, listRecords, readRecord, saveRecord, transaction } from
 import { agentContext, assertAgentActive, recordToolResult, type AgentRole } from './agentContext';
 import { getState } from '../state/state';
 
+/** startup: the engine started. event: an urgent event or the heartbeat. message: a chat or agent message. operator: the /cycle command. */
+export type WakeReason = 'startup' | 'event' | 'message' | 'operator';
 export interface AgentRequest {
   id: string; role: AgentRole; actorId: string; text: string;
   parentId?: string; createdAt: string;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
   result?: string; actionIds: string[];
-  /** Trader cycles: the pending events the cycle was shown. Empty means the timer woke it. */
+  /** Trader cycles: every pending event the cycle was shown, including older ones it already saw. */
   eventIds?: string[];
+  /** Trader cycles: what woke the trader for this cycle. */
+  wokenBy?: WakeReason[];
   /** Old trader research tasks only; research now runs as `researcher` requests. */
   mode?: 'review_only';
   /** Research requests: the ticker as written, used to reuse a pending request for the same stock. */
@@ -42,7 +46,7 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     return command;
   });
 }
-export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat' | 'eventIds'>>): AgentRequest {
+export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat' | 'eventIds' | 'wokenBy'>>): AgentRequest {
   return transaction(() => {
     const current = getRequest(id);
     if (!current) throw new Error('Unknown command');

@@ -4,7 +4,7 @@ import { readDecision } from '../journal/journal';
 import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
-import { enqueueRequest, pendingRequests, updateRequest, getRequest } from '../core/requests';
+import { enqueueRequest, pendingRequests, updateRequest, getRequest, type WakeReason } from '../core/requests';
 import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
 import { createModelProvider } from '../core/modelProvider';
@@ -35,8 +35,6 @@ import type { ChatMessage, ContentBlock } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
 
 const MAX_ROUNDS = 30;
-const DEFAULT_SLEEP_MS = 60 * 60_000;
-const ERROR_RECOVERY_SLEEP_MS = 60_000;
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
 const PAUSED_RECHECK_MS = 60 * 60_000;
 
@@ -52,6 +50,8 @@ export class Trader {
   private readonly provider = createModelProvider(config.ai);
   private wakeUp: (() => void) | null = null;
   private wakePending = false;
+  /** Why the next cycle runs. The trader sets no timer: the heartbeat, events and messages wake it. */
+  private wakeReasons = new Set<WakeReason>(['startup']);
   private cycleCount = 0;
   private controller = new AbortController();
   private active: Promise<void> | null = null;
@@ -69,8 +69,9 @@ export class Trader {
   pause(): void { updateState({ paused: true }); this.controller.abort(); }
   resume(): void { updateState({ paused: false }); this.wakeUp?.(); }
   get status(): { paused: boolean; cycles: number } { return { paused: this.paused, cycles: this.cycleCount }; }
-  wake(message?: string): { requestId?: string; status: string } {
+  wake(message?: string, reason: WakeReason = message ? 'message' : 'event'): { requestId?: string; status: string } {
     const command = message ? enqueueRequest('trader', message) : undefined;
+    this.wakeReasons.add(reason);
     if (this.paused) return { requestId: command?.id, status: 'queued_paused' };
     if (this.wakeUp) this.wakeUp(); else this.wakePending = true;
     return { requestId: command?.id, status: 'queued' };
@@ -81,20 +82,19 @@ export class Trader {
         ui.setTraderActivity({ state: 'idle', detail: 'paused' });
         await this.interruptibleSleep(PAUSED_RECHECK_MS); continue;
       }
-      let sleepMs = ERROR_RECOVERY_SLEEP_MS;
       try {
         this.cycleCount++;
         const at = Date.now();
         ui.setTraderActivity({ state: 'thinking', detail: `cycle ${this.cycleCount}` });
         const cycle = await this.runCycle();
-        sleepMs = cycle.sleepMs;
         ui.setCycle({ n: this.cycleCount, lastMs: Date.now()-at, inTokens: cycle.inTokens, outTokens: cycle.outTokens });
       } catch (err: any) { logger.error('[Trader] ' + err.message); }
       if (!this.running) break;
       if (this.paused) continue;
       if (this.wakePending || (!this.paused && tradingRequests().length)) { this.wakePending = false; continue; }
-      ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
-      await this.interruptibleSleep(sleepMs);
+      // A failed cycle is retried by the next heartbeat or event, like any other.
+      ui.setTraderActivity({ state: 'sleeping', detail: 'waiting for the heartbeat or an event' });
+      await new Promise<void>(resolve => { this.wakeUp = () => { this.wakeUp = null; resolve(); }; });
     }
     ui.setTraderActivity({ state: 'idle', detail: 'stopped' });
   }
@@ -104,12 +104,13 @@ export class Trader {
       this.wakeUp = () => { clearTimeout(timer); this.wakeUp = null; resolve(); };
     });
   }
-  private async runCycle(): Promise<{ sleepMs: number; inTokens: number; outTokens: number }> {
+  private async runCycle(): Promise<{ inTokens: number; outTokens: number }> {
     const command = tradingRequests()[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
     const hash = getPolicyHash();
     this.controller = new AbortController();
-    // A resumed request keeps the events its saved conversation was shown.
-    updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? getPendingEvents().map(e => e.id) });
+    const wokenBy = [...this.wakeReasons]; this.wakeReasons.clear();
+    // A resumed request keeps the events and wake reasons its saved conversation began with.
+    updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? getPendingEvents().map(e => e.id), wokenBy: command.wokenBy ?? wokenBy });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
       provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
@@ -123,7 +124,7 @@ export class Trader {
     updateRequest(command.id, { status: turn.status === 'completed' && actions.length ? 'waiting' : turn.status,
       result: turn.error ?? (actions.length ? `Actions queued: ${actions.join(', ')}. Execution outcomes are reported separately.` : turn.text || 'Review completed; no trade action was queued.') });
     if (turn.status === 'completed' && actions.length) refreshRequestOutcome(command.id);
-    return { sleepMs: turn.sleepMs ?? DEFAULT_SLEEP_MS, inTokens: turn.inTokens, outTokens: turn.outTokens };
+    return { inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }
 
