@@ -108,7 +108,8 @@ export class Trader {
     const command = tradingRequests()[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
     const hash = getPolicyHash();
     this.controller = new AbortController();
-    updateRequest(command.id, { status: 'running' });
+    // A resumed request keeps the events its saved conversation was shown.
+    updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? getPendingEvents().map(e => e.id) });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
       provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
