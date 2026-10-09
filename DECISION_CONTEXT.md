@@ -46,7 +46,7 @@ For evaluating a new context source, freeze historical observations available at
 ## Source configuration and limits
 
 - Existing Alpaca credentials provide quotes, bars and news under the account's feed entitlement. The tools use the subscription default and report feed ambiguity; a partial exchange feed is not consolidated market volume.
-- `SEC_USER_AGENT` must identify the application and a contact email, for example `AutoTrade research contact@example.com`. No SEC request is made without it. Missing configuration is reported as unavailable coverage.
+- SEC filings need no account or key. Requests carry a built-in User-Agent (`AutoTrade research (autotrade@example.com)`); set `SEC_USER_AGENT` to an application name and contact email to replace it. Primary documents up to 40MB are read, since large-company 10-Ks run past 10MB.
 - `FRED_API_KEY` supplies macro observations. Publication timestamps unavailable from the observation response remain unknown.
 - Existing `TAVILY_API_KEY` enables web search. Discovered original public HTTPS sources can be read; inaccessible or non-text documents remain explicit failures.
 - BLS and Federal Reserve public calendars need no API key. Providers can reject requests or change formats. A provider outage is not a clean calendar.
