@@ -19,7 +19,7 @@
   <nav class="views" role="tablist" aria-label="Views" aria-orientation="vertical">
     <button role="tab" id="tab-live" aria-controls="view-live" data-view="live"><svg><use href="#icon-review"/></svg><span>Live</span><span class="nav-dot"></span></button>
     <button role="tab" id="tab-activity" aria-controls="view-activity" data-view="activity"><svg><use href="#icon-history"/></svg><span>Activity</span></button>
-    <button role="tab" id="tab-strategy" aria-controls="view-strategy" data-view="strategy"><svg><use href="#icon-strategy"/></svg><span>Strategy</span></button>
+    <button role="tab" id="tab-strategy" aria-controls="view-strategy" data-view="strategy"><svg><use href="#icon-strategy"/></svg><span>Settings</span></button>
     <button role="tab" id="tab-review" aria-controls="view-review" data-view="review"><svg><use href="#icon-journal"/></svg><span>Review</span></button>
   </nav>
   <div class="sidebar-bottom"><div class="workspace-note"><svg><use href="#icon-agent"/></svg><strong>Research. Reason. Execute.</strong><p>Your strategy, with an agent<br>keeping the context.</p></div>
@@ -99,8 +99,26 @@
   </div>
 </div>
 <div id="view-strategy" class="view" role="tabpanel" aria-labelledby="tab-strategy" hidden>
-<div class="view-heading"><h1 id="strategy-title">Strategy settings</h1><span id="revision"></span></div>
-<section id="strategy" class="panel" aria-labelledby="strategy-title"><p class="section-description">Changes apply to future decisions. Actions approved under an older revision must be proposed again.</p><form id="settings">
+<div class="view-heading"><h1>Settings</h1><span id="revision"></span></div>
+<section id="ai-usage-settings" class="panel" aria-labelledby="ai-settings-title">
+  <div class="pane-title"><h2 id="ai-settings-title">AI usage</h2><span id="ai-limit-status" class="badge">Loading…</span></div>
+  <p class="section-description">The trader, chat and ticker reviews share this daily allowance. One task can make several AI calls. Failed provider attempts also count.</p>
+  <div id="ai-usage-summary" class="score-grid" aria-live="polite">
+    <div><span>Calls today</span><strong id="ai-usage-calls">—</strong></div>
+    <div><span>Calls remaining</span><strong id="ai-usage-remaining">—</strong></div>
+    <div><span>Tokens today · input / output</span><strong id="ai-usage-tokens">—</strong></div>
+  </div>
+  <p id="ai-usage-reset" class="section-description"></p>
+  <form id="ai-settings-form">
+    <div class="form-grid">
+      <label>Daily AI call limit<select name="limitMode" disabled><option value="unlimited">Unlimited (default)</option><option value="limited">Set a daily cap</option></select></label>
+      <label id="ai-daily-limit-field" hidden>Maximum calls per day<input name="maxRequestsPerDay" type="number" min="1" max="5000" step="1" disabled></label>
+    </div>
+    <p id="ai-assistant-allowance" class="section-description"></p>
+    <div class="actions"><button id="save-ai-settings" class="primary" disabled>Save AI settings</button><button type="button" id="reload-ai-settings">Reload saved settings</button><span id="ai-settings-state" role="status">Loading…</span></div>
+  </form>
+</section>
+<section id="strategy" class="panel" aria-labelledby="strategy-title"><div class="pane-title"><h2 id="strategy-title">Strategy settings</h2></div><p class="section-description">Changes apply to future decisions. Actions approved under an older revision must be proposed again.</p><form id="settings">
 <fieldset class="risk-profile"><legend>Risk profile</legend>
 <label>Profile<select name="riskProfile" aria-label="Profile"><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option><option value="custom">Custom</option></select></label>
 <p id="risk-summary" aria-live="polite"></p>
@@ -170,7 +188,7 @@
   </section>
   <div id="position-review-content" class="position-detail-tabs"></div>
   </div>
-  <div class="drawer-footer"><span>Assessments and research use saved records. Dates show when they were recorded.</span><button id="refresh-position-review">Refresh saved view</button><button id="ask-position-review" class="primary">Ask trader to review</button><p id="position-review-task" role="status"></p></div>
+  <div class="drawer-footer"><span>Assessments and research use saved records. Dates show when they were recorded.</span><button id="refresh-position-review">Refresh saved view</button><button id="ask-position-review" class="primary">Research this stock</button><p id="position-review-task" role="status"></p></div>
 </dialog>
 <dialog id="record-inspector" class="record-inspector" aria-labelledby="record-inspector-title">
   <div class="pane-title drawer-heading"><h2 id="record-inspector-title">Saved record</h2><button id="close-record-inspector" aria-label="Close saved record">✕</button></div>

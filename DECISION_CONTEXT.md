@@ -19,7 +19,9 @@ The cycle brief reuses fresh tick observations and broker read scopes, without e
 
 `compare_position_actions` compares keep/reduce/exit exposure, historical volatility and estimated spread costs. An optional replacement uses a hypothetical risk budget after an assumed exit. These previews do not approve or send orders, forecast returns, or promise fills. Exposure uses current equity; planned stop downside excludes gaps.
 
-Record material keep/reduce/exit/wait assessments with `record_position_review`, including unknowns and a future review date. Send any chosen order separately. Record material candidate wait/skip decisions with `record_candidate_review`. Repeated unchanged assessments are deduplicated.
+Record material keep/reduce/exit/wait assessments with `record_position_review`, including unknowns and a future review date. Send any chosen order separately. Record researched candidate buy/wait/skip recommendations with `record_candidate_review`, a proposed `thesis`, explicit `unknowns`, `nextReviewAt` and an `entryPlanId` when available. Buy requires a supported proposed thesis and fresh allowed entry-plan evidence; it is not an order or full execution approval. Repeated unchanged assessments are deduplicated.
+
+Research of a non-held ticker, started from the dashboard, chat or the trader and run by the research worker, is new-entry research. No original position thesis is expected. Research the business and valuation where sources permit, primary news/filings and counterarguments, the price setup and relative performance, catalysts, and portfolio fit. Derive supported levels rather than requiring the operator to supply them, then call the permitted read-only `get_entry_plan`. Missing live quotes prevents claiming execution readiness, not researching a conditional investment case. A wait conclusion should name the price, event, risk or data condition that would change it.
 
 ## Research and provenance
 

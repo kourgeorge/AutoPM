@@ -12,7 +12,9 @@ import { getCachedRegime } from '../macro/regime';
 
 export async function entryPlan(input: { symbol: string; price: number; stopLoss: number; takeProfit: number }) {
   const policy = getPolicy(), policyHash = getPolicyHash();
-  const symbol = canonicalSymbol(input.symbol);
+  // As written ("BRK.B"), not canonical ("BRKB"): data sources only know the written ticker.
+  const symbol = input.symbol.trim().toUpperCase();
+  if (!canonicalSymbol(symbol)) return { allowed: false, maxQty: 0, error: 'A ticker is required' };
   const [account, positions, quotes] = await Promise.all([
     readAccount(), readPositions(), collectPrices([symbol], policy.triggers.maxQuoteAgeMs),
   ]);
@@ -22,6 +24,7 @@ export async function entryPlan(input: { symbol: string; price: number; stopLoss
   const inputs = await collectRiskInputs([...positions.map(p => p.symbol), symbol], policy);
   if (getPolicyHash() !== policyHash) return { allowed: false, maxQty: 0, error: 'Strategy changed; request a fresh plan' };
   return { symbol, policyHash, profile: riskProfileName(policy.risk),
+    proposedLevels: { referencePrice: input.price, stopLoss: input.stopLoss, takeProfit: input.takeProfit },
     ...assessEntryRisk({ ...input, symbol, price: entryLimitPrice(input.price, quote.value), equity: account.equity,
       buyingPower: account.buyingPower, positions, policy, inputs }),
     scope: 'Risk budget only. Request no more than maxQty. Execution rechecks all entry rules and may reduce size for the market regime.',

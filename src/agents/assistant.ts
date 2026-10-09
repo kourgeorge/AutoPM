@@ -7,6 +7,7 @@ import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
 import { agentContext } from '../core/agentContext';
 import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
+import { startResearch } from './researcher';
 /**
  * Assistant Agent — the user-facing conversational layer.
  *
@@ -115,6 +116,15 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'research_symbol',
+    description: 'Start full research on one stock in the research worker: business, news and SEC filings, trend, catalysts, portfolio fit and proposed entry/stop/target levels, ending in a saved buy/wait/skip or holding verdict. Returns immediately; the finished summary is posted to this chat automatically. It places no orders and runs even while trading is paused. A stock already being researched is not started twice.',
+    input_schema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', description: 'Ticker as written, e.g. "BRK.B".' } },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'get_policy_playbook',
     description: 'Read the rendered account playbook and platform execution contract. Use this to quote or explain strategy prose; use get_strategy_settings for a concise view of saved numeric settings and approval behavior. Platform constraints and numeric risk settings take precedence over conflicting playbook prose.',
     input_schema: { type: 'object', properties: {}, required: [] },
@@ -145,7 +155,7 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
 ];
 
 /** Tools that change something. Their full inputs and results are what the trace is for. */
-const ACTION_TOOLS = new Set(['update_trading_settings', 'execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'send_to_trader', 'sleep']);
+const ACTION_TOOLS = new Set(['update_trading_settings', 'execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'send_to_trader', 'research_symbol', 'request_research', 'sleep']);
 
 /**
  * The stored turn, flattened to what was said and done. The opening context message is left
@@ -212,6 +222,7 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
  */
 const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
+When the operator asks you to research or assess a stock, call research_symbol; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
 Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_actions for the outcome.
 You cannot place trades, approve actions or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
 For pause/resume and approvals, direct the operator to the account controls.
@@ -307,6 +318,12 @@ export class AssistantAgent {
     }
 
     if (name === 'get_request_trace') return requestTrace(String(input.requestId ?? ''));
+
+    if (name === 'research_symbol') {
+      const request = startResearch(String(input.symbol ?? ''), agentContext.getStore()?.actorId ?? 'operator', { replyToChat: true });
+      return JSON.stringify({ ok: true, requestId: request.id, status: request.status, symbol: request.symbol,
+        note: 'The summary is posted to this chat when the research finishes. Use get_requests for its status.' });
+    }
 
     if (name === 'send_to_trader') {
       const message = input.message as string;

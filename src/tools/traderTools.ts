@@ -26,6 +26,7 @@ import { createAction, getOpenActions, getAllActions } from '../core/actions';
 import { config } from '../core/config';
 
 import { RESEARCH_TOOL_DEFINITIONS, executeResearchTool } from './researchTools';
+import { startResearch } from '../agents/researcher';
 import {
   ALPACA_DATA_TOOL_DEFINITIONS,
   ALPACA_DATA_TOOL_NAMES,
@@ -336,6 +337,15 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     },
   },
   {
+    name: 'request_research',
+    description: 'Queue a full research run on one stock in the separate research worker. It runs alongside trading cycles, places no orders and saves a buy/wait/skip candidate review or a holding review. Returns a request ID immediately; read the saved verdict later with get_decision_followup. Use it for a promising candidate that needs deeper research than this cycle allows.',
+    input_schema: {
+      type: 'object',
+      properties: { symbol: { type: 'string', description: 'Ticker as written, e.g. "BRK.B".' } },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'sleep',
     description: "Finish this trader turn and set the maximum delay before another cycle. Call separately after inspecting all earlier action results. Remaining calls in the same batch will not execute. Typical cadence: 60 minutes while open, 240 while closed.",
     input_schema: {
@@ -396,6 +406,11 @@ async function dispatchTraderTool(
       case 'get_benchmark':       return await toolGetBenchmark(input);
       case 'get_price_stats':     return await toolGetPriceStats(input);
       case 'write_lesson':        return toolWriteLesson(input);
+      case 'request_research': {
+        const request = startResearch(String(input.symbol), agentContext.getStore()?.actorId ?? 'system');
+        return JSON.stringify({ ok: true, requestId: request.id, status: request.status, symbol: request.symbol,
+          note: 'Research runs separately and places no orders. Its verdict is saved as a candidate or holding review.' });
+      }
       // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
       // delay, which only the agent loop can do), and it is not an assistant tool.
       default:

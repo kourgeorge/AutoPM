@@ -151,7 +151,7 @@ export interface Cycle {
 
 export interface DailyUsage {
   day: string;
-  byAgent?: Partial<Record<'trader' | 'assistant' | 'unassigned', { inputTokens: number; outputTokens: number }>>;
+  byAgent?: Partial<Record<'trader' | 'assistant' | 'researcher' | 'unassigned', { inputTokens: number; outputTokens: number }>>;
 }
 
 export interface DashboardModel {

@@ -272,9 +272,11 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('#current-agents')).toContainText('Trader');
     await expect(page.locator('.sidebar')).not.toContainText('YOUR AGENTS');
     await expect(page.locator('#agent-usage')).toHaveCount(0);
-    await expect(page.locator('.agent-tokens')).toHaveCount(2);
+    await expect(page.locator('.agent-tokens')).toHaveCount(3);
     await expect(page.locator('.agent-tokens').first()).toHaveText('(in 1,200 / out 80)');
-    await expect(page.locator('.agent-tokens').last()).toHaveText('(in 200 / out 20)');
+    await expect(page.locator('.agent-tokens').nth(1)).toHaveText('(in 200 / out 20)');
+    await expect(page.locator('#current-agents')).toContainText('Research');
+    await expect(page.locator('.agent-tokens').last()).toHaveText('(in 0 / out 0)');
     await expect(page.locator('#account-summary #equity-chart')).toBeVisible();
     await expect(page.locator('#status-panel #agent-model')).toContainText('test · Connecting to account…');
     await expect(page.locator('#status-title')).toHaveText('Status');

@@ -49,5 +49,5 @@ export async function buildDecisionBrief(): Promise<string> {
   const evidence = recordEvidence('cycle_decision_brief', brief);
   return ['=== DECISION REVIEW ===', `Observation ${evidence.id}; get_evidence retrieves the full snapshot.`, JSON.stringify(brief),
     'For a material hold/reduce/exit: get_position_review, examine contradictions and current-price alternatives, then record_position_review. Send any selected order separately.',
-    'For a candidate: compare relative strength and costs, check calendars across the intended horizon, and preserve material wait/skip decisions. Missing context calls for research.', '=== END DECISION REVIEW ==='].join('\n');
+    'For a new candidate: research a proposed investment case, derive supported levels and measure get_entry_plan, compare relative strength/costs and check catalysts across the holding horizon. Preserve material buy/wait/skip recommendations; no prior holding thesis is expected. Missing context calls for research.', '=== END DECISION REVIEW ==='].join('\n');
 }
