@@ -3,8 +3,7 @@ import { getLastTick } from '../features/lastTick';
 import { getPolicy } from '../policy/load';
 import { getPositionSnapshot } from '../state/state';
 import { thesisForPosition, latestPositionReview, evaluatePremises, type Facts } from '../journal/thesis';
-import { recordEvidence, type Evidence } from '../journal/evidence';
-import { listRecords } from '../core/storage';
+import { recordEvidence, latestEvidence } from '../journal/evidence';
 import { forwardGeometry } from '../collect/decisionContext';
 import { getCachedFundamentals } from '../collect/fundamentals';
 import { getCachedRegime } from '../macro/regime';
@@ -38,7 +37,7 @@ export async function buildDecisionBrief(): Promise<string> {
       sharedDrivers: entry.thesis?.sharedDrivers ?? [] };
   });
   const regime = getCachedRegime(), calendar = cachedEconomicCalendar();
-  const market = listRecords<Evidence>('evidence', { where: e => e.tool === 'get_market_context', desc: true, limit: 1 })[0]?.value;
+  const market = latestEvidence('get_market_context');
   const brief = { source: 'derived', asOf: freshTick?.tickAt ?? null, positionReadAvailable: positions !== null, rows,
     marketContext: market ? { evidenceId: market.id, observedAt: market.recordedAt, lastKnown: Date.now() - Date.parse(market.recordedAt) > 15 * 60000, breadth: market.data.breadth, benchmarks: market.data.benchmarks } : { availability: 'unknown', tool: 'get_market_context' },
     macroBackdrop: regime ? { regime: regime.regime, confidence: regime.confidence, fetchedAt: regime.fetchedAt, observations: regime.observations, caveats: regime.caveats } : { availability: 'unknown', tool: 'get_macro_regime' },

@@ -12,7 +12,7 @@ import type { DecisionRecord } from '../journal/types';
 import { sameSymbol } from '../core/symbols';
 
 export interface CandidateReviewDetails { thesis?: EntryThesis; entryPlanId?: string; unknowns?: string[]; nextReviewAt?: string }
-export interface CandidateReview extends CandidateReviewDetails { id: string; at: string; symbol: string; decision: 'buy' | 'wait' | 'skip'; reason: string; evidenceIds: string[];
+export interface CandidateReview extends CandidateReviewDetails { type: 'candidate'; id: string; at: string; symbol: string; decision: 'buy' | 'wait' | 'skip'; reason: string; evidenceIds: string[];
   snapshotId: string; price: number | null; contextVariant: string; policyHash: string }
 
 export function saveCandidateReview(symbol: string, decision: CandidateReview['decision'], reason: string, evidenceIds: string[], snapshotId: string, details: CandidateReviewDetails = {}) {
@@ -44,14 +44,14 @@ export function saveCandidateReview(symbol: string, decision: CandidateReview['d
   }
   const savedDetails = { ...(thesis ? { thesis } : {}), ...(details.entryPlanId ? { entryPlanId: details.entryPlanId } : {}),
     ...(details.unknowns !== undefined ? { unknowns: [...details.unknowns] } : {}), ...(details.nextReviewAt ? { nextReviewAt: details.nextReviewAt } : {}) };
-  const old = listRecords<CandidateReview>('candidate-reviews', { where: r => sameSymbol(r.symbol, symbol), desc: true, limit: 1 })[0]?.value;
+  const old = listRecords<CandidateReview>('reviews', { where: r => r.type === 'candidate' && sameSymbol(r.symbol, symbol), desc: true, limit: 1 })[0]?.value;
   if (old?.decision === decision && old.reason === reason && old.policyHash === getPolicyHash()
     && JSON.stringify([old.thesis, old.entryPlanId, old.unknowns, old.nextReviewAt]) === JSON.stringify([thesis, details.entryPlanId, details.unknowns, details.nextReviewAt])) return { ok: true, unchanged: true, reviewId: old.id };
   const id = 'candidate-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
-  const row: CandidateReview = { id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
+  const row: CandidateReview = { type: 'candidate', id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
     price: snapshot.data.forward?.price ?? null, contextVariant: snapshot.data.contextVariant ?? 'decision-context-v1', policyHash: getPolicyHash() };
   const result = { ok: true, reviewId: id, note: 'Candidate research recommendation saved. This does not place or approve an order; execution rechecks the full strategy.' };
-  return transaction(() => { appendRecord('candidate-reviews', id, row.at, row); recordToolResult(result); return result; });
+  return transaction(() => { appendRecord('reviews', id, row.at, row); recordToolResult(result); return result; });
 }
 
 /** Rebase a contemporaneous quote using the SAME daily close observed at decision time. */
@@ -85,8 +85,7 @@ export async function decisionFollowup(symbol?: string, days = 90, limit = 20, r
     return { id: d.id, symbol: d.symbol!, at: d.at, decision: d.kind, snapshotId, price: snapshot.data.forward?.price ?? null,
       contextVariant: snapshot.data.contextVariant ?? 'unknown', policyHash: d.policyHash ?? 'unknown', orderStatus: d.orderStatus ?? 'unknown', executed: d.executed };
   }).filter((r): r is NonNullable<typeof r> => r !== null);
-  const reviews = [...listRecords<PositionReview>('position-reviews', { where: matches, desc: true, limit }).map(r => r.value),
-    ...listRecords<CandidateReview>('candidate-reviews', { where: matches, desc: true, limit }).map(r => r.value), ...actions]
+  const reviews = [...listRecords<PositionReview | CandidateReview>('reviews', { where: matches, desc: true, limit }).map(r => r.value), ...actions]
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
   const histories = new Map(await Promise.all([...new Set([...reviews.map(r => r.symbol), 'SPY'])].map(async (s): Promise<[string, { bars: Bar[]; error: string | null }]> => {
     try { const bars = await collectBars(s, 420, '1Day', undefined, 'split'); return [s, isUsable(bars) ? { bars: bars.value, error: null } : { bars: [], error: 'Fresh history unavailable' }]; }

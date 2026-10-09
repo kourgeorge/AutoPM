@@ -28,7 +28,8 @@ import { scorecard } from '../review/metrics';
 import { activityHistory, savedPositionContext, savedTaskDetails } from '../review/activity';
 import { textPage } from '../agents/savedResults';
 import { startResearch, researchStatus } from '../agents/researcher';
-import type { Evidence } from '../journal/evidence';
+import { readEvidence } from '../journal/evidence';
+import type { Source } from '../collect/research';
 import type { Trader } from '../agents/trader';
 import type { FeedEntry, HeadlessUI } from '../ui/headless';
 
@@ -251,7 +252,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     catch (err: any) { if (err instanceof HttpError) throw err; throw new HttpError(400, err.message); }
   };
   add('GET', '/api/evidence/:id', ({ params, url }) => {
-    const row = readRecord<Evidence>('evidence', params.id);
+    const row = readEvidence(params.id);
     if (!row) throw new HttpError(404, 'This observation was not found');
     return { id: row.id, tool: row.tool, symbol: row.symbol, source: row.source,
       recordedAt: row.recordedAt, asOf: row.asOf, ...savedPage(JSON.stringify(row.data, null, 2), url) };
@@ -264,8 +265,8 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       ...savedPage(row.result ?? 'No result was recorded. Inspect linked action outcomes before retrying.', url) };
   });
   add('GET', '/api/source-text/:id', ({ params, url }) => {
-    const row = readRecord<{ text: string; fetchedAt: string; url: string }>('source-text', params.id);
-    if (!row) throw new HttpError(404, 'Original source text has not been saved');
+    const row = readRecord<Source>('sources', params.id);
+    if (row?.text === undefined) throw new HttpError(404, 'Original source text has not been saved');
     return { id: params.id, fetchedAt: row.fetchedAt, ...savedPage(row.text, url) };
   });
   add('GET', '/api/agent-tasks/:id', ({ params }) => {

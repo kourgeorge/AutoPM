@@ -8,6 +8,8 @@ export interface AgentContext {
   actorId: string;
   toolCallId?: string;
   signal?: AbortSignal;
+  /** The running transcript's saved texts (see `saveContext`), persisted with the transcript. */
+  saved?: Record<string, string>;
 }
 export const agentContext = new AsyncLocalStorage<AgentContext>();
 export function assertAgentActive(): void { agentContext.getStore()?.signal?.throwIfAborted(); }

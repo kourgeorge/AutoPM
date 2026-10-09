@@ -8,7 +8,7 @@
  * pushed the next trading cycle back four hours. Here it has its own queue, runs alongside
  * the trader, works while trading is paused, and has no order tools and no `sleep`.
  *
- * Verdicts land where they always did: `candidate-reviews` and `position-reviews`.
+ * Verdicts land in `reviews` (candidate or position).
  */
 import { runAgentLoop } from './agentLoop';
 import { ToolRegistry } from './toolRegistry';

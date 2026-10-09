@@ -1,24 +1,52 @@
 import crypto from 'crypto';
-import { appendRecord, readRecord } from '../core/storage';
+import { readRecord, saveRecord, listRecords } from '../core/storage';
 import { agentContext, assertAgentActive } from '../core/agentContext';
-import { sameSymbol } from '../core/symbols';
+import { canonicalSymbol, sameSymbol } from '../core/symbols';
 
+/**
+ * An observation is a saved tool result: its evidence ID is the tool call's receipt ID, so the
+ * data lives once, in `tool-calls`. An observation made outside a tool call (the cycle brief)
+ * is saved as a receipt of its own.
+ */
 export interface Evidence {
   id: string; tool: string; symbol: string | null; recordedAt: string;
   asOf: string | null; source: string; data: Record<string, any>;
 }
+interface Receipt { name: string; input?: any; result?: string; startedAt?: string; finishedAt?: string }
+
+function build(id: string, tool: string, data: Record<string, any>, symbol: string | null | undefined, recordedAt: string): Evidence {
+  return { id, tool, symbol: symbol || data.symbol || null, recordedAt, asOf: data.asOf ?? data.tickAt ?? null, source: data.source ?? 'derived', data };
+}
+/** A receipt is evidence only when its saved result carries its own id as evidenceId. */
+function fromReceipt(id: string, row: Receipt | undefined): Evidence | undefined {
+  if (row?.result === undefined) return undefined;
+  let value: any;
+  try { value = JSON.parse(row.result); } catch { return undefined; }
+  if (!value || value.evidenceId !== id) return undefined;
+  const { evidenceId, ...data } = value;
+  const symbol = typeof row.input?.symbol === 'string' ? canonicalSymbol(row.input.symbol) : null;
+  return build(id, row.name, data, symbol, row.finishedAt ?? row.startedAt ?? '');
+}
+
 export function recordEvidence(tool: string, data: Record<string, any>, symbol?: string): Evidence {
   assertAgentActive();
-  const call = agentContext.getStore()?.toolCallId;
-  const id = 'evidence-' + (call ? crypto.createHash('sha256').update(call + ':' + tool + ':' + (symbol ?? data.symbol ?? '')).digest('hex').slice(0, 32) : crypto.randomUUID());
-  const old = readRecord<Evidence>('evidence', id);
-  if (old) return old;
-  const row: Evidence = { id, tool, symbol: symbol ?? data.symbol ?? null, recordedAt: new Date().toISOString(),
-    asOf: data.asOf ?? data.tickAt ?? null, source: data.source ?? 'derived', data: structuredClone(data) };
-  appendRecord('evidence', id, row.recordedAt, row);
-  return row;
+  const at = new Date().toISOString(), id = agentContext.getStore()?.toolCallId ?? 'evidence-' + crypto.randomUUID();
+  // The receipt's result is exactly what the tool returns, so the agent loop rewrites it unchanged.
+  const old = readRecord<Receipt>('tool-calls', id);
+  saveRecord('tool-calls', id, { name: tool, input: symbol ? { symbol } : {}, startedAt: at, ...old,
+    result: JSON.stringify({ ...data, evidenceId: id }), finishedAt: at });
+  return build(id, tool, structuredClone(data), symbol, at);
 }
-export const readEvidence = (id: string) => readRecord<Evidence>('evidence', id);
+export const readEvidence = (id: string) => fromReceipt(id, readRecord<Receipt>('tool-calls', id));
+
+/** Newest observation from `tool` that matches. */
+export function latestEvidence(tool: string, where: (e: Evidence) => boolean = () => true): Evidence | null {
+  for (const { id, value } of listRecords<Receipt>('tool-calls', { where: r => r.name === tool, desc: true })) {
+    const e = fromReceipt(id, value);
+    if (e && where(e)) return e;
+  }
+  return null;
+}
 
 /** Every quoted observation has an immutable identifier. Failed reads remain failed reads. */
 export function evidenceResult(tool: string, result: string, symbol?: string): string {
