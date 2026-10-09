@@ -56,7 +56,7 @@ For Interactive Brokers, also set `BROKER=ibkr`, `IBKR_HOST`, `IBKR_PORT`, `IBKR
 
 ## Trading lifecycle
 
-See [Trader decision context](DECISION_CONTEXT.md) for thesis checks, position reviews, research sources, evidence snapshots and decision follow-up. Optional SEC research requires `SEC_USER_AGENT` with an application name and contact email.
+See [Trader decision context](DECISION_CONTEXT.md) for thesis checks, position reviews, research sources, evidence snapshots and decision follow-up. SEC filings load from EDGAR with no account or key; set `SEC_USER_AGENT` (application name and contact email) to replace the built-in default identity.
 
 All entry, exit, and adjustment tools create durable actions. Automatic actions start approved; manual actions wait for your approval. One executor validates and claims the action before contacting the broker.
 
