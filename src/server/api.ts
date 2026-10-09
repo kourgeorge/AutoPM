@@ -25,7 +25,7 @@ import { automationSummary } from '../core/automation';
 import { getAllActions, getOpenActions } from '../core/actions';
 import { getLastTick } from '../features/lastTick';
 import { scorecard } from '../review/metrics';
-import { activityHistory, savedPositionContext, savedTaskDetails } from '../review/activity';
+import { activityHistory, savedPositionContext, savedRequestDetails } from '../review/activity';
 import { textPage } from '../agents/savedResults';
 import { startResearch, researchStatus } from '../agents/researcher';
 import { readEvidence } from '../journal/evidence';
@@ -269,10 +269,10 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     if (row?.text === undefined) throw new HttpError(404, 'Original source text has not been saved');
     return { id: params.id, fetchedAt: row.fetchedAt, ...savedPage(row.text, url) };
   });
-  add('GET', '/api/agent-tasks/:id', ({ params }) => {
-    const task = savedTaskDetails(params.id);
-    if (!task) throw new HttpError(404, 'This agent task was not found');
-    return task;
+  add('GET', '/api/agent-requests/:id', ({ params }) => {
+    const request = savedRequestDetails(params.id);
+    if (!request) throw new HttpError(404, 'This agent request was not found');
+    return request;
   });
 
   // Read-only chart data. Short-lived, bounded caching also coalesces concurrent requests.

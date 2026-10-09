@@ -8,6 +8,8 @@ export interface AgentRequest {
   parentId?: string; createdAt: string;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
   result?: string; actionIds: string[];
+  /** Trader cycles: the pending events the cycle was shown. Empty means the timer woke it. */
+  eventIds?: string[];
   /** Old trader research tasks only; research now runs as `researcher` requests. */
   mode?: 'review_only';
   /** Research requests: the ticker as written, used to reuse a pending request for the same stock. */
@@ -40,7 +42,7 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     return command;
   });
 }
-export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat'>>): AgentRequest {
+export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat' | 'eventIds'>>): AgentRequest {
   return transaction(() => {
     const current = getRequest(id);
     if (!current) throw new Error('Unknown command');

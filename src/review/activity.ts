@@ -144,7 +144,7 @@ export function savedPositionContext(symbol: string) {
     policyHash: getPolicyHash(), savedAt: new Date().toISOString() };
 }
 
-export function savedTaskDetails(id: string) {
+export function savedRequestDetails(id: string) {
   const request = getRequest(id);
   if (!request) return null;
   const actions = getAllActions().filter(a => a.requestId === id || request.actionIds?.includes(a.id));

@@ -173,7 +173,7 @@ messageInput.addEventListener('keydown',event=>{
 const speakers = { operator:'You', assistant:'Assistant', trader:'Trader', researcher:'Research', system:'System' };
 const roleLabel = role => ({ assistant:'Assistant', researcher:'Research' })[role] || 'Trader';
 // Old research ran as a trader task in 'review_only' mode; new research is its own agent.
-const taskMode = r => r.role === 'researcher' ? 'Stock research · no trading tools' : r.mode === 'review_only' ? 'Assessment only · trading tools disabled' : 'Normal agent task';
+const taskMode = r => r.role === 'researcher' ? 'Stock research · no trading tools' : r.mode === 'review_only' ? 'Assessment only · trading tools disabled' : 'Normal agent request';
 function entrySource(entry) {
   if (entry.kind === 'operator') return 'operator';
   if (entry.source || entry.tool?.agent) return entry.source || entry.tool.agent;
@@ -262,7 +262,7 @@ function toolCallEntry(entry) {
       section.append(text('h3', label), pre);body.append(section);
     }
     const references=text('div','','tool-call-reference review-links');
-    if(tool.requestId)references.append(uiButton('Open agent task',()=>openAgentTask(tool.requestId)));
+    if(tool.requestId)references.append(uiButton('Open agent request',()=>openAgentTask(tool.requestId)));
     if(tool.id)references.append(uiButton('Open saved receipt',()=>openSavedRecord('tool',tool.id,0,[],tool.requestId || null)));
     if(references.hasChildNodes())body.append(references);
   });
@@ -949,7 +949,7 @@ function renderReviewTable(target, list, columnCount, render) {
   const signature = JSON.stringify(list);
   if (reviewSignatures[target] === signature) return;
   $(target).replaceChildren(...list.flatMap(render));
-  if (!list.length) { const row = text('tr',''),cell = text('td',target === 'lesson-list' ? 'No lessons recorded yet.' : 'No agent tasks yet.','table-empty');cell.colSpan = columnCount;row.append(cell);$(target).append(row); }
+  if (!list.length) { const row = text('tr',''),cell = text('td',target === 'lesson-list' ? 'No lessons recorded yet.' : 'No agent requests yet.','table-empty');cell.colSpan = columnCount;row.append(cell);$(target).append(row); }
   reviewSignatures[target] = signature;
 }
 function historyReference(id) {
@@ -958,15 +958,15 @@ function historyReference(id) {
   return button;
 }
 function renderRequests(list) {
-  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${roleLabel(command.role)} task: ${command.text}`,
+  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${roleLabel(command.role)} request: ${command.text}`,
     [recordTime(command.createdAt),roleLabel(command.role),command.actorId,text('span',taskProgress(command.status),'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
       const detail = text('div','','history-detail request-detail');
-      detail.append(historyFacts([['Task',command.text],['Mode',taskMode(command)],['Outcome',command.result || 'No outcome recorded yet.']]));
-      detail.append(uiButton('Open task trail: tools, decisions, actions and fills',()=>openAgentTask(command.id)));
+      detail.append(historyFacts([['Request',command.text],['Mode',taskMode(command)],['Outcome',command.result || 'No outcome recorded yet.']]));
+      detail.append(uiButton('Open request trail: tools, decisions, actions and fills',()=>openAgentTask(command.id)));
       if (command.actionIds?.length) { const links = text('div','','record-links');links.append(text('span','Actions'),...command.actionIds.map(historyReference));detail.append(links); }
       const references = text('div','','request-references');
       references.append(text('span',historyDate(command.createdAt)),text('span',`ID ${command.id}`));
-      if (command.parentId) references.append(uiButton(`Parent task ${command.parentId}`,()=>openAgentTask(command.parentId)));
+      if (command.parentId) references.append(uiButton(`Parent request ${command.parentId}`,()=>openAgentTask(command.parentId)));
       detail.append(references);return detail;
     }));
 }
@@ -1423,7 +1423,7 @@ async function openSavedRecord(kind,id,offset=0,previous=[],taskId=null) {
     const row=await api(`${routes[kind]}/${encodeURIComponent(id)}?offset=${offset}`);
     if(token!==inspectorLoad || !$('record-inspector').open)return;
     parent.replaceChildren();
-    if(taskId)parent.append(uiButton('← Back to task',()=>openAgentTask(taskId)));
+    if(taskId)parent.append(uiButton('← Back to request',()=>openAgentTask(taskId)));
     parent.append(historyFacts([['Record',id],['Tool / source',row.tool || row.name || names[kind]],['Recorded / started',savedTime(row.recordedAt || row.startedAt || row.fetchedAt)],['Data as of / finished',savedTime(row.asOf || row.finishedAt)]]));
     if(row.input!=null){const inputs=document.createElement('details');inputs.append(text('summary','Tool input'),recordedFields(row.input));parent.append(inputs);}
     if(kind==='tool')parent.append(text('p',row.resultSaved ? 'Saved output below. Check its contents for errors; a saved result alone does not establish success.' : 'No tool output was saved.','review-meta'));
@@ -1432,16 +1432,16 @@ async function openSavedRecord(kind,id,offset=0,previous=[],taskId=null) {
     const back=uiButton('Previous',()=>openSavedRecord(kind,id,previous.at(-1),previous.slice(0,-1),taskId),'');back.disabled=!previous.length;
     const next=uiButton('Next',()=>openSavedRecord(kind,id,row.nextOffset,[...previous,row.offset],taskId),'');next.disabled=row.nextOffset==null;
     navigation.append(back,text('span',`${row.totalCharacters ? row.offset+1 : 0}–${row.offset+row.text.length} of ${row.totalCharacters} characters`),next);parent.append(navigation);
-  }catch(error){if(token===inspectorLoad){parent.replaceChildren(text('p',`Saved record unavailable: ${error.message}`));if(taskId)parent.append(uiButton('← Back to task',()=>openAgentTask(taskId)));}}
+  }catch(error){if(token===inspectorLoad){parent.replaceChildren(text('p',`Saved record unavailable: ${error.message}`));if(taskId)parent.append(uiButton('← Back to request',()=>openAgentTask(taskId)));}}
 }
 async function openAgentTask(id) {
-  const token=beginInspector('Agent task trail'),parent=$('record-inspector-content');
+  const token=beginInspector('Agent request trail'),parent=$('record-inspector-content');
   try {
-    const data=await api(`agent-tasks/${encodeURIComponent(id)}`);
+    const data=await api(`agent-requests/${encodeURIComponent(id)}`);
     if(token!==inspectorLoad || !$('record-inspector').open)return;
     parent.replaceChildren();const r=data.request;
-    parent.append(historyFacts([['Task ID',r.id],['Agent',roleLabel(r.role)],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',taskMode(r)]]));
-    if(r.parentId)parent.append(uiButton(`Parent task: ${r.parentId}`,()=>openAgentTask(r.parentId)));
+    parent.append(historyFacts([['Request ID',r.id],['Agent',roleLabel(r.role)],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',taskMode(r)]]));
+    if(r.parentId)parent.append(uiButton(`Parent request: ${r.parentId}`,()=>openAgentTask(r.parentId)));
     parent.append(text('h3','Instruction'),text('p',r.text),text('h3','Outcome'),text('p',r.result || 'No outcome recorded yet.'));
     if(data.transcript)parent.append(historyFacts([['Agent run',data.transcript.status],['Model rounds',data.transcript.rounds],['Input / output tokens',`${data.transcript.inTokens} / ${data.transcript.outTokens}`]]));
     if(data.transcript?.error)parent.append(text('p',data.transcript.error,'review-warning'));
@@ -1451,19 +1451,19 @@ async function openAgentTask(id) {
     for(const call of data.tools){const card=text('article','','review-card');card.append(text('h4',call.name),text('p',`${savedTime(call.startedAt)} · ${call.resultSaved?'Output saved':'No output saved'}${call.finishedAt ? ` · finished ${savedTime(call.finishedAt)}` : ''}`,'review-meta'),uiButton('Open input and saved output',()=>openSavedRecord('tool',call.id,0,[],id)));tools.append(card);}
     const decisions=reviewSection(parent,`Recorded decisions (${data.totals.decisions})`);
     if(data.totals.decisions>data.decisions.length)decisions.append(text('p',`Showing the latest ${data.decisions.length} decisions.`));
-    if(!data.decisions.length)decisions.append(text('p','No journal decisions linked to this task. Candidate assessments can be found in the review tool’s saved output.'));
+    if(!data.decisions.length)decisions.append(text('p','No journal decisions linked to this request. Candidate assessments can be found in the review tool’s saved output.'));
     for(const d of data.decisions){const card=text('article','','review-card');card.append(text('h4',`${d.symbol || 'Portfolio'} · ${d.kind} · ${d.orderStatus || 'Recorded decision'}`),text('p',savedTime(d.at),'review-meta'),text('p',d.rationale),decisionLink(d.id));evidenceLinks(card,d.observationIds,'Saved observations',id);decisions.append(card);}
     const actions=reviewSection(parent,`Trading actions (${data.actions.length})`);
-    if(!data.actions.length)actions.append(text('p','No trading actions linked to this task.'));
+    if(!data.actions.length)actions.append(text('p','No trading actions linked to this request.'));
     for(const a of data.actions){const card=text('article','','review-card');card.append(text('h4',`${a.symbol} · ${a.kind} · ${a.status}`));actionDetails(card,a,true);card.append(decisionLink(a.id));actions.append(card);}
     if(data.transitions?.length){const history=document.createElement('details');history.append(text('summary',`Action progress history (${data.totals.transitions})`));if(data.totals.transitions>data.transitions.length)history.append(text('p',`Showing the latest ${data.transitions.length} transitions.`));for(const event of data.transitions)history.append(text('p',`${savedTime(event.at)} · ${event.action.symbol} · ${event.transition} · ${event.action.id}`));actions.append(history);}
     const fills=reviewSection(parent,`Confirmed broker fills (${data.totals.fills})`);
     if(data.totals.fills>data.fills.length)fills.append(text('p',`Showing the latest ${data.fills.length} fills.`));
-    if(!data.fills.length)fills.append(text('p','No confirmed fills linked to these task orders.'));
+    if(!data.fills.length)fills.append(text('p','No confirmed fills linked to this request’s orders.'));
     for(const f of data.fills)fills.append(historyFacts([['Symbol / side',`${f.symbol} / ${f.side}`],['Executed',savedTime(f.at)],['Shares',historyNumber(f.qty)],['Price',historyPrice(f.price)],['Broker order',f.orderId],['Execution ID',f.execId]]));
-    if(data.children.length){const children=reviewSection(parent,'Related agent tasks');for(const child of data.children)children.append(uiButton(`${child.role} · ${taskProgress(child.status)} · ${child.text}`,()=>openAgentTask(child.id)));}
-    parent.append(uiButton('Refresh saved task trail',()=>openAgentTask(id),''));
-  }catch(error){if(token===inspectorLoad)parent.replaceChildren(text('p',`Task trail unavailable: ${error.message}`));}
+    if(data.children.length){const children=reviewSection(parent,'Related agent requests');for(const child of data.children)children.append(uiButton(`${child.role} · ${taskProgress(child.status)} · ${child.text}`,()=>openAgentTask(child.id)));}
+    parent.append(uiButton('Refresh saved request trail',()=>openAgentTask(id),''));
+  }catch(error){if(token===inspectorLoad)parent.replaceChildren(text('p',`Request trail unavailable: ${error.message}`));}
 }
 $('close-position-review').onclick=()=>$('position-review-dialog').close();
 $('position-review-dialog').onclose=()=>{reviewLoad++;tickerChart.request++;};
@@ -1476,7 +1476,7 @@ $('ask-position-review').onclick=async()=>{
   $('position-review-task').textContent='Starting research…';
   try {
     const result=await api(`positions/${encodeURIComponent(symbol)}/review`,{});
-    if(reviewSymbol===symbol){$('position-review-task').replaceChildren(text('span',`${taskProgress(result.status)} · research runs alongside trading, even while trading is paused; it places no orders. `),uiButton('Follow task',()=>openAgentTask(result.requestId)));}
+    if(reviewSymbol===symbol){$('position-review-task').replaceChildren(text('span',`${taskProgress(result.status)} · research runs alongside trading, even while trading is paused; it places no orders. `),uiButton('Follow request',()=>openAgentTask(result.requestId)));}
   }catch(error){if(reviewSymbol===symbol)$('position-review-task').textContent=`Could not start research: ${error.message}`;}
   finally{reviewSubmitting=false;$('ask-position-review').disabled=reviewLoading;}
 };
