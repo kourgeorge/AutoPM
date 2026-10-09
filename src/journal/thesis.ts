@@ -32,7 +32,7 @@ export function validateThesis(value: EntryThesis, symbol: string): EntryThesis 
   for (const p of value.premises) {
     if (!p.label?.trim() || !THESIS_METRICS.includes(p.metric)) throw new Error('Unknown thesis premise or metric');
     const evidence = validateEvidenceIds(p.evidenceIds, symbol);
-    if (p.metric !== 'qualitative' && !evidence.some(e => Number.isFinite(e.data.metrics?.[p.metric]?.value) && Date.now() - Date.parse(e.recordedAt) <= 15 * 60000)) throw new Error('Numeric premise requires a fresh measured metric in its observation snapshot: ' + p.metric);
+    if (p.metric !== 'qualitative' && !evidence.some(e => Number.isFinite(e.data.metrics?.[p.metric]?.value) && Date.now() - Date.parse(e.recordedAt) <= 15 * 60000)) throw new Error(`Numeric premise requires a fresh measured metric in its observation snapshot: ${p.metric}. Cite evidence containing metrics.${p.metric}.value, such as the evidenceId returned by get_position_review`);
     if (p.metric !== 'qualitative' && (!['gt', 'gte', 'lt', 'lte'].includes(p.operator ?? '') || !Number.isFinite(p.threshold))) throw new Error('A numeric premise requires an operator and finite threshold');
     if (p.metric === 'qualitative' && (p.operator !== undefined || p.threshold !== undefined)) throw new Error('Qualitative premises cannot declare numeric checks');
   }

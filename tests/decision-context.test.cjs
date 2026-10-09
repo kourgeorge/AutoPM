@@ -182,7 +182,7 @@ test('material reviews are durable, atomic, idempotent and scoped to the entry l
 });
 
 test('candidate decisions and source interpretations save receipts; unread articles cannot establish contradiction', () => {
-  const e = evidence.recordEvidence('get_position_review', { symbol: 'AAPL', positionKnown: true, holding: null, forward: { price: 100 } });
+  const e = evidence.recordEvidence('get_position_review', { symbol: 'AAPL', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null, forward: { price: 100 } });
   const saved = agentContext.run({ ...context, toolCallId: 'candidate-call' }, () => followup.saveCandidateReview('AAPL', 'wait', 'Wait for the catalyst before allocating capital.', [e.id], e.id));
   assert.equal(JSON.parse(storage.readRecord('tool-calls', 'candidate-call').result).reviewId, saved.reviewId);
   const source = research.registerResearchItem({ symbol: 'AAPL', title: 'Filing', url: 'https://www.sec.gov/test', publisher: 'SEC', source: 'SEC', publishedAt: null, eventAt: null });
@@ -190,6 +190,69 @@ test('candidate decisions and source interpretations save receipts; unread artic
   storage.appendRecord('source-text', source.id, new Date().toISOString(), { text: 'Demand fell' });
   const result = agentContext.run({ ...context, toolCallId: 'research-call' }, () => research.recordResearchReview(source.id, 'contradicts', 'Demand', 'Demand guidance has fallen relative to the entry.'));
   assert.equal(JSON.parse(storage.readRecord('tool-calls', 'research-call').result).reviewId, result.reviewId);
+});
+
+test('candidate review rejects signal snapshots and raw metric citations, then saves a conditional wait with dossier evidence', async () => {
+  const signals = evidence.recordEvidence('get_signals', { symbol: 'LLY', tally: { composite: .024 } });
+  const calendar = evidence.recordEvidence('get_calendar', { symbol: 'LLY', daysUntil: 20 });
+  const fundamentals = evidence.recordEvidence('get_fundamentals', { symbol: 'LLY', balanceSheet: { revenueGrowthPct: 47.7 } });
+  const dossier = evidence.recordEvidence('get_position_review', { symbol: 'LLY', policyHash: policy.getPolicyHash(),
+    positionKnown: true, holding: null, forward: { price: 1169.6 }, metrics: {
+      trendComposite: { value: .024 }, revenueGrowthPct: { value: 47.7 }, earningsDaysUntil: { value: 20 },
+    } });
+  const input = { symbol: 'LLY', decision: 'wait', reason: 'Wait for composite recovery to at least +0.20 before entry.',
+    evidenceIds: [signals.id, calendar.id, fundamentals.id], snapshotId: signals.id,
+    thesis: { setup: 'Conditional momentum continuation after trend repair', horizonDays: 30, catalystRiskAccepted: false,
+      premises: [
+        { label: 'Trend recovers before entry', metric: 'trendComposite', operator: 'gte', threshold: .2, evidenceIds: [signals.id] },
+        { label: 'Revenue growth remains positive', metric: 'revenueGrowthPct', operator: 'gt', threshold: 0, evidenceIds: [fundamentals.id] },
+        { label: 'Earnings outside blackout', metric: 'earningsDaysUntil', operator: 'gt', threshold: 5, evidenceIds: [calendar.id] },
+      ] }, unknowns: ['Fresh bid/ask unavailable.'], nextReviewAt: new Date(Date.now() + 7 * 86400000).toISOString() };
+  const rejected = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', input));
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /snapshotId references get_signals/);
+  assert.match(rejected.error, /evidenceId returned by get_position_review/);
+  input.snapshotId = dossier.id;
+  input.evidenceIds.push(dossier.id);
+  for (const premise of input.thesis.premises) {
+    const result = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', input));
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes(`metrics.${premise.metric}.value`));
+    assert.equal(storage.listRecords('candidate-reviews').length, 0);
+    premise.evidenceIds = [dossier.id];
+  }
+  const saved = JSON.parse(await agentContext.run({ ...context, toolCallId: 'lly-candidate' },
+    () => traderTools.executeTraderTool('record_candidate_review', input)));
+  assert.equal(saved.ok, true);
+  const row = storage.readRecord('candidate-reviews', saved.reviewId);
+  assert.equal(row.snapshotId, dossier.id);
+  assert.deepEqual(row.thesis, input.thesis);
+  assert.deepEqual(row.unknowns, input.unknowns);
+  assert.equal(row.nextReviewAt, input.nextReviewAt);
+  assert.equal(thesis.evaluatePremises(row.thesis, dossier.data.metrics).status, 'contradicted');
+  assert.equal(JSON.parse(storage.readRecord('tool-calls', 'lly-candidate').result).reviewId, saved.reviewId);
+  assert.equal(storage.listRecords('actions').length, 0);
+});
+
+test('candidate snapshot errors distinguish missing citations, unknown positions and held symbols', async () => {
+  const candidate = evidence.recordEvidence('get_position_review', { symbol: 'LLY', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null });
+  const other = evidence.recordEvidence('get_signals', { symbol: 'LLY', tally: { composite: .024 } });
+  const input = { symbol: 'LLY', decision: 'wait', reason: 'Wait for the measured trend to repair before entering.',
+    evidenceIds: [other.id], snapshotId: candidate.id, unknowns: [], nextReviewAt: new Date(Date.now() + 86400000).toISOString() };
+  const missing = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', input));
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /snapshotId must be included in evidenceIds/);
+  for (const [data, expected] of [
+    [{ positionKnown: false, holding: null }, /holding status is unknown/],
+    [{ holding: null }, /holding status is unknown/],
+    [{ positionKnown: true, holding: { symbol: 'LLY', qty: 1 } }, /current holding.*record_position_review/],
+  ]) {
+    const snapshot = evidence.recordEvidence('get_position_review', { symbol: 'LLY', policyHash: policy.getPolicyHash(), ...data });
+    const result = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', { ...input, snapshotId: snapshot.id, evidenceIds: [snapshot.id] }));
+    assert.equal(result.ok, false);
+    assert.match(result.error, expected);
+  }
+  assert.equal(storage.listRecords('candidate-reviews').length, 0);
 });
 
 test('source reading refuses private addresses and marks source text as evidence', () => {
