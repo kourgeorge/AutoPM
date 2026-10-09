@@ -19,7 +19,7 @@ import { canonicalSymbol } from '../core/symbols';
 import { readDecisions } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 
-const KINDS = ['entry', 'exit', 'hold', 'veto', 'rejected'];
+const KINDS = ['entry', 'exit', 'hold', 'skip', 'veto', 'rejected'];
 const ACTORS = ['trader', 'guard', 'broker'];
 
 /**

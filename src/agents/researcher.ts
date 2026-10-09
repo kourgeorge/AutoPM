@@ -1,8 +1,8 @@
 /**
  * Research worker — studies one stock and saves a verdict, for whoever asks.
  *
- * The dashboard's research button, the assistant (`research_symbol`) and the trader
- * (`request_research`) all start the same job through `startResearch`. It used to be a
+ * The dashboard's research button and the assistant's and trader's shared `request_research`
+ * tool all start the same job through `startResearch`. It used to be a
  * "review only" mode of the trader, which made research wait behind trading cycles, stop
  * while trading was paused, and end with the trader's `sleep` — one BRK.B research run
  * pushed the next trading cycle back four hours. Here it has its own queue, runs alongside
@@ -11,7 +11,7 @@
  * Verdicts land in `reviews` (candidate or position).
  */
 import { runAgentLoop } from './agentLoop';
-import { ToolRegistry } from './toolRegistry';
+import { ToolRegistry, pickTools } from './toolRegistry';
 import { runtimeContract, RESEARCH_CONTRACT } from './runtimeContract';
 import { enqueueRequest, pendingRequests, updateRequest, type AgentRequest } from '../core/requests';
 import { createModelProvider } from '../core/modelProvider';
@@ -21,8 +21,8 @@ import { getPolicyHash } from '../policy/load';
 import { renderPolicy } from '../policy/render';
 import { TRADER_REGISTRY } from '../tools/traderTools';
 
-/** Read-only research tools plus the two verdict tools. Never order, protection, event or sleep tools. */
-export const RESEARCH_TOOLS = new Set(['get_entry_plan', 'get_lessons', 'get_requests', 'get_market_status',
+/** The researcher's own tools: reads plus the verdict tools. Never order, protection, event or sleep tools. */
+export const RESEARCH_TOOLS = ['get_entry_plan', 'get_lessons', 'get_requests', 'get_market_status',
   'get_account', 'get_positions', 'get_open_orders', 'get_actions', 'get_journal', 'get_scorecard',
   'get_benchmark', 'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan',
   'get_correlation', 'get_exposure', 'get_calendar', 'get_fundamentals', 'get_position_review',
@@ -31,7 +31,7 @@ export const RESEARCH_TOOLS = new Set(['get_entry_plan', 'get_lessons', 'get_req
   'get_stock_bars', 'get_stock_snapshot', 'get_stock_latest_quote', 'get_most_active_stocks',
   'get_market_movers', 'get_news', 'get_portfolio_history', 'web_search', 'read_source',
   'compare_position_actions', 'record_position_review', 'record_candidate_review',
-  'record_research_review']);
+  'record_research_review'] as const;
 
 /** Same validation as the dashboard route. Returns the ticker as written ("BRK.B"), upper-cased. */
 export function researchTicker(raw: string): string {
@@ -105,7 +105,7 @@ export class Researcher {
 
   /** Built on first use: `traderTools` imports this module, so its registry is not ready at load. */
   private tools(): ToolRegistry {
-    return this.registry ??= new ToolRegistry(TRADER_REGISTRY.definitions.filter(tool => RESEARCH_TOOLS.has(tool.name)),
+    return this.registry ??= new ToolRegistry(pickTools(RESEARCH_TOOLS, TRADER_REGISTRY.definitions),
       (name, input) => TRADER_REGISTRY.execute(name, input));
   }
 

@@ -338,7 +338,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'request_research',
-    description: 'Queue a full research run on one stock in the separate research worker. It runs alongside trading cycles, places no orders and saves a buy/wait/skip candidate review or a holding review. Returns a request ID immediately; read the saved verdict later with get_decision_followup. Use it for a promising candidate that needs deeper research than this cycle allows.',
+    description: 'Start full research on one stock in the separate research worker: business, news and SEC filings, trend, catalysts, portfolio fit and proposed entry/stop/target levels, ending in a saved buy/wait/skip candidate review or a holding review. Returns a request ID immediately. It places no orders, runs even while trading is paused, and a stock already being researched is not started twice. Asked from chat, the finished summary is posted to the chat; otherwise read the saved verdict later with get_decision_followup.',
     input_schema: {
       type: 'object',
       properties: { symbol: { type: 'string', description: 'Ticker as written, e.g. "BRK.B".' } },
@@ -403,9 +403,12 @@ async function dispatchTraderTool(
       case 'get_price_stats':     return await toolGetPriceStats(input);
       case 'write_lesson':        return toolWriteLesson(input);
       case 'request_research': {
-        const request = startResearch(String(input.symbol), agentContext.getStore()?.actorId ?? 'system');
+        // Asked from chat, the operator is waiting there for the summary.
+        const fromChat = agentContext.getStore()?.role === 'assistant';
+        const request = startResearch(String(input.symbol), agentContext.getStore()?.actorId ?? 'system', fromChat ? { replyToChat: true } : {});
         return JSON.stringify({ ok: true, requestId: request.id, status: request.status, symbol: request.symbol,
-          note: 'Research runs separately and places no orders. Its verdict is saved as a candidate or holding review.' });
+          note: fromChat ? 'The summary is posted to this chat when the research finishes. Use get_requests for its status.'
+            : 'Research runs separately and places no orders. Its verdict is saved as a candidate or holding review.' });
       }
       // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
       // delay, which only the agent loop can do), and it is not an assistant tool.
@@ -1182,7 +1185,10 @@ function toolAckEvent(input: Record<string, unknown>): string {
     (disposition === 'acknowledged' && !isHeartbeat && symbol != null && note != null && note.trim() !== '');
 
   if (shouldJournal) {
-    recordDecision(decision('hold', 'trader', {
+    // Hold or skip is a fact, not the model's wording: held when answered means it kept the position.
+    const held = symbol != null && (!!getPositionSnapshot(symbol)
+      || Object.values(getLastTick()?.positions ?? {}).some(p => sameSymbol(p.symbol, symbol)));
+    recordDecision(decision(held ? 'hold' : 'skip', 'trader', {
       symbol,
       triggerEventId: id,
       rationale: note ?? `${disposition}: no note supplied`,

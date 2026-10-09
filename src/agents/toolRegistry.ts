@@ -1,6 +1,17 @@
 import type { ToolDefinition } from '../core/types';
 import { assertAgentActive } from '../core/agentContext';
 import { SAVED_RESULT_TOOLS, readSavedResult } from './savedResults';
+import { toolKind, type ToolKind } from '../tools/toolKinds';
+
+/** An agent's own tool list, picked by name. A missing definition or kind fails at startup. */
+export function pickTools(names: readonly string[], definitions: ToolDefinition[]): ToolDefinition[] {
+  return names.map(name => {
+    const def = definitions.find(t => t.name === name);
+    if (!def) throw new Error(`No tool named "${name}"`);
+    if (!toolKind(name)) throw new Error(`Tool "${name}" has no kind in toolKinds.ts`);
+    return def;
+  });
+}
 
 /** The same bounded schema is advertised to the model and enforced before dispatch. */
 function bounded(schema: any, key = ''): any {
@@ -42,6 +53,9 @@ export class ToolRegistry {
   constructor(definitions: ToolDefinition[], private readonly handler: (name: string, input: Record<string, unknown>) => Promise<string>) {
     this.definitions = [...definitions, ...SAVED_RESULT_TOOLS.filter(t => !definitions.some(d => d.name === t.name))].map(t => ({ ...t, input_schema: bounded(t.input_schema) }));
     if (new Set(definitions.map(t => t.name)).size !== definitions.length) throw new Error('Duplicate tool name');
+  }
+  kind(name: string): ToolKind | null {
+    return this.definitions.some(t => t.name === name) ? toolKind(name) : null;
   }
   async execute(name: string, input: unknown): Promise<string> {
     const def = this.definitions.find(t => t.name === name);

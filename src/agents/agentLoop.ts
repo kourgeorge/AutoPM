@@ -120,12 +120,12 @@ export async function runAgentLoop(opts: {
             let result = saved?.result;
             if (result === undefined) {
               const startedAt = new Date().toISOString();
-              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, startedAt });
+              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, kind: opts.registry.kind(call.name), input: call.input, startedAt });
               result = finish ? errorResult('Turn has ended; this call was not executed')
                 : await abortable(agentContext.run({ ...context, toolCallId }, () => opts.registry.execute(call.name, call.input)), signal);
               // Keep the complete receipt; only the model's context is size-bounded below.
               // Merge: the tool may have attached a page snapshot to its own receipt.
-              saveRecord('tool-calls', toolCallId, { ...readRecord<object>('tool-calls', toolCallId), requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result, startedAt, finishedAt: new Date().toISOString() });
+              saveRecord('tool-calls', toolCallId, { ...readRecord<object>('tool-calls', toolCallId), requestId: id, role: context.role, actorId: context.actorId, name: call.name, kind: opts.registry.kind(call.name), input: call.input, result, startedAt, finishedAt: new Date().toISOString() });
               logger.tool(context.role, call.name, result, call.input, { id: toolCallId, requestId: id });
             }
             results.push({ type: 'tool_result', tool_use_id: call.id, receiptId: toolCallId, content: boundedResult(result, toolCallId) });
