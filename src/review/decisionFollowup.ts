@@ -2,29 +2,55 @@ import crypto from 'crypto';
 import { appendRecord, listRecords, transaction } from '../core/storage';
 import { agentContext, assertAgentActive, recordToolResult } from '../core/agentContext';
 import { readEvidence, validateEvidenceIds } from '../journal/evidence';
-import type { PositionReview } from '../journal/thesis';
+import { validateThesis, evaluatePremises, type PositionReview, type EntryThesis } from '../journal/thesis';
 import { collectBars } from '../collect/barSource';
 import { isUsable } from '../collect/types';
 import { etNow } from '../core/time';
 import { getPolicyHash } from '../policy/load';
 import type { Bar } from '../core/types';
 import type { DecisionRecord } from '../journal/types';
+import { sameSymbol } from '../core/symbols';
 
-export interface CandidateReview { id: string; at: string; symbol: string; decision: 'wait' | 'skip'; reason: string; evidenceIds: string[];
+export interface CandidateReviewDetails { thesis?: EntryThesis; entryPlanId?: string; unknowns?: string[]; nextReviewAt?: string }
+export interface CandidateReview extends CandidateReviewDetails { id: string; at: string; symbol: string; decision: 'buy' | 'wait' | 'skip'; reason: string; evidenceIds: string[];
   snapshotId: string; price: number | null; contextVariant: string; policyHash: string }
 
-export function saveCandidateReview(symbol: string, decision: 'wait' | 'skip', reason: string, evidenceIds: string[], snapshotId: string) {
+export function saveCandidateReview(symbol: string, decision: CandidateReview['decision'], reason: string, evidenceIds: string[], snapshotId: string, details: CandidateReviewDetails = {}) {
   assertAgentActive();
+  if (!['buy', 'wait', 'skip'].includes(decision)) throw new Error('Candidate assessment must be buy, wait or skip');
   const evidence = validateEvidenceIds(evidenceIds, symbol), snapshot = evidence.find(e => e.id === snapshotId);
-  if (snapshot?.tool !== 'get_position_review' || snapshot.data.holding || snapshot.data.positionKnown !== true) throw new Error('Use a candidate get_position_review snapshot that confirms the symbol is not held');
-  if (Date.now() - Date.parse(snapshot.recordedAt) > 15 * 60000) throw new Error('Candidate snapshot is older than 15 minutes');
-  if (reason.trim().length < 20) throw new Error('State the material reason for waiting or skipping');
-  const old = listRecords<CandidateReview>('candidate-reviews', { where: r => r.symbol === symbol, desc: true, limit: 1 })[0]?.value;
-  if (old?.decision === decision && old.reason === reason) return { ok: true, unchanged: true, reviewId: old.id };
+  if (!snapshot) throw new Error('snapshotId must be included in evidenceIds. Use the evidenceId returned by get_position_review for this symbol');
+  if (snapshot.tool !== 'get_position_review') throw new Error(`snapshotId references ${snapshot.tool}; use the evidenceId returned by get_position_review for this symbol and include it in evidenceIds. Signals, calendar and fundamentals evidence can support the review but cannot serve as snapshotId`);
+  if (snapshot.data.positionKnown !== true) throw new Error('Candidate holding status is unknown. Refresh get_position_review after broker positions are available; a null holding alone does not confirm the symbol is not held');
+  if (snapshot.data.holding) throw new Error('The get_position_review snapshot confirms a current holding. Use record_position_review for a managed holding assessment');
+  const fresh = (at: string) => { const age = Date.now() - Date.parse(at); return Number.isFinite(age) && age >= -30_000 && age <= 15 * 60000; };
+  if (!fresh(snapshot.recordedAt)) throw new Error('Candidate snapshot is not fresh; refresh it');
+  if (snapshot.data.policyHash !== getPolicyHash()) throw new Error('Strategy changed since this candidate snapshot');
+  if (typeof reason !== 'string' || reason.trim().length < 20 || reason.length > 2000) throw new Error('State the material reason for the candidate assessment in 20–2000 characters');
+  const thesis = details.thesis ? validateThesis(details.thesis, symbol) : undefined;
+  if (details.unknowns !== undefined && (!Array.isArray(details.unknowns) || details.unknowns.length > 8 || details.unknowns.some(s => typeof s !== 'string' || !s.trim() || s.length > 300))) throw new Error('Provide up to 8 explicit unknowns');
+  if (details.nextReviewAt !== undefined) {
+    const nextAt = Date.parse(details.nextReviewAt);
+    if (!Number.isFinite(nextAt) || nextAt <= Date.now() || nextAt > Date.now() + 30 * 86400000) throw new Error('Next review must be within the next 30 days');
+  }
+  const plan = details.entryPlanId ? evidence.find(e => e.id === details.entryPlanId) : undefined;
+  if (details.entryPlanId && (plan?.tool !== 'get_entry_plan' || !fresh(plan.recordedAt) || plan.data.policyHash !== getPolicyHash() || !sameSymbol(plan.data.symbol ?? '', symbol))) throw new Error('Entry plan must reference a fresh get_entry_plan observation for this symbol and strategy');
+  if (decision === 'buy') {
+    if (!thesis) throw new Error('A buy candidate requires an evidence-linked proposed thesis');
+    if (evaluatePremises(thesis, snapshot.data.metrics ?? {}).premises.some(p => p.metric !== 'qualitative' && p.status !== 'supported')) throw new Error('Numeric proposed thesis conditions must be supported by the candidate snapshot');
+    const levels = plan?.data.proposedLevels;
+    if (!plan || plan.data.allowed !== true || !Number.isFinite(plan.data.maxQty) || plan.data.maxQty < 1 || !Number.isFinite(plan.data.entryPrice)
+      || !levels || !Number.isFinite(levels.stopLoss) || !Number.isFinite(levels.takeProfit) || !(levels.stopLoss > 0 && levels.stopLoss < plan.data.entryPrice && levels.takeProfit > plan.data.entryPrice)) throw new Error('A buy candidate requires a fresh allowed entry plan with a feasible size and supported stop/target levels. Record a conditional wait if execution inputs are unavailable');
+  }
+  const savedDetails = { ...(thesis ? { thesis } : {}), ...(details.entryPlanId ? { entryPlanId: details.entryPlanId } : {}),
+    ...(details.unknowns !== undefined ? { unknowns: [...details.unknowns] } : {}), ...(details.nextReviewAt ? { nextReviewAt: details.nextReviewAt } : {}) };
+  const old = listRecords<CandidateReview>('candidate-reviews', { where: r => sameSymbol(r.symbol, symbol), desc: true, limit: 1 })[0]?.value;
+  if (old?.decision === decision && old.reason === reason && old.policyHash === getPolicyHash()
+    && JSON.stringify([old.thesis, old.entryPlanId, old.unknowns, old.nextReviewAt]) === JSON.stringify([thesis, details.entryPlanId, details.unknowns, details.nextReviewAt])) return { ok: true, unchanged: true, reviewId: old.id };
   const id = 'candidate-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
-  const row: CandidateReview = { id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId,
+  const row: CandidateReview = { id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
     price: snapshot.data.forward?.price ?? null, contextVariant: snapshot.data.contextVariant ?? 'decision-context-v1', policyHash: getPolicyHash() };
-  const result = { ok: true, reviewId: id, note: 'Candidate decision and its evidence snapshot saved for later comparison.' };
+  const result = { ok: true, reviewId: id, note: 'Candidate research recommendation saved. This does not place or approve an order; execution rechecks the full strategy.' };
   return transaction(() => { appendRecord('candidate-reviews', id, row.at, row); recordToolResult(result); return result; });
 }
 
