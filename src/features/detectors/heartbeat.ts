@@ -20,17 +20,17 @@ export const heartbeatDetector: Detector = {
     const holding = a.positionCount > 0;
     const symbols = Object.keys(data.positions);
 
-    // A held position is only worth waking someone for while the market can move it.
-    // Ungated, `heartbeatWithPositionsMs` meant a full LLM cycle every 15 minutes all
-    // night for as long as anything was open — 96 of them a day, none actionable.
-    const actionable = holding && data.session === 'open';
+    // The trader sets no timer of its own, so while the market is open this beat is what
+    // wakes it: every 15 minutes holding, hourly flat. Closed, nothing can move a position,
+    // so the beat is context only — ungated it meant 96 unactionable cycles a night.
+    const open = data.session === 'open';
 
     const hit: DetectorHit = {
       symbol: null,
       // One key for both cadences: switching from flat to holding should tighten the beat,
       // not start a second independent one.
       cooldownKey: 'heartbeat',
-      severity: actionable ? 'urgent' : 'info',
+      severity: open ? 'urgent' : 'info',
       headline: holding
         ? `Periodic check — ${a.positionCount} position(s) open (${symbols.join(', ')}), day P&L ${pctText(a.dayPnLPct)}`
         : `Periodic check — flat, day P&L ${pctText(a.dayPnLPct)}`,
@@ -44,7 +44,7 @@ export const heartbeatDetector: Detector = {
       suggestedAction: 'review',
       // `heartbeatFlatMs` already means "the slow cadence"; outside market hours that is
       // what a holding heartbeat wants too, so the two regimes reuse the two existing keys.
-      cooldownMs: actionable
+      cooldownMs: holding && open
         ? policy.triggers.heartbeatWithPositionsMs
         : policy.triggers.heartbeatFlatMs,
     };

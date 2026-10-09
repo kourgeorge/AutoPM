@@ -347,17 +347,13 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: "Finish this trader turn and set the maximum delay before another cycle. Call separately after inspecting all earlier action results. Remaining calls in the same batch will not execute. Typical cadence: 60 minutes while open, 240 while closed.",
+    description: "End this trader cycle. Call it separately, after inspecting all earlier action results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again.",
     input_schema: {
       type: 'object',
       properties: {
-        minutes: {
-          type: 'number', minimum: 1, maximum: 1440,
-          description: 'Maximum minutes until next cycle. MUST be 60 when market is open, MUST be 240 when market is closed. Never use 10 during closed hours.',
-        },
-        reason: { type: 'string', description: 'Why this duration was chosen.' },
+        reason: { type: 'string', description: 'Why the cycle is complete.' },
       },
-      required: ['minutes', 'reason'],
+      required: ['reason'],
     },
   },
   // Native Alpaca market data — bars, snapshots, movers, news — direct REST calls.
@@ -375,7 +371,7 @@ async function dispatchTraderTool(
 ): Promise<string> {
   try {
     switch (name) {
-      case 'sleep': return JSON.stringify({ ok: true, sleepMs: Number(input.minutes) * 60000 });
+      case 'sleep': return JSON.stringify({ ok: true });
       case 'get_lessons': return JSON.stringify(listLessons(20, true));
       case 'get_requests': return JSON.stringify(listRequests());
       case 'get_market_status':   return await toolGetMarketStatus();

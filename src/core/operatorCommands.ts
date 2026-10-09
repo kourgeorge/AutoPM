@@ -145,7 +145,7 @@ export function registerOperatorCommands(trader: Trader): void {
     help: 'Run a trader cycle now instead of waiting for the next one.',
     run: () => {
       if (trader.status.paused) return ui.reply('The trader is paused — /resume first.');
-      trader.wake();
+      trader.wake(undefined, 'operator');
     },
   });
 

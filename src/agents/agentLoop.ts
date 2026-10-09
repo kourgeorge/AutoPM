@@ -11,7 +11,7 @@ import { logger } from '../core/logger';
 export type TurnStatus = 'completed' | 'waiting' | 'interrupted' | 'failed';
 export interface Transcript {
   id: string; messages: ChatMessage[]; rounds: number; status: TurnStatus | 'running';
-  inTokens: number; outTokens: number; text: string; error?: string; sleepMs?: number;
+  inTokens: number; outTokens: number; text: string; error?: string;
   revision?: string;
   responseStopReason?: string;
   /** Texts left out of the model's context, by id; get_saved_context reads them. */
@@ -131,7 +131,7 @@ export async function runAgentLoop(opts: {
             results.push({ type: 'tool_result', tool_use_id: call.id, receiptId: toolCallId, content: boundedResult(result, toolCallId) });
             if (call.name === 'sleep') {
               const value = JSON.parse(result);
-              if (value.ok) { finish = true; current.sleepMs = value.sleepMs; }
+              if (value.ok) finish = true;
             }
           }
           current.messages.push({ role: 'user', content: results }); checkpoint();

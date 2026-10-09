@@ -188,10 +188,13 @@ test('failed trader requests remain durable with their instruction and explicit 
 
 test('sleep rejects later calls and truncated model output executes no tools', async () => {
   const trader = new Trader();
-  trader.provider = { chat: async () => toolResponse([['sleep', { minutes: 60, reason: 'Finished' }], ['write_lesson', { lesson: 'Do not save', evidenceIds: [] }]]) };
+  trader.provider = { chat: async () => toolResponse([['sleep', { reason: 'Finished' }], ['write_lesson', { lesson: 'Do not save', evidenceIds: [] }]]) };
   const receipt = trader.wake('Review');
   await trader.runCycle();
   assert.equal(lessons.readLessons().length, 0);
+  const request = storage.readRecord('requests', receipt.requestId);
+  assert.deepEqual(request.wokenBy, ['startup', 'message'], 'the cycle records what woke it');
+  assert.ok(Array.isArray(request.eventIds), 'and which events it was shown');
   const turn = storage.readRecord('transcripts', receipt.requestId);
   assert.match(turn.messages.at(-1).content[1].content, /not executed/);
   let executed = 0;
@@ -351,7 +354,7 @@ test('research runs while trading is paused, without order or sleep tools, and r
     for (const name of ['get_position_review', 'read_source', 'record_candidate_review', 'record_position_review', 'get_tool_result', 'get_saved_context'])
       assert.ok(names.includes(name), name + ' is a research tool');
     assert.match(request.systemPrompt, /ACCOUNT STRATEGY/); assert.match(request.systemPrompt, /STOCK RESEARCH TASK/);
-    if (rounds++ === 0) return toolResponse([['sleep', { minutes: 240, reason: 'Market closed' }], ['get_lessons', {}]]);
+    if (rounds++ === 0) return toolResponse([['sleep', { reason: 'Market closed' }], ['get_lessons', {}]]);
     const results = request.messages.flatMap(m => m.content).filter(b => b.type === 'tool_result');
     assert.match(results[0].content, /not permitted/);
     assert.doesNotMatch(results[1].content, /paused/i);
@@ -363,7 +366,6 @@ test('research runs while trading is paused, without order or sleep tools, and r
   const done = commands.getRequest(first.id);
   assert.equal(done.role, 'researcher'); assert.equal(done.status, 'completed'); assert.equal(done.actorId, 'alice');
   assert.equal(done.result, 'BRK.B: wait for trend repair.');
-  assert.equal(storage.readRecord('transcripts', first.id).sleepMs, undefined, 'research cannot set the trading schedule');
   const activity = storage.readActivity(0, 1000);
   assert.ok(activity.some(e => e.kind === 'log' && e.source === 'researcher' && e.text === '[Research] BRK.B: wait for trend repair.'));
   assert.ok(!activity.some(e => e.kind === 'reply'), 'research from the dashboard is not a chat reply');
