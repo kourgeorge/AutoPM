@@ -32,6 +32,7 @@ const eventLog = from('features/alertLog');
 const { ui } = from('ui/ui');
 const { AssistantAgent } = from('agents/assistant');
 const { Trader, buildCycleContext } = from('agents/trader');
+const { Researcher, startResearch, researchStatus } = from('agents/researcher');
 const { logger } = from('core/logger');
 for (const name of ['info', 'warn', 'error', 'trade', 'tool']) logger[name] = () => {};
 ui.reply = () => {};
@@ -332,6 +333,99 @@ test('lessons require evidence for model writes and can be retired without delet
   lessons.reviewLesson(lesson.id, 'Reviewed observation', false);
   assert.equal(lessons.readLessons().length, 0);
   assert.equal(lessons.listLessons()[0].text, 'Reviewed observation');
+});
+
+test('research runs while trading is paused, without order or sleep tools, and reuses a pending request', async () => {
+  state.updateState({ paused: true });
+  const first = startResearch('brk.b', 'alice');
+  assert.equal(first.symbol, 'BRK.B'); assert.match(first.text, /^Research BRK\.B /);
+  assert.equal(startResearch('BRK.B', 'bob').id, first.id);
+  assert.equal(startResearch('BRKB', 'bob').id, first.id, 'the same stock spelled canonically is the same request');
+  assert.throws(() => startResearch('not a ticker'), /valid ticker/);
+  const researcher = new Researcher();
+  let rounds = 0;
+  researcher.provider = { chat: async request => {
+    const names = request.tools.map(t => t.name);
+    for (const name of ['execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'sleep', 'request_research', 'send_to_trader'])
+      assert.ok(!names.includes(name), name + ' must not be a research tool');
+    for (const name of ['get_position_review', 'read_source', 'record_candidate_review', 'record_position_review', 'get_tool_result', 'get_saved_context'])
+      assert.ok(names.includes(name), name + ' is a research tool');
+    assert.match(request.systemPrompt, /ACCOUNT STRATEGY/); assert.match(request.systemPrompt, /STOCK RESEARCH TASK/);
+    if (rounds++ === 0) return toolResponse([['sleep', { minutes: 240, reason: 'Market closed' }], ['get_lessons', {}]]);
+    const results = request.messages.flatMap(m => m.content).filter(b => b.type === 'tool_result');
+    assert.match(results[0].content, /not permitted/);
+    assert.doesNotMatch(results[1].content, /paused/i);
+    return { ...textResponse(), content: [{ type: 'text', text: 'BRK.B: wait for trend repair.' }] };
+  } };
+  researcher.start();
+  await researcher.active;
+  await researcher.stop();
+  const done = commands.getRequest(first.id);
+  assert.equal(done.role, 'researcher'); assert.equal(done.status, 'completed'); assert.equal(done.actorId, 'alice');
+  assert.equal(done.result, 'BRK.B: wait for trend repair.');
+  assert.equal(storage.readRecord('transcripts', first.id).sleepMs, undefined, 'research cannot set the trading schedule');
+  const activity = storage.readActivity(0, 1000);
+  assert.ok(activity.some(e => e.kind === 'log' && e.source === 'researcher' && e.text === '[Research] BRK.B: wait for trend repair.'));
+  assert.ok(!activity.some(e => e.kind === 'reply'), 'research from the dashboard is not a chat reply');
+  assert.equal(researchStatus().queued, 0);
+  assert.equal(storage.listRecords('actions').length, 0);
+});
+
+test('research asked for in chat posts its summary to the chat when it finishes', async () => {
+  const dashboard = startResearch('MSFT', 'operator');
+  const assistant = new AssistantAgent(() => assert.fail('Research is not relayed to the trader'));
+  let rounds = 0;
+  assistant.provider = { chat: async request => {
+    assert.match(request.systemPrompt, /call research_symbol; do not relay research to the trader/);
+    if (rounds++ === 0) return toolResponse([['research_symbol', { symbol: 'msft' }]]);
+    const result = JSON.parse(request.messages.flatMap(m => m.content).find(b => b.type === 'tool_result').content);
+    assert.equal(result.requestId, dashboard.id, 'a stock already queued is not researched twice');
+    return { ...textResponse(), content: [{ type: 'text', text: 'Research on MSFT has started.' }] };
+  } };
+  const chat = assistant.handleMessage('Research MSFT for me', 'alice');
+  await assistant.active;
+  assert.equal(commands.getRequest(chat.id).status, 'completed');
+  assert.equal(commands.getRequest(dashboard.id).replyToChat, true);
+  const researcher = new Researcher();
+  researcher.provider = { chat: async () => ({ ...textResponse(), content: [{ type: 'text', text: 'Skip: no catalyst.' }] }) };
+  researcher.start();
+  await researcher.active;
+  await researcher.stop();
+  assert.ok(storage.readActivity(0, 1000).some(e => e.kind === 'reply' && e.source === 'researcher' && e.text === 'Research on MSFT finished: Skip: no catalyst.'));
+  const chatResearch = startResearch('NVDA', 'alice', { replyToChat: true });
+  assert.equal(chatResearch.replyToChat, true);
+});
+
+test('research tasks still queued for the trader move to the research worker and are never traded on', async () => {
+  const old = commands.enqueueRequest('trader', 'Research BRK.B under the active strategy. If held, review its original thesis.', 'alice', undefined, { mode: 'review_only' });
+  const trader = new Trader();
+  trader.provider = { chat: async () => assert.fail('The trader must not run an old research task') };
+  const researcher = new Researcher();
+  researcher.provider = { chat: async () => textResponse() };
+  researcher.start();
+  await researcher.active;
+  await researcher.stop();
+  const moved = commands.getRequest(old.id);
+  assert.equal(moved.status, 'failed'); assert.match(moved.result, /Restarted as research request/);
+  const restarted = commands.listRequests(10).find(r => r.role === 'researcher');
+  assert.equal(restarted.symbol, 'BRK.B'); assert.equal(restarted.actorId, 'alice'); assert.equal(restarted.status, 'completed');
+  assert.equal(commands.pendingRequests('trader').length, 0);
+});
+
+test('research has its own share of the daily AI budget', async () => {
+  const { withModelBudget, modelBudgetStatus } = from('core/modelBudget');
+  const previous = process.env.AI_MAX_REQUESTS_PER_DAY; process.env.AI_MAX_REQUESTS_PER_DAY = '10';
+  try {
+    assert.equal(modelBudgetStatus().researchLimit, 3);
+    const provider = withModelBudget({ chat: async () => textResponse() });
+    const params = { systemPrompt: '', messages: [], tools: [], maxTokens: 100 };
+    await agentContext.run({ role: 'researcher', actorId: 'alice', requestId: 'budget-research' }, async () => {
+      for (let i = 0; i < 3; i++) await provider.chat(params);
+      await assert.rejects(() => provider.chat(params), /Research budget reached/);
+    });
+    await agentContext.run({ role: 'trader', actorId: 'system', requestId: 'budget-trader' }, () => provider.chat(params));
+    await agentContext.run({ role: 'assistant', actorId: 'alice', requestId: 'budget-chat' }, () => provider.chat(params));
+  } finally { if (previous === undefined) delete process.env.AI_MAX_REQUESTS_PER_DAY; else process.env.AI_MAX_REQUESTS_PER_DAY = previous; }
 });
 
 test('chat budget exhaustion preserves a separate allocation for trader work', async () => {

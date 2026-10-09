@@ -167,6 +167,31 @@ test('holding dossier separates actual stop coverage from intended levels and su
   } finally { market.dailyHistory = saved.daily; market.relativeContext = saved.relative; prices.collectPrices = saved.prices; fundamentals.getFundamentals = saved.fundamentals; }
 });
 
+test('a share-class ticker reaches data sources as written; records stay keyed by the canonical form', async () => {
+  const saved = { daily: market.dailyHistory, relative: market.relativeContext, prices: prices.collectPrices, fundamentals: fundamentals.getFundamentals };
+  const asked = new Set();
+  market.dailyHistory = async s => { asked.add(s); return { ...observe(bars()), asOf: bars().at(-1).t }; };
+  market.relativeContext = async s => { asked.add(s); throw new Error('sector outage'); };
+  prices.collectPrices = async ([s]) => { asked.add(s); return new Map([[s, observe(110)]]); };
+  fundamentals.getFundamentals = async s => { asked.add(s); throw new Error('fundamentals outage'); };
+  try {
+    const dossier = JSON.parse(await agentContext.run({ ...context, toolCallId: 'brkb-dossier' },
+      () => traderTools.executeTraderTool('get_position_review', { symbol: 'BRK.B' })));
+    assert.deepEqual([...asked], ['BRK.B']);
+    assert.equal(dossier.metrics.lastClose.value, bars().at(-1).c);
+    assert.equal(evidence.readEvidence(dossier.evidenceId).symbol, 'BRKB');
+    const result = JSON.parse(await agentContext.run({ ...context, toolCallId: 'brkb-candidate' },
+      () => traderTools.executeTraderTool('record_candidate_review', { symbol: 'BRK.B', decision: 'wait',
+        reason: 'Wait for the trend composite to reach the entry threshold.', evidenceIds: [dossier.evidenceId], snapshotId: dossier.evidenceId,
+        thesis: { setup: 'Conditional momentum entry after trend repair', horizonDays: 30, catalystRiskAccepted: false,
+          premises: [{ label: 'Price holds above 100', metric: 'lastClose', operator: 'gt', threshold: 100, evidenceIds: [dossier.evidenceId] }] },
+        unknowns: ['Fundamentals unavailable.'], nextReviewAt: new Date(Date.now() + 86400000).toISOString() })));
+    assert.equal(result.ok, true, result.error);
+  } finally { market.dailyHistory = saved.daily; market.relativeContext = saved.relative; prices.collectPrices = saved.prices; fundamentals.getFundamentals = saved.fundamentals; }
+  const { yahooSymbol } = from('collect/yahoo');
+  assert.deepEqual(['BRK.B', 'brk.b', 'BTC/USD', 'AAPL'].map(yahooSymbol), ['BRK-B', 'BRK-B', 'BTC-USD', 'AAPL']);
+});
+
 test('material reviews are durable, atomic, idempotent and scoped to the entry lifecycle', () => {
   state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-old' } } });
   const e = evidence.recordEvidence('get_position_review', { symbol: 'AAPL', positionKnown: true, managed: true, holding: { qty: 10 }, entryDecisionId: 'entry-old' });

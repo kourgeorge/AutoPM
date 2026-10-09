@@ -330,7 +330,7 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   #broker-panel { order: 5; }
   #chart { order: 6; }
   .strategy-context { order: 7; }
-  #current-agents { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  #current-agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 18px; }
   .runtime-footer { display: flex; justify-content: space-between; flex-wrap: wrap; }
 }
 @media (max-width: 600px) {
@@ -368,7 +368,7 @@ main { padding: 10px 14px 16px; }
 #agent-now { grid-column: 1 / -1; display: grid; grid-template-columns: 120px minmax(0, 1fr) 160px; align-items: center; gap: 18px; }
 #agent-now .pane-title { display: block; margin: 0; }
 #agent-now .pane-title > span { display: block; margin-top: 4px; font-size: 10px; }
-#current-agents { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+#current-agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 20px; }
 .current-agent { padding: 0; border: 0; min-width: 0; }
 .current-agent-head { font-size: 12px; gap: 6px; }
 .agent-state { font-size: 10px; }
@@ -859,6 +859,11 @@ dialog p { font-size: 13px; margin: 0; }
 dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .empty-state, .table-empty { font-size: 12px; padding: 12px 10px; border-radius: var(--panel-radius); }
 .form-grid, .risk-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; }
+#ai-usage-settings .section-description { margin: 8px 0 12px; }
+#ai-usage-summary { margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#ai-usage-summary strong { font-size: 18px; overflow-wrap: anywhere; }
+#ai-settings-form .actions { margin-top: 12px; }
+@media (max-width: 600px) { #ai-usage-summary { grid-template-columns: minmax(0, 1fr); } }
 .history-totals { padding: 8px 0; }
 .history-filters { gap: 10px; }
 .history-facts { gap: 8px 16px; margin: 10px 0; }

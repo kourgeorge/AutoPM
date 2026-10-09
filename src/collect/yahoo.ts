@@ -20,7 +20,7 @@ export async function getQuoteRaw(symbol: string): Promise<RawQuote> {
   // validateResult:false — Yahoo's response shape drifts per symbol; a schema
   // miss otherwise logs a wall of text and throws even when the price is fine.
   // The checks below are the real validation.
-  const quote = await yf.quote(symbol, {}, { validateResult: false }) as any;
+  const quote = await yf.quote(yahooSymbol(symbol), {}, { validateResult: false }) as any;
   const price = quote?.regularMarketPrice ?? quote?.postMarketPrice ?? quote?.preMarketPrice;
   if (typeof price !== 'number' || !Number.isFinite(price)) {
     throw new Error(`${symbol}: no usable price in quote response`);
@@ -47,7 +47,7 @@ export async function getQuoteRaw(symbol: string): Promise<RawQuote> {
 export async function getSectorRaw(symbol: string): Promise<string | null> {
   try {
     const r = await yf.quoteSummary(
-      symbol,
+      yahooSymbol(symbol),
       { modules: ['assetProfile'] },
       { validateResult: false },
     ) as any;
@@ -103,7 +103,7 @@ export async function getFundamentalsRaw(symbol: string): Promise<RawFundamental
   // validateResult:false, third positional — mandatory, for the reason in `getQuoteRaw`.
   // `earningsTrend` drifts per symbol as much as `assetProfile` does.
   const raw = await yf.quoteSummary(
-    symbol,
+    yahooSymbol(symbol),
     { modules: [...FUNDAMENTAL_MODULES] },
     { validateResult: false },
   ) as any;
@@ -152,7 +152,7 @@ export async function getBarsRaw(
   const period2 = new Date();
   const period1 = new Date(period2.getTime() - calDays * 24 * 60 * 60 * 1000);
 
-  const result = await yf.chart(symbol, {
+  const result = await yf.chart(yahooSymbol(symbol), {
     period1: period1.toISOString().split('T')[0],
     period2: period2.toISOString().split('T')[0],
     interval,
@@ -185,9 +185,13 @@ export interface NewsItem {
   relatedTickers: string[];
 }
 
-/** A symbol in Yahoo's spelling: crypto as `BTC-USD`, equities unchanged. */
-function yahooSymbol(symbol: string): string {
-  return isCryptoSymbol(symbol) ? cryptoPair(symbol).replace('/', '-') : symbol.toUpperCase();
+/**
+ * A symbol in Yahoo's spelling: crypto as `BTC-USD`, a share class as `BRK-B` (Alpaca and SEC
+ * write `BRK.B`), other equities unchanged. A canonical `BRKB` cannot be repaired here; callers
+ * must send the ticker as written.
+ */
+export function yahooSymbol(symbol: string): string {
+  return isCryptoSymbol(symbol) ? cryptoPair(symbol).replace('/', '-') : symbol.toUpperCase().replace('.', '-');
 }
 
 /**

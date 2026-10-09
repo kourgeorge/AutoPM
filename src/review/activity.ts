@@ -9,7 +9,7 @@ import { getLastTick } from '../features/lastTick';
 import { getPositionSnapshot } from '../state/state';
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { readDecision } from '../journal/journal';
-import { latestPositionReview } from '../journal/thesis';
+import { latestPositionReview, evaluatePremises } from '../journal/thesis';
 import type { Evidence } from '../journal/evidence';
 import type { CandidateReview } from './decisionFollowup';
 import type { ResearchItem } from '../collect/research';
@@ -117,6 +117,10 @@ export function savedPositionContext(symbol: string) {
   const assessment = snapshot ? review : held === false ? candidate : null;
   const assessmentObservation = assessment?.snapshotId
     ? readRecord<Evidence>('evidence', assessment.snapshotId) ?? null : null;
+  const candidateThesisStatus = held === false && candidate?.thesis
+    ? evaluatePremises(candidate.thesis, assessmentObservation?.data.metrics ?? {}) : null;
+  const savedPlan = held === false && candidate?.entryPlanId ? readRecord<Evidence>('evidence', candidate.entryPlanId) : null;
+  const candidateEntryPlan = savedPlan?.tool === 'get_entry_plan' && savedPlan.symbol && sameSymbol(savedPlan.symbol, symbol) ? savedPlan : null;
   // Web searches have no ticker tag. Include sources actually linked through the
   // entry/review's saved observations rather than pretending every search is about this symbol.
   const sourceIds = new Set<string>();
@@ -138,7 +142,7 @@ export function savedPositionContext(symbol: string) {
     review: listRecords<{ sourceId: string; assessment: string; affectedPremise: string; reason: string; at: string }>(
       'research-reviews', { desc: true, limit: 1, where: r => r.sourceId === value.id })[0]?.value ?? null }));
   return { symbol: canonicalSymbol(symbol), managed: !!snapshot, held, holdingKnown, holding, entry: entry ?? null, positionSnapshot: snapshot ?? null,
-    review, candidateReview: candidate, observation, assessmentObservation,
+    review, candidateReview: candidate, observation, assessmentObservation, candidateThesisStatus, candidateEntryPlan,
     protection: positionProtection(symbol), research, researchTotal: sources.length,
     policyHash: getPolicyHash(), savedAt: new Date().toISOString() };
 }

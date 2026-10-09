@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 let started = false, strategy, pendingStrategy, status, cursor = 0, refreshing = false, refreshAgain = false, refreshTimer = null;
 let commands = [], commandMatches = [], commandIndex = 0, commandDismissed = false;
 let stream = null, awaitingReply = 0, view = 'live';
+let aiSettingsLoaded = false, aiSettingsSaving = false;
 let conversationClearKey = null, conversationClearedThrough = 0;
 const openActionDetails = new Set(), lastPrices = new Map();
 const messageInput = $('message-text');
@@ -50,7 +51,7 @@ async function start() {
   configureConversationClear(initialStatus);
   addEntries(tail.entries);
   connectStream();
-  await Promise.all([refresh(), loadStrategy(), loadCommands()]);
+  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadCommands()]);
 }
 /**
  * The server pushes every new conversation line and a signal on each account update. The browser
@@ -84,7 +85,7 @@ async function loadCommands() {
 // ── Views ──────────────────────────────────────────────────────────────────
 function showView(name, load = true) {
   view = name;
-  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Strategy settings', review:'Performance & review'}[name];
+  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Settings', review:'Performance & review'}[name];
   for (const tab of document.querySelectorAll('[role=tab]')) {
     const selected = tab.dataset.view === name;
     tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
@@ -169,7 +170,10 @@ messageInput.addEventListener('keydown',event=>{
 });
 
 // ── Conversation ───────────────────────────────────────────────────────────
-const speakers = { operator:'You', assistant:'Assistant', trader:'Trader', system:'System' };
+const speakers = { operator:'You', assistant:'Assistant', trader:'Trader', researcher:'Research', system:'System' };
+const roleLabel = role => ({ assistant:'Assistant', researcher:'Research' })[role] || 'Trader';
+// Old research ran as a trader task in 'review_only' mode; new research is its own agent.
+const taskMode = r => r.role === 'researcher' ? 'Stock research · no trading tools' : r.mode === 'review_only' ? 'Assessment only · trading tools disabled' : 'Normal agent task';
 function entrySource(entry) {
   if (entry.kind === 'operator') return 'operator';
   if (entry.source || entry.tool?.agent) return entry.source || entry.tool.agent;
@@ -411,6 +415,7 @@ async function refresh() {
     if ($('notice').textContent.startsWith('Could not refresh')) notice('');
     addEntries(f.entries);
     renderStatus(s);
+    renderAiBudget(s.aiBudget);
     renderLanes();
     renderPortfolio(p, s);
     renderWatchlist(w);
@@ -473,7 +478,7 @@ function laneText(name, lane, cycle) {
 }
 function renderLanes() {
   if (!status) return;
-  $('current-agents').replaceChildren(...[['Trader',status.trader.lane,'trader'],['Assistant',status.assistant.lane,'assistant']].map(([name,lane,role])=>{
+  $('current-agents').replaceChildren(...[['Trader',status.trader.lane,'trader'],['Assistant',status.assistant.lane,'assistant'],...(status.researcher ? [['Research',status.researcher.lane,'researcher']] : [])].map(([name,lane,role])=>{
     const card=text('div','','current-agent');
     const head=text('div','','current-agent-head');
     head.append(text('strong',name),text('span',laneText(name,lane).slice(name.length+2),'agent-state '+(lane?.state || '')));
@@ -953,10 +958,10 @@ function historyReference(id) {
   return button;
 }
 function renderRequests(list) {
-  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${command.role === 'assistant' ? 'Assistant' : 'Trader'} task: ${command.text}`,
-    [recordTime(command.createdAt),command.role === 'assistant' ? 'Assistant' : 'Trader',command.actorId,text('span',taskProgress(command.status),'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
+  renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${roleLabel(command.role)} task: ${command.text}`,
+    [recordTime(command.createdAt),roleLabel(command.role),command.actorId,text('span',taskProgress(command.status),'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
       const detail = text('div','','history-detail request-detail');
-      detail.append(historyFacts([['Task',command.text],['Mode',command.mode === 'review_only' ? 'Assessment only · trading tools disabled' : 'Normal agent task'],['Outcome',command.result || 'No outcome recorded yet.']]));
+      detail.append(historyFacts([['Task',command.text],['Mode',taskMode(command)],['Outcome',command.result || 'No outcome recorded yet.']]));
       detail.append(uiButton('Open task trail: tools, decisions, actions and fills',()=>openAgentTask(command.id)));
       if (command.actionIds?.length) { const links = text('div','','record-links');links.append(text('span','Actions'),...command.actionIds.map(historyReference));detail.append(links); }
       const references = text('div','','request-references');
@@ -1047,6 +1052,73 @@ symbolInput.oninput = () => symbolFeedback();
 symbolInput.onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing) { event.preventDefault();addAllowedSymbols(); }
 };
+function renderAiBudget(budget) {
+  if (!budget) return;
+  const {settings,usage,remaining,assistantLimit,researchLimit,resetsAt} = budget, limit = settings.maxRequestsPerDay;
+  $('ai-limit-status').textContent = limit === null ? 'Unlimited' : remaining === 0 ? 'Daily cap reached' : `${limit.toLocaleString()} calls / day`;
+  $('ai-usage-calls').textContent = usage.requests.toLocaleString();
+  $('ai-usage-remaining').textContent = remaining === null ? 'Unlimited' : remaining.toLocaleString();
+  $('ai-usage-tokens').textContent = `${usage.inputTokens.toLocaleString()} / ${usage.outputTokens.toLocaleString()}`;
+  $('ai-usage-reset').textContent = `Usage day: ${usage.day} (UTC). Counter restarts ${new Date(resetsAt).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})} (your local time), at midnight UTC.`;
+  $('ai-assistant-allowance').textContent = limit === null
+    ? 'No daily call cap applies to the trader, chat or research.'
+    : `Chat can use up to ${assistantLimit.toLocaleString()} calls per day (40% of the cap) and stock research up to ${(researchLimit ?? 1).toLocaleString()} (30%), each rounded down with a minimum of 1. The trader can use the whole cap. Broker protection continues if the cap is reached.`;
+}
+function syncAiLimitField() {
+  const f = $('ai-settings-form').elements, limited = f.limitMode.value === 'limited';
+  $('ai-daily-limit-field').hidden = !limited;
+  f.maxRequestsPerDay.disabled = !limited || aiSettingsSaving || !aiSettingsLoaded;
+  f.maxRequestsPerDay.required = limited;
+}
+function fillAiSettings(budget) {
+  const f = $('ai-settings-form').elements, limit = budget.settings.maxRequestsPerDay;
+  f.limitMode.value = limit === null ? 'unlimited' : 'limited';
+  f.maxRequestsPerDay.value = limit === null ? '' : String(limit);
+  aiSettingsLoaded = true;
+  syncAiLimitField();
+  renderAiBudget(budget);
+  $('ai-settings-state').textContent = 'Saved';
+}
+async function loadAiSettings() {
+  if (aiSettingsSaving) return;
+  $('ai-settings-form').elements.limitMode.disabled = true;
+  $('save-ai-settings').disabled = true;
+  try { fillAiSettings(await api('settings/ai')); }
+  finally {
+    $('ai-settings-form').elements.limitMode.disabled = !aiSettingsLoaded;
+    $('save-ai-settings').disabled = !aiSettingsLoaded;
+    syncAiLimitField();
+  }
+}
+$('ai-settings-form').elements.limitMode.onchange = () => {
+  const f = $('ai-settings-form').elements;
+  if (f.limitMode.value === 'limited' && !f.maxRequestsPerDay.value) f.maxRequestsPerDay.value = '300';
+  syncAiLimitField();
+  $('ai-settings-state').textContent = 'Unsaved changes';
+};
+$('ai-settings-form').oninput = () => { $('ai-settings-state').textContent = 'Unsaved changes'; };
+$('reload-ai-settings').onclick = attempt(loadAiSettings);
+$('ai-settings-form').onsubmit = attempt(async () => {
+  if (!aiSettingsLoaded || aiSettingsSaving) return;
+  const f = $('ai-settings-form').elements;
+  const limit = f.limitMode.value === 'unlimited' ? null : Number(f.maxRequestsPerDay.value);
+  if (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 5000)) throw new Error('Choose unlimited or a whole number from 1 to 5000 calls per day.');
+  aiSettingsSaving = true;
+  f.limitMode.disabled = true;
+  $('save-ai-settings').disabled = true;
+  syncAiLimitField();
+  $('ai-settings-state').textContent = 'Saving…';
+  try {
+    fillAiSettings(await api('settings/ai', {maxRequestsPerDay:limit}));
+    notice('AI settings saved and applied immediately.', true);
+  } catch (error) { $('ai-settings-state').textContent = 'Could not save'; throw error; }
+  finally {
+    aiSettingsSaving = false;
+    f.limitMode.disabled = false;
+    $('save-ai-settings').disabled = false;
+    syncAiLimitField();
+  }
+});
 async function loadStrategy() {
   strategy=await api('strategy');const f=$('settings').elements,p=strategy.policy;
   allowedSymbols = [...p.strategy.watchlist];symbolInput.value = '';symbolFeedback();renderAllowedSymbols();
@@ -1165,7 +1237,7 @@ function reviewSection(parent,title) {
 function positionTabs(data) {
   const parent=$('position-review-content'),tabs=text('div','','position-tablist'),panels={};
   tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Position information');
-  const groups=[['assessment','Assessment'],['thesis','Entry thesis'],['protection','Protection'],['context','Market context'],['research',`Research (${data.researchTotal})`]];
+  const groups=[['assessment','Assessment'],['thesis',data.held===false?'Buy case':'Entry thesis'],['protection','Protection'],['context','Market context'],['research',`Research (${data.researchTotal})`]];
   const buttons=[];
   function select(key,focus=false) {
     positionTab=key;
@@ -1200,6 +1272,19 @@ function evidenceLinks(parent, ids, label='Saved observations', taskId=null) {
 function decisionLink(id) {
   const link=historyReference(id),go=link.onclick;
   link.onclick=()=>{ $('record-inspector').close();$('position-review-dialog').close();go(); };return link;
+}
+function renderReviewThesis(parent,thesis,checks,checkedAt,proposed=false) {
+  if(!thesis){parent.append(text('p',proposed?'No proposed buy case recorded yet.':'No structured entry thesis recorded.'));return;}
+  parent.append(historyFacts([['Setup',thesis.setup],['Planned holding period',`${thesis.horizonDays} days`],['Catalyst risk accepted',thesis.catalystRiskAccepted ? 'Yes' : 'No']]));
+  const premises=text('div','','position-premises');
+  for(const premise of thesis.premises || []) {
+    const card=text('div','','review-card'),check=(checks || []).find(p=>p.label===premise.label && p.metric===premise.metric);
+    card.append(text('h4',premise.label),text('span',check?.status || 'unknown','badge '+(check?.status==='supported'?'executed':'waiting')));
+    if(premise.metric!=='qualitative')card.append(text('p',`${premise.metric} ${ {gt:'>',gte:'≥',lt:'<',lte:'≤'}[premise.operator] || '' } ${premise.threshold}`));
+    card.append(text('p',check?.reading?.value==null ? 'No numeric verification saved.' : `Saved reading: ${check.reading.value} · as of ${savedTime(check.reading.asOf)}`,'review-meta'));
+    evidenceLinks(card,premise.evidenceIds,proposed?'Supporting observations':'Entry observations');premises.append(card);
+  }
+  parent.append(premises,text('p',`Premise checks use the saved observation at ${savedTime(checkedAt)}. Qualitative premises require source interpretation; these checks do not predict profit.`,'review-meta'));
 }
 async function openPositionReview(symbol, retainTask=false) {
   const changed=reviewSymbol!==symbol,token=++reviewLoad;reviewSymbol=symbol;reviewLoading=true;
@@ -1236,7 +1321,7 @@ function renderPositionReview(data) {
   const assessment=data.managed ? data.review : data.held === false ? data.candidateReview : null;
   const flags=text('div','','position-flags');
   flags.append(text('span',data.managed?'Managed by AutoTrade':data.held===true?'Unmanaged holding':data.held===false?'Candidate':'Holdings unknown','badge'));
-  if(assessment)flags.append(text('span',`Saved assessment: ${assessment.decision.toUpperCase()}`,'badge'));
+  if(assessment)flags.append(text('span',`Saved assessment: ${assessment.decision==='buy'?'BUY CANDIDATE':assessment.decision.toUpperCase()}`,'badge'));
   if(reviewDue(assessment?.nextReviewAt))flags.append(text('span','Review due','badge pending'));
   if(assessment?.policyHash && assessment.policyHash!==data.policyHash)flags.append(text('span','Strategy changed','badge pending'));
   const controls=text('div','','position-controls');
@@ -1250,15 +1335,16 @@ function renderPositionReview(data) {
   if(data.managed && !holding)summary.append(text('p','A saved AutoTrade management record exists; current holdings remain unverified.','review-meta'));
   const latest=reviewSection(panels.assessment,'Latest assessment');
   if (assessment) {
-    latest.append(text('p',assessment.decision.toUpperCase(),'review-verdict'));
+    latest.append(text('p',assessment.decision==='buy'?'BUY CANDIDATE':assessment.decision.toUpperCase(),'review-verdict'));
     latest.append(historyFacts([['Recorded',savedTime(assessment.at)],['Next review',assessment.nextReviewAt ? `${savedTime(assessment.nextReviewAt)}${reviewDue(assessment.nextReviewAt) ? ' · DUE' : ''}` : 'No date recorded']]));
     const assessmentGrid=text('div','','position-assessment-grid'),reason=text('div','','review-card'),unknowns=text('div','','review-card');
-    reason.append(text('h4',data.managed?'What changed':'Why wait or skip'),text('p',assessment.changedEvidence || assessment.reason));
+    reason.append(text('h4',data.managed?'What changed':'Investment assessment'),text('p',assessment.changedEvidence || assessment.reason));
     unknowns.append(text('h4','Unknowns'));
     if(assessment.unknowns?.length){const list=text('ul','');for(const u of assessment.unknowns)list.append(text('li',u));unknowns.append(list);}
     else unknowns.append(text('p',Array.isArray(assessment.unknowns)?'None listed by the trader.':'No separate unknowns list recorded.'));
     assessmentGrid.append(reason,unknowns);latest.append(assessmentGrid);
     if(data.managed)latest.append(text('p','This is the saved assessment. Orders and fills are tracked separately.','review-meta'));
+    else latest.append(text('p','This is a research recommendation. It does not place or approve an order.','review-meta'));
     if(assessment.policyHash && assessment.policyHash!==data.policyHash)latest.append(text('p','Strategy changed since this assessment.','review-warning'));
     if(data.held==null)latest.append(text('p','Current holdings could not be confirmed from a recent tick.','review-warning'));
     evidenceLinks(latest,[assessment.snapshotId,...(assessment.evidenceIds || [])]);
@@ -1271,27 +1357,23 @@ function renderPositionReview(data) {
     const entry=reviewSection(panels.thesis,'Why this position was opened');
     if(data.entry){const link=decisionLink(data.entry.id);link.title=data.entry.id;link.textContent='Open entry decision';entry.append(text('p',data.entry.rationale || 'No entry rationale recorded.'),text('p',`Entry decision recorded ${savedTime(data.entry.at)}`,'review-meta'),link);evidenceLinks(entry,data.entry.observationIds);}
     else entry.append(text('p','The original entry decision is not linked. Its rationale is unknown.'));
-    const thesis=data.entry?.thesis;
-    if(!thesis)entry.append(text('p','No structured entry thesis recorded.'));
-    else {
-      entry.append(historyFacts([['Setup',thesis.setup],['Planned holding period',`${thesis.horizonDays} days`],['Catalyst risk accepted at entry',thesis.catalystRiskAccepted ? 'Yes' : 'No']]));
-      const checks=data.observation?.data?.thesisStatus?.premises || [];
-      const premises=text('div','','position-premises');
-      for(const premise of thesis.premises || []) {
-        const card=text('div','','review-card'),check=checks.find(p=>p.label===premise.label && p.metric===premise.metric);
-        card.append(text('h4',premise.label),text('span',check?.status || 'unknown','badge '+(check?.status==='supported'?'executed':'waiting')));
-        if(premise.metric!=='qualitative')card.append(text('p',`${premise.metric} ${ {gt:'>',gte:'≥',lt:'<',lte:'≤'}[premise.operator] || '' } ${premise.threshold}`));
-        card.append(text('p',check?.reading?.value==null ? 'No numeric verification saved.' : `Saved reading: ${check.reading.value} · as of ${savedTime(check.reading.asOf)}`,'review-meta'));
-        evidenceLinks(card,premise.evidenceIds,'Entry observations');premises.append(card);
-      }
-      entry.append(premises);
-      entry.append(text('p',`Premise checks come from the saved observation at ${savedTime(data.observation?.recordedAt)}. They are not a fresh assessment or a prediction of profit.`,'review-meta'));
-    }
+    renderReviewThesis(entry,data.entry?.thesis,data.observation?.data?.thesisStatus?.premises,data.observation?.recordedAt);
     const protection=reviewSection(panels.protection,'Broker protection and intended levels'),p=data.protection;
     protection.append(protectionCell(p),historyFacts([['Engine tick',savedTime(p.checkedAt)],['Shares covered by linked stop',p.coveredQty==null ? 'Unknown' : `${p.coveredQty} of ${p.holdingQty}`],['Stop order',p.stopOrderId || 'No current linked order verified'],['Target order',p.targetOrderId || 'No current linked order verified']]));
     protection.append(text('p',!p.known ? 'A recent holdings and orders tick is needed to verify coverage.' : 'Only orders linked to AutoTrade are counted. Other broker orders may exist. Intended levels alone do not prove an order is working.','review-meta'));
   } else {
-    reviewSection(panels.thesis,'Entry thesis').append(text('p',data.held===false ? 'No current position is held, so there is no current entry thesis.' : 'An entry thesis cannot be linked while current holdings are unknown.'));
+    const proposed=reviewSection(panels.thesis,data.held===false?'Proposed buy case':'Entry thesis');
+    if(data.held===false){
+      proposed.append(text('p','This is a proposed new investment case, separate from any historical position.','review-meta'));
+      renderReviewThesis(proposed,assessment?.thesis,data.candidateThesisStatus?.premises,data.assessmentObservation?.recordedAt,true);
+      const plan=data.candidateEntryPlan;
+      if(plan){
+        const levels=plan.data.proposedLevels || {};proposed.append(text('h4','Proposed entry and measured risk'));
+        proposed.append(historyFacts([['Reference entry price',historyPrice(levels.referencePrice)],['Risk checked at entry limit',historyPrice(plan.data.entryPrice)],['Stop',historyPrice(levels.stopLoss)],['Target',historyPrice(levels.takeProfit)],['Reward:risk',plan.data.rewardRisk==null?'Unknown':`${plan.data.rewardRisk.toFixed(2)}:1`],['Maximum whole shares',historyNumber(plan.data.maxQty)],['Risk budget',plan.data.allowed?'Fits saved risk budget':'Does not fit saved risk budget'],['Plan recorded',savedTime(plan.recordedAt)]]));
+        if(plan.data.violations?.length){const list=text('ul','');for(const item of plan.data.violations)list.append(text('li',item.message || item.rule));proposed.append(list);}
+        proposed.append(text('p','These are researched levels and a saved risk preview, not broker orders. Prices, inputs and the full strategy must be checked again before execution.','review-meta'));evidenceLinks(proposed,[plan.id],'Saved entry plan');
+      }else proposed.append(text('p','No entry plan saved. A conditional buy case may still be researched; live sizing and execution readiness remain unknown.','review-meta'));
+    }else proposed.append(text('p','An entry thesis cannot be linked while current holdings are unknown.'));
     reviewSection(panels.protection,'Broker protection').append(text('p',data.held===false ? 'No current holding requires position protection.' : 'Current holdings and stop coverage are unknown.'));
   }
   const observation=reviewSection(panels.context,'Latest saved context'),obs=data.observation;
@@ -1358,7 +1440,7 @@ async function openAgentTask(id) {
     const data=await api(`agent-tasks/${encodeURIComponent(id)}`);
     if(token!==inspectorLoad || !$('record-inspector').open)return;
     parent.replaceChildren();const r=data.request;
-    parent.append(historyFacts([['Task ID',r.id],['Agent',r.role],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',r.mode==='review_only'?'Assessment only · trading tools disabled':'Normal agent task']]));
+    parent.append(historyFacts([['Task ID',r.id],['Agent',roleLabel(r.role)],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',taskMode(r)]]));
     if(r.parentId)parent.append(uiButton(`Parent task: ${r.parentId}`,()=>openAgentTask(r.parentId)));
     parent.append(text('h3','Instruction'),text('p',r.text),text('h3','Outcome'),text('p',r.result || 'No outcome recorded yet.'));
     if(data.transcript)parent.append(historyFacts([['Agent run',data.transcript.status],['Model rounds',data.transcript.rounds],['Input / output tokens',`${data.transcript.inTokens} / ${data.transcript.outTokens}`]]));
@@ -1391,11 +1473,11 @@ $('record-inspector').onclose=()=>{inspectorLoad++;};
 $('ask-position-review').onclick=async()=>{
   if(reviewSubmitting || !reviewSymbol)return;
   const symbol=reviewSymbol;reviewSubmitting=true;$('ask-position-review').disabled=true;
-  $('position-review-task').textContent='Queuing assessment…';
+  $('position-review-task').textContent='Starting research…';
   try {
     const result=await api(`positions/${encodeURIComponent(symbol)}/review`,{});
-    if(reviewSymbol===symbol){$('position-review-task').replaceChildren(text('span',`${taskProgress(result.status)}${result.paused ? ' · engine paused; review waits until resumed' : ' · assessment only; trading tools disabled'}. `),uiButton('Follow task',()=>openAgentTask(result.requestId)));}
-  }catch(error){if(reviewSymbol===symbol)$('position-review-task').textContent=`Could not queue review: ${error.message}`;}
+    if(reviewSymbol===symbol){$('position-review-task').replaceChildren(text('span',`${taskProgress(result.status)} · research runs alongside trading, even while trading is paused; it places no orders. `),uiButton('Follow task',()=>openAgentTask(result.requestId)));}
+  }catch(error){if(reviewSymbol===symbol)$('position-review-task').textContent=`Could not start research: ${error.message}`;}
   finally{reviewSubmitting=false;$('ask-position-review').disabled=reviewLoading;}
 };
 // A web process may be opened before its engine. Retry read-only initialization,

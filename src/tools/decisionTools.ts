@@ -1,5 +1,5 @@
 import type { ToolDefinition } from '../core/types';
-import { canonicalSymbol } from '../core/symbols';
+import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { readAccount, readPositions } from '../core/accountRead';
 import { getPolicy, getPolicyHash } from '../policy/load';
 import { positionReviewContext, forwardGeometry } from '../collect/decisionContext';
@@ -60,8 +60,11 @@ export const DECISION_TOOL_DEFINITIONS: ToolDefinition[] = [
 ];
 export const DECISION_TOOL_NAMES = new Set(DECISION_TOOL_DEFINITIONS.map(t => t.name));
 
+/** The ticker as written ("BRK.B") for data requests; `canonicalSymbol` ("BRKB") is only for comparing. */
+const tickerOf = (value: unknown) => String(value ?? '').trim().toUpperCase();
+
 async function compareActions(input: Record<string, unknown>) {
-  const symbol = canonicalSymbol(String(input.symbol)), context = await positionReviewContext(symbol);
+  const symbol = canonicalSymbol(String(input.symbol)), context = await positionReviewContext(tickerOf(input.symbol));
   if (!context.holding || context.forward.price == null) throw new Error('A confirmed holding and fresh quote are required');
   const qty = context.holding.qty, price = context.forward.price, reduceQty = Number(input.reduceQty ?? Math.max(1, Math.floor(qty / 2)));
   if (!(reduceQty >= 1 && reduceQty <= qty && Number.isSafeInteger(reduceQty))) throw new Error('Reduction must be whole shares within the holding');
@@ -73,12 +76,12 @@ async function compareActions(input: Record<string, unknown>) {
   const [account, positions] = await Promise.all([readAccount(), readPositions()]);
   if (positions.find(p => canonicalSymbol(p.symbol) === symbol)?.qty !== qty) throw new Error('Holding changed during comparison; refresh');
   const policy = getPolicy(), policyHash = getPolicyHash();
-  const inputs = await collectRiskInputs([...positions.map(p => p.symbol), ...(input.candidate ? [canonicalSymbol(String(input.candidate))] : [])], policy);
+  const inputs = await collectRiskInputs([...positions.map(p => p.symbol), ...(input.candidate ? [tickerOf(input.candidate)] : [])], policy);
   for (const alternative of alternatives) {
     const book = positions.flatMap(p => canonicalSymbol(p.symbol) !== symbol ? [p] : alternative.remainingQty > 0 ? [{ ...p, qty: alternative.remainingQty, marketValue: alternative.remainingQty * price }] : []);
     const gross = book.every(p => Number.isFinite(p.marketValue)) ? book.reduce((sum, p) => sum + Math.abs(p.marketValue!), 0) : null;
     let volatilityPct: number | null = null, error: string | null = null;
-    try { volatilityPct = book.length ? Math.sqrt(Math.max(0, volatilityModel(symbol, book, account.equity, inputs).bookVariance)) * 100 : 0; }
+    try { volatilityPct = book.length ? Math.sqrt(Math.max(0, volatilityModel(context.holding!.symbol, book, account.equity, inputs).bookVariance)) * 100 : 0; }
     catch (err: any) { error = err.message; }
     alternative.projectedBook = { positions: book.length, grossExposurePct: gross != null && account.equity > 0 ? gross / account.equity * 100 : null,
       historicalVolatilityPct: volatilityPct, targetVolatilityPct: policy.risk.targetVolatilityPct, error,
@@ -86,8 +89,8 @@ async function compareActions(input: Record<string, unknown>) {
   }
   if (input.candidate) {
     if (!(Number(input.candidateStop) > 0 && Number(input.candidateTarget) > 0)) throw new Error('Replacement requires a supported candidate stop and target');
-    const candidate = canonicalSymbol(String(input.candidate));
-    if (candidate === symbol) throw new Error('Replacement must be a different symbol');
+    const candidate = tickerOf(input.candidate);
+    if (sameSymbol(candidate, symbol)) throw new Error('Replacement must be a different symbol');
     const replacement = await positionReviewContext(candidate), candidatePrice = replacement.forward.price;
     if (candidatePrice == null) throw new Error('Candidate quote unavailable');
     const after = positions.filter(p => canonicalSymbol(p.symbol) !== symbol);
@@ -102,15 +105,16 @@ async function compareActions(input: Record<string, unknown>) {
 }
 
 export async function executeDecisionTool(name: string, input: Record<string, unknown>): Promise<string> {
-  const symbol = canonicalSymbol(String(input.symbol ?? ''));
+  // Records and evidence are keyed by the canonical form; data sources get the ticker as written.
+  const symbol = canonicalSymbol(String(input.symbol ?? '')), ticker = tickerOf(input.symbol);
   let result: any;
   switch (name) {
-    case 'get_position_review': result = { ...await positionReviewContext(symbol), contextVariant: 'decision-context-v1' }; break;
+    case 'get_position_review': result = { ...await positionReviewContext(ticker), contextVariant: 'decision-context-v1' }; break;
     case 'get_thesis_status': {
       const snapshot = input.snapshotId ? readEvidence(String(input.snapshotId)) : null;
-      if (input.snapshotId && (!snapshot || snapshot.symbol !== symbol || snapshot.tool !== 'get_position_review')) throw new Error('Invalid position review snapshot');
+      if (input.snapshotId && (!snapshot || !sameSymbol(snapshot.symbol ?? '', symbol) || snapshot.tool !== 'get_position_review')) throw new Error('Invalid position review snapshot');
       if (snapshot && Date.now() - Date.parse(snapshot.recordedAt) > 15 * 60000) throw new Error('Thesis snapshot is older than 15 minutes');
-      const data = snapshot?.data ?? await positionReviewContext(symbol);
+      const data = snapshot?.data ?? await positionReviewContext(ticker);
       const thesis = input.thesis ? validateThesis(input.thesis as EntryThesis, symbol) : data.originalThesis;
       result = { symbol, asOf: data.asOf, source: 'derived', thesis, ...evaluatePremises(thesis, data.metrics), metrics: data.metrics }; break;
     }
@@ -127,11 +131,11 @@ export async function executeDecisionTool(name: string, input: Record<string, un
       unknowns: input.unknowns as string[] | undefined, nextReviewAt: input.nextReviewAt as string | undefined,
     }); break;
     case 'get_market_context': result = recordPage(name, input.snapshotId ? { rows: [] } : await marketContext(), 'rows', input); break;
-    case 'get_intraday_volume': result = await getIntradayVolume(symbol); break;
+    case 'get_intraday_volume': result = await getIntradayVolume(ticker); break;
     case 'compare_position_actions': result = await compareActions(input); break;
     case 'get_economic_calendar': result = await economicCalendar(Number(input.days ?? 14)); break;
-    case 'get_company_filings': result = recordPage(name, input.snapshotId ? { filings: [] } : await companyFilings(symbol, Number(input.days ?? 30)), 'filings', input); break;
-    case 'get_research_updates': result = recordPage(name, input.snapshotId ? { items: [] } : await researchUpdates(symbol, input.since as string | undefined), 'items', input); break;
+    case 'get_company_filings': result = recordPage(name, input.snapshotId ? { filings: [] } : await companyFilings(ticker, Number(input.days ?? 30)), 'filings', input); break;
+    case 'get_research_updates': result = recordPage(name, input.snapshotId ? { items: [] } : await researchUpdates(ticker, input.since as string | undefined), 'items', input); break;
     case 'read_source': result = await readSource(String(input.sourceId), Number(input.offset ?? 0), Number(input.limit ?? 3000)); break;
     case 'record_research_review': result = recordResearchReview(String(input.sourceId), String(input.assessment), String(input.affectedPremise), String(input.reason)); break;
     case 'get_evidence': {

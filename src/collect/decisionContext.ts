@@ -51,6 +51,7 @@ export async function positionReviewContext(symbol: string) {
   const relative = jobs[5].status === 'fulfilled' ? jobs[5].value : null;
   const liquidity = jobs[6].status === 'fulfilled' ? jobs[6].value : null;
   const holding = positions?.find(p => sameSymbol(p.symbol, symbol)) ?? null;
+  const isCandidate = positions !== null && !holding;
   const quote = prices?.get(symbol), price = quote && isUsable(quote) ? quote.value : null;
   const ownStop = orders?.find(o => o.id === snapshot?.stopOrderId && sameSymbol(o.symbol, symbol) && o.side === 'sell' && o.type === 'stop');
   const ownTarget = orders?.find(o => o.id === snapshot?.takeProfitOrderId && sameSymbol(o.symbol, symbol) && o.side === 'sell' && o.type === 'limit');
@@ -72,7 +73,7 @@ export async function positionReviewContext(symbol: string) {
     revenueGrowthPct: fact(fundamentals?.balanceSheet.revenueGrowthPct, 'yahoo', fundamentals?.fetchedAt ?? null),
   };
   const atrValue = sufficient && bars ? atr(bars.value, policy.strategy.atrPeriod).at(-1) ?? null : null;
-  const baselineId = previous?.snapshotId ?? recorded.thesis?.premises.flatMap(p => p.evidenceIds).find(id => readEvidence(id)?.data.fundamentals);
+  const baselineId = isCandidate ? undefined : previous?.snapshotId ?? recorded.thesis?.premises.flatMap(p => p.evidenceIds).find(id => readEvidence(id)?.data.fundamentals);
   const baseline = baselineId ? readEvidence(baselineId)?.data : null;
   const fieldPaths = ['calendar.nextEarningsAt', 'revisions.currentQuarter.upLast30days', 'revisions.currentQuarter.downLast30days', 'balanceSheet.freeCashflow', 'balanceSheet.revenueGrowthPct'];
   const atPath = (obj: any, path: string) => path.split('.').reduce((v, k) => v?.[k], obj) ?? null;
@@ -80,17 +81,21 @@ export async function positionReviewContext(symbol: string) {
     .filter(r => r.previous != null && r.previous !== r.current);
   const heldDays = snapshot?.openedAt && Number.isFinite(Date.parse(snapshot.openedAt)) ? (Date.now() - Date.parse(snapshot.openedAt)) / 86400000 : null;
   return { symbol, policyHash, asOf: quote && isUsable(quote) ? quote.asOf : null, source: quote?.source ?? 'unavailable', holding,
-    positionKnown: positions !== null, managed: snapshot != null, entryDecisionId: recorded.entryDecisionId,
-    originalThesis: recorded.thesis, originalRationale: recorded.rationale, previousReview: previous,
-    heldDays, intendedHorizonDays: recorded.thesis?.horizonDays ?? null,
-    horizonExceeded: heldDays != null && recorded.thesis ? heldDays > recorded.thesis.horizonDays : null,
+    reviewPurpose: positions === null ? 'unknown' : holding ? 'holding' : 'new_entry',
+    positionKnown: positions !== null, managed: !isCandidate && snapshot != null, entryDecisionId: isCandidate ? null : recorded.entryDecisionId,
+    originalThesis: isCandidate ? null : recorded.thesis, originalRationale: isCandidate ? null : recorded.rationale, previousReview: isCandidate ? null : previous,
+    heldDays: isCandidate ? null : heldDays, intendedHorizonDays: isCandidate ? null : recorded.thesis?.horizonDays ?? null,
+    horizonExceeded: !isCandidate && heldDays != null && recorded.thesis ? heldDays > recorded.thesis.horizonDays : null,
     brokerProtection: { known: orders !== null, stopLevel: ownStop?.stopPrice ?? null, stopCoveredQty: ownStop ? Math.max(0, ownStop.qty - ownStop.filled) : null,
       fullyCovered: orders && holding ? !!ownStop && ownStop.qty - ownStop.filled >= holding.qty : null,
       targetLevel: ownTarget?.limitPrice ?? null, recordedStop: snapshot?.stopLevel ?? null, recordedTarget: snapshot?.takeProfitLevel ?? null },
     forward: forwardGeometry(price, ownStop?.stopPrice ?? null, ownTarget?.limitPrice ?? null, atrValue),
     intendedForward: forwardGeometry(price, snapshot?.stopLevel ?? null, snapshot?.takeProfitLevel ?? null, atrValue),
-    atr: atrValue, metrics: facts, thesisStatus: evaluatePremises(recorded.thesis, facts), relative, liquidity, fundamentals, fundamentalChanges,
+    atr: atrValue, metrics: facts, thesisStatus: isCandidate
+      ? { status: 'not_applicable', premises: [], caveats: ['No position is held. Research and assess a proposed entry thesis rather than checking an original holding thesis.'] }
+      : evaluatePremises(recorded.thesis, facts), relative, liquidity, fundamentals, fundamentalChanges,
     caveats: ['Actual broker protection and intended levels are separate measurements.', 'Fundamental asOf values identify fetch times; reporting periods may be older.',
+      ...(!holding && positions !== null ? ['This is a new-entry candidate. An original position thesis and resting broker protection are not applicable. Research a proposed buy case and derive supported levels; null historical thesis/geometry is not a reason to reject the opportunity.'] : []),
       'Remaining reward:risk is price geometry and contains no forecast probability.', ...jobs.map(message).filter((s): s is string => s !== null),
       ...(!fundamentals ? ['Calendar and fundamentals unavailable; upcoming catalysts are unknown.'] : [])] };
 }

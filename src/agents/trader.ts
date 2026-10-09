@@ -3,7 +3,6 @@ import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
 import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
-import { ToolRegistry } from './toolRegistry';
 import { buildDecisionBrief } from './decisionBrief';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest } from '../core/requests';
 import { readRecord } from '../core/storage';
@@ -41,19 +40,9 @@ const ERROR_RECOVERY_SLEEP_MS = 60_000;
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
 const PAUSED_RECHECK_MS = 60 * 60_000;
 
-// Restrict assessment tasks at dispatch, even if a model asks for an unavailable tool.
-const REVIEW_TOOLS = new Set(['get_entry_plan', 'get_lessons', 'get_requests', 'get_market_status',
-  'get_account', 'get_positions', 'get_open_orders', 'get_actions', 'get_journal', 'get_scorecard',
-  'get_benchmark', 'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan',
-  'get_correlation', 'get_exposure', 'get_calendar', 'get_fundamentals', 'get_position_review',
-  'get_thesis_status', 'get_market_context', 'get_intraday_volume', 'get_economic_calendar',
-  'get_company_filings', 'get_research_updates', 'get_evidence', 'get_decision_followup',
-  'get_stock_bars', 'get_stock_snapshot', 'get_stock_latest_quote', 'get_most_active_stocks',
-  'get_market_movers', 'get_news', 'get_portfolio_history', 'web_search', 'read_source',
-  'compare_position_actions', 'record_position_review', 'record_candidate_review',
-  'record_research_review', 'sleep']);
-const REVIEW_REGISTRY = new ToolRegistry(TRADER_REGISTRY.definitions.filter(tool => REVIEW_TOOLS.has(tool.name)),
-  (name, input) => TRADER_REGISTRY.execute(name, input));
+// Old "review only" research tasks belong to the research worker (`researcher.ts`), which
+// takes them over at startup. The trader never runs one, even if one is still queued.
+const tradingRequests = () => pendingRequests('trader').filter(r => r.mode !== 'review_only');
 
 /** Policy activation validates the prompt; a later render error stops the cycle. */
 function systemPrompt(): string { return runtimeContract() + "\n\nACCOUNT STRATEGY\n" + renderPolicy(); }
@@ -103,7 +92,7 @@ export class Trader {
       } catch (err: any) { logger.error('[Trader] ' + err.message); }
       if (!this.running) break;
       if (this.paused) continue;
-      if (this.wakePending || (!this.paused && pendingRequests('trader').length)) { this.wakePending = false; continue; }
+      if (this.wakePending || (!this.paused && tradingRequests().length)) { this.wakePending = false; continue; }
       ui.setTraderActivity({ state: 'sleeping', until: Date.now() + sleepMs });
       await this.interruptibleSleep(sleepMs);
     }
@@ -116,20 +105,16 @@ export class Trader {
     });
   }
   private async runCycle(): Promise<{ sleepMs: number; inTokens: number; outTokens: number }> {
-    const command = pendingRequests('trader')[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
+    const command = tradingRequests()[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
     const hash = getPolicyHash();
     this.controller = new AbortController();
     updateRequest(command.id, { status: 'running' });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
-      provider: this.provider, registry: command.mode === 'review_only' ? REVIEW_REGISTRY : TRADER_REGISTRY,
-      systemPrompt: systemPrompt() + (command.mode === 'review_only'
-        ? '\nThis is an assessment-only task. Research the requested symbol and record a material position or candidate review when appropriate. Trading, protection changes, event acknowledgements and agent handoffs are unavailable. Report the assessment and unknowns; do not request an order.' : ''), revision: hash,
+      provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: command.mode === 'review_only'
-        ? `${command.text}\nStart with get_position_review for the requested symbol. Missing evidence is unknown. Keep this task focused on that symbol; this task does not authorize orders or event handling.`
-        : await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
       maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });

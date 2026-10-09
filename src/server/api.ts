@@ -1,10 +1,10 @@
-import { enqueueRequest, listRequests, pendingRequests, type AgentRequest } from '../core/requests';
+import { enqueueRequest, listRequests, type AgentRequest } from '../core/requests';
 import { listLessons, reviewLesson } from '../journal/lessons';
 /** Local dashboard and operator API. Listens on this computer only; there is one user, so no login. */
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { modelUsage } from '../core/modelBudget';
+import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudget';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
@@ -27,6 +27,7 @@ import { getLastTick } from '../features/lastTick';
 import { scorecard } from '../review/metrics';
 import { activityHistory, savedPositionContext, savedTaskDetails } from '../review/activity';
 import { textPage } from '../agents/savedResults';
+import { startResearch, researchStatus } from '../agents/researcher';
 import type { Evidence } from '../journal/evidence';
 import type { Trader } from '../agents/trader';
 import type { FeedEntry, HeadlessUI } from '../ui/headless';
@@ -202,10 +203,12 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     return {
       health: serviceStatus(),
       usage: modelUsage(),
+      aiBudget: modelBudgetStatus(),
       env: snap.env,
       automation: automationSummary(),
       trader: { ...trader.status, lane: snap.traderLane, cycle: snap.cycle },
       assistant: { lane: snap.assistantLane },
+      researcher: researchStatus(),
       market: { open: snap.venueOpen, session: tick?.session ?? null },
       account: tick?.account ?? null,
       portfolio: tick?.portfolio ?? null,
@@ -235,14 +238,11 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   };
   add('GET', '/api/positions/:symbol/review', ({ params }) => savedPositionContext(reviewSymbol(params.symbol)));
   add('POST', '/api/positions/:symbol/review', ({ params }) => {
-    const symbol = reviewSymbol(params.symbol);
-    const instruction = `Review ${symbol} only. Read its current position/candidate dossier and relevant evidence. Explain the original entry thesis if held, changes, unknowns and verified protection. Record a material position or candidate assessment when appropriate. Do not request trades or protection changes.`;
-    try {
-      const request = pendingRequests('trader').find(r => r.mode === 'review_only' && r.text === instruction)
-        ?? enqueueRequest('trader', instruction, OPERATOR, undefined, 'review_only');
-      trader.wake();
-      return { accepted: true, requestId: request.id, status: request.status, paused: getState().paused };
-    } catch (err: any) { throw new HttpError(409, err.message); }
+    // The research worker takes the ticker as written ("BRK.B"); data sources don't know "BRKB".
+    let request;
+    try { request = startResearch(params.symbol, OPERATOR); }
+    catch (err: any) { throw new HttpError(/valid ticker/.test(err.message) ? 400 : 409, err.message); }
+    return { accepted: true, requestId: request.id, status: request.status };
   });
 
   const savedPage = (value: string, url: URL) => {
@@ -406,6 +406,18 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     const command = messageService ? messageService(text, OPERATOR) : enqueueRequest('assistant', text, OPERATOR);
     ui.echoOperator(text);
     return { accepted: true, requestId: command.id, status: command.status };
+  });
+
+  add('GET', '/api/settings/ai', () => modelBudgetStatus());
+  add('POST', '/api/settings/ai', async ({ body }) => {
+    const input = await body();
+    if (!Object.hasOwn(input, 'maxRequestsPerDay') ||
+      (input.maxRequestsPerDay !== null && typeof input.maxRequestsPerDay !== 'number')) {
+      throw new HttpError(400, 'Daily AI call limit must be a number or null for unlimited');
+    }
+    try { saveAiSettings({ maxRequestsPerDay: input.maxRequestsPerDay as number | null }); }
+    catch (err: any) { throw new HttpError(400, err.message); }
+    return modelBudgetStatus();
   });
 
   add('GET', '/api/strategy', () => getPolicySnapshot());

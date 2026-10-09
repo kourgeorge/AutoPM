@@ -8,9 +8,14 @@ export interface AgentRequest {
   parentId?: string; createdAt: string;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
   result?: string; actionIds: string[];
-  /** Explicit dashboard assessments may research and record reviews, but cannot queue trades. */
+  /** Old trader research tasks only; research now runs as `researcher` requests. */
   mode?: 'review_only';
+  /** Research requests: the ticker as written, used to reuse a pending request for the same stock. */
+  symbol?: string;
+  /** Research requests: post the result to the chat when it finishes. */
+  replyToChat?: boolean;
 }
+export interface RequestOptions { symbol?: string; replyToChat?: boolean }
 export function getRequest(id: string): AgentRequest | undefined { return readRecord('requests', id); }
 export function listRequests(limit = 50): AgentRequest[] {
   return listRecords<AgentRequest>('requests', { desc: true, limit: Math.min(100, limit) }).map(r => r.value);
@@ -19,7 +24,7 @@ export function pendingRequests(role: AgentRole): AgentRequest[] {
   return listRecords<AgentRequest>('requests', { where: c => c.role === role && ['queued','running','interrupted'].includes(c.status), limit: 20 })
     .map(r => r.value);
 }
-export function enqueueRequest(role: AgentRole, text: string, actorId = 'operator', id?: string, mode?: 'review_only'): AgentRequest {
+export function enqueueRequest(role: AgentRole, text: string, actorId = 'operator', id?: string, options: RequestOptions = {}): AgentRequest {
   return transaction(() => {
     assertAgentActive();
     const parent = agentContext.getStore();
@@ -29,23 +34,29 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     if (!text.trim() || text.length > 4000) throw new Error('A message must contain 1–4000 characters');
     if (pendingRequests(role).length >= 20) throw new Error('Agent queue is full; wait for a pending request to finish');
     const command: AgentRequest = { id, role, actorId: parent?.actorId ?? actorId, parentId: parent?.requestId,
-      text, createdAt: new Date().toISOString(), status: 'queued', actionIds: [], ...(mode ? { mode } : {}) };
+      text, createdAt: new Date().toISOString(), status: 'queued', actionIds: [], ...options };
     saveRecord('requests', id, command);
     if (parent) recordToolResult({ ok: true, receipt: { requestId: id, status: getState().paused ? 'queued_paused' : 'queued' } });
     return command;
   });
 }
-export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds'>>): AgentRequest {
+export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat'>>): AgentRequest {
   return transaction(() => {
     const current = getRequest(id);
     if (!current) throw new Error('Unknown command');
     const next = { ...current, ...patch };
     saveRecord('requests', id, next);
     // Only the assistant talks to the operator. A trader result is a log line, not a chat reply;
-    // the assistant reads it back through get_requests when asked.
-    if (patch.result && patch.result !== current.result) appendActivity(current.role === 'assistant'
-      ? { at: new Date().toISOString(), kind: 'reply', source: 'assistant', text: patch.result }
-      : { at: new Date().toISOString(), kind: 'log', source: 'trader', level: 'INFO', text: `[Trader] ${patch.result}` });
+    // the assistant reads it back through get_requests when asked. Research asked for in chat
+    // is the exception: its finished result is the answer the operator is waiting for.
+    if (patch.result && patch.result !== current.result) {
+      const at = new Date().toISOString();
+      if (current.role === 'assistant') appendActivity({ at, kind: 'reply', source: 'assistant', text: patch.result });
+      else appendActivity({ at, kind: 'log', source: current.role, level: 'INFO', text: `[${current.role === 'researcher' ? 'Research' : 'Trader'}] ${patch.result}` });
+      if (current.role === 'researcher' && next.replyToChat && ['completed', 'failed'].includes(next.status)) {
+        appendActivity({ at, kind: 'reply', source: 'researcher', text: `Research on ${current.symbol ?? 'the requested stock'} ${next.status === 'failed' ? 'failed' : 'finished'}: ${patch.result}` });
+      }
+    }
     return next;
   });
 }
