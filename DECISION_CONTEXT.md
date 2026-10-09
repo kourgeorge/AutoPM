@@ -53,18 +53,11 @@ For evaluating a new context source, freeze historical observations available at
 - Existing `TAVILY_API_KEY` enables web search. Discovered original public HTTPS sources can be read; inaccessible or non-text documents remain explicit failures.
 - BLS and Federal Reserve public calendars need no API key. Providers can reject requests or change formats. A provider outage is not a clean calendar.
 
-These changes need no migration of account files. Restart the engine after building to load the tools. They have been checked with temporary storage, mocked broker/data providers and network-disabled replay; improved investment performance has not been established.
+## Where it is saved
 
-## Optional migration of existing account records
+Research and review data lives in four files under `data/db/`:
 
-Existing files remain readable without conversion. To explicitly add the new metadata to legacy records, stop the engine, build, and preview the migration:
-
-```sh
-node dist/scripts/migrateDecisionContext.js --data-dir data-alpaca
-```
-
-Add `--apply` to perform it. The command acquires the engine lock, backs up the entire database under the account's `backups/` directory with SHA-256 checksums, and verifies every write. It preserves original record fields, IDs, timestamps, record versions, holdings, settings and order outcomes. A rerun reports `already_applied`.
-
-Missing historical theses are explicitly null. Evidence references default to an empty list of recorded observations; legacy context is labeled `legacy-unrecorded`. Original theses or context labels are recovered only from explicitly linked actions/reviews. Unambiguous exact tool receipts are linked to their historical transcript results. Older lessons receive recorded-evidence counts, unknown applicability and a review date set to migration time. This date is a new review schedule, not an invented creation date.
-
-The command creates any missing research/context record files and initializes an unavailable economic-calendar cache. It makes no broker or model requests. The migration audit and backup report record the changes.
+- `tool-calls.jsonl` — every tool result, once. An `evidenceId` is the tool call's receipt ID; a paged tool (watchlist scan, market context, filings, research updates) keeps its full snapshot on the same receipt, and its `snapshotId` is that receipt ID.
+- `transcripts.jsonl` — each agent conversation, plus the text left out of the model's context (`saved`), which `get_saved_context` reads.
+- `sources.jsonl` — one row per news item or filing: what it is, its text once read, and its latest assessment.
+- `reviews.jsonl` — position and candidate reviews, told apart by `type`.

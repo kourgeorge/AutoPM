@@ -19,8 +19,9 @@ export interface EntryThesis {
 }
 export interface Fact { value: number | null; asOf: string | null; source: string; evidenceId?: string }
 export type Facts = Partial<Record<ThesisMetric, Fact>>;
+/** Position and candidate reviews share the `reviews` file, told apart by `type`. */
 export interface PositionReview {
-  id: string; symbol: string; entryDecisionId: string | null; at: string; decision: 'keep' | 'reduce' | 'exit' | 'wait';
+  type: 'position'; id: string; symbol: string; entryDecisionId: string | null; at: string; decision: 'keep' | 'reduce' | 'exit' | 'wait';
   changedEvidence: string; evidenceIds: string[]; unknowns: string[]; nextReviewAt: string; price: number | null;
   contextVariant: string; snapshotId: string; policyHash: string; holdingHorizonDays: number | null;
 }
@@ -64,11 +65,11 @@ export function latestPositionReview(symbol: string): PositionReview | null {
   const snapshot = getPositionSnapshot(symbol);
   if (!snapshot) return null;
   const entryId = snapshot.entryDecisionId ?? null, openedAt = snapshot.openedAt ? Date.parse(snapshot.openedAt) : NaN;
-  return listRecords<PositionReview>('position-reviews', { where: r => canonicalSymbol(r.symbol) === canonicalSymbol(symbol)
+  return listRecords<PositionReview>('reviews', { where: r => r.type === 'position' && canonicalSymbol(r.symbol) === canonicalSymbol(symbol)
     && r.entryDecisionId === entryId && (!Number.isFinite(openedAt) || Date.parse(r.at) >= openedAt), desc: true, limit: 1 })[0]?.value ?? null;
 }
 
-export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'entryDecisionId'>) {
+export function savePositionReview(input: Omit<PositionReview, 'type' | 'id' | 'at' | 'entryDecisionId'>) {
   assertAgentActive();
   const evidence = validateEvidenceIds(input.evidenceIds, input.symbol);
   if (input.changedEvidence.trim().length < 20) throw new Error('State the material evidence change in at least 20 characters');
@@ -84,10 +85,10 @@ export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'en
   if (old && old.decision === input.decision && old.changedEvidence === input.changedEvidence && old.nextReviewAt === input.nextReviewAt && JSON.stringify(old.unknowns) === JSON.stringify(input.unknowns)) return { ok: true, unchanged: true, reviewId: old.id };
   return transaction(() => {
     const id = 'review-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
-    const previous = readRecord<PositionReview>('position-reviews', id);
+    const previous = readRecord<PositionReview>('reviews', id);
     if (previous) return { ok: true, reviewId: id };
-    const row: PositionReview = { ...input, entryDecisionId, id, at: new Date().toISOString() };
-    appendRecord('position-reviews', id, row.at, row);
+    const row: PositionReview = { type: 'position', ...input, entryDecisionId, id, at: new Date().toISOString() };
+    appendRecord('reviews', id, row.at, row);
     recordDecision(decision('hold', 'trader', { symbol: row.symbol, rationale: `Review ${row.decision}: ${row.changedEvidence}. Unknown: ${row.unknowns.join('; ') || 'none stated'}. Review by ${row.nextReviewAt}.`,
       observationIds: row.evidenceIds, reviewId: id, price: row.price }), id);
     const result = { ok: true, reviewId: id, note: 'Review saved. This receipt does not place an order; send any chosen reduction or exit separately.' };

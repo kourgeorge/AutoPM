@@ -3,7 +3,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ChatMessage, ContentBlock } from '../core/types';
 import type { ModelProvider } from '../core/modelProvider';
 import { agentContext, type AgentContext } from '../core/agentContext';
-import { readRecord, saveRecord, appendRecord } from '../core/storage';
+import { readRecord, saveRecord } from '../core/storage';
+import { saveContext } from './savedResults';
 import type { ToolRegistry } from './toolRegistry';
 import { logger } from '../core/logger';
 
@@ -13,6 +14,8 @@ export interface Transcript {
   inTokens: number; outTokens: number; text: string; error?: string; sleepMs?: number;
   revision?: string;
   responseStopReason?: string;
+  /** Texts left out of the model's context, by id; get_saved_context reads them. */
+  saved?: Record<string, string>;
 }
 type ToolCall = Extract<ContentBlock, { type: 'tool_use' }>;
 interface ToolCallRecord { name: string; input: unknown; result?: string }
@@ -65,9 +68,8 @@ export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessag
     else removed.push(...messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1));
   }
   if (removed.length) {
-    const text = JSON.stringify(removed), id = 'context-' + crypto.createHash('sha256').update(text).digest('hex').slice(0, 32);
-    appendRecord('contexts', id, new Date().toISOString(), { text });
-    const note: ContentBlock = { type: 'text', text: `Earlier exchanges omitted to fit context. Retrieve ${id} with get_saved_context; saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty.` };
+    const id = saveContext(JSON.stringify(removed));
+    const note: ContentBlock = { type: 'text', text: `Earlier exchanges omitted to fit context.${id ? ` Retrieve ${id} with get_saved_context;` : ''} Saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty.` };
     if (messages[0]?.role === 'user') messages[0].content.push(note);
     else messages.unshift({ role: 'user', content: [note] });
   }
@@ -84,9 +86,9 @@ export async function runAgentLoop(opts: {
   let run = readRecord<Transcript>('transcripts', id);
   if (run && ['completed','waiting','failed'].includes(run.status)) return run;
   const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]);
-  const context = { ...opts.context, signal };
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
+  const context = { ...opts.context, signal, saved: current.saved ??= {} };
   const checkpoint = () => saveRecord('transcripts', id, current);
   return agentContext.run(context, async () => {
     try {
@@ -122,7 +124,8 @@ export async function runAgentLoop(opts: {
               result = finish ? errorResult('Turn has ended; this call was not executed')
                 : await abortable(agentContext.run({ ...context, toolCallId }, () => opts.registry.execute(call.name, call.input)), signal);
               // Keep the complete receipt; only the model's context is size-bounded below.
-              saveRecord('tool-calls', toolCallId, { requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result, startedAt, finishedAt: new Date().toISOString() });
+              // Merge: the tool may have attached a page snapshot to its own receipt.
+              saveRecord('tool-calls', toolCallId, { ...readRecord<object>('tool-calls', toolCallId), requestId: id, role: context.role, actorId: context.actorId, name: call.name, input: call.input, result, startedAt, finishedAt: new Date().toISOString() });
               logger.tool(context.role, call.name, result, call.input, { id: toolCallId, requestId: id });
             }
             results.push({ type: 'tool_result', tool_use_id: call.id, receiptId: toolCallId, content: boundedResult(result, toolCallId) });

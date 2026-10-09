@@ -10,9 +10,9 @@ import { getPositionSnapshot } from '../state/state';
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { readDecision } from '../journal/journal';
 import { latestPositionReview, evaluatePremises } from '../journal/thesis';
-import type { Evidence } from '../journal/evidence';
+import { readEvidence, latestEvidence } from '../journal/evidence';
 import type { CandidateReview } from './decisionFollowup';
-import type { ResearchItem } from '../collect/research';
+import { itemOf, type Source } from '../collect/research';
 import { getRequest } from '../core/requests';
 import { getPolicyHash } from '../policy/load';
 
@@ -91,7 +91,7 @@ export function positionProtection(symbol: string) {
 
 export function latestCandidateAssessments() {
   const latest = new Map<string, CandidateReview>();
-  for (const { value } of listRecords<CandidateReview>('candidate-reviews', { desc: true })) {
+  for (const { value } of listRecords<CandidateReview>('reviews', { where: r => r.type === 'candidate', desc: true })) {
     const symbol = canonicalSymbol(value.symbol);
     if (!latest.has(symbol)) latest.set(symbol, value);
   }
@@ -109,23 +109,23 @@ export function savedPositionContext(symbol: string) {
   const entry = entryId ? readDecision(entryId) : null;
   // An old holding in the same symbol must not supply the current entry's observations.
   const openedAt = snapshot?.openedAt ? Date.parse(snapshot.openedAt) : NaN;
-  const observation = listRecords<Evidence>('evidence', { desc: true, limit: 1, where: e =>
-    e.tool === 'get_position_review' && !!e.symbol && sameSymbol(e.symbol, symbol)
+  const observation = latestEvidence('get_position_review', e =>
+    !!e.symbol && sameSymbol(e.symbol, symbol)
     && (snapshot || held === true ? (e.data.entryDecisionId ?? null) === entryId && !!e.data.holding
       && (!Number.isFinite(openedAt) || Date.parse(e.recordedAt) >= openedAt)
-      : e.data.positionKnown === true && !e.data.holding) })[0]?.value ?? null;
+      : e.data.positionKnown === true && !e.data.holding));
   const assessment = snapshot ? review : held === false ? candidate : null;
   const assessmentObservation = assessment?.snapshotId
-    ? readRecord<Evidence>('evidence', assessment.snapshotId) ?? null : null;
+    ? readEvidence(assessment.snapshotId) ?? null : null;
   const candidateThesisStatus = held === false && candidate?.thesis
     ? evaluatePremises(candidate.thesis, assessmentObservation?.data.metrics ?? {}) : null;
-  const savedPlan = held === false && candidate?.entryPlanId ? readRecord<Evidence>('evidence', candidate.entryPlanId) : null;
+  const savedPlan = held === false && candidate?.entryPlanId ? readEvidence(candidate.entryPlanId) : null;
   const candidateEntryPlan = savedPlan?.tool === 'get_entry_plan' && savedPlan.symbol && sameSymbol(savedPlan.symbol, symbol) ? savedPlan : null;
   // Web searches have no ticker tag. Include sources actually linked through the
   // entry/review's saved observations rather than pretending every search is about this symbol.
   const sourceIds = new Set<string>();
   for (const id of new Set([...(entry?.observationIds ?? []), ...(assessment?.evidenceIds ?? [])])) {
-    const e = readRecord<Evidence>('evidence', id)?.data;
+    const e = readEvidence(id)?.data;
     if (!e) continue;
     if (typeof e.sourceId === 'string') sourceIds.add(e.sourceId);
     for (const rows of [e.items, e.filings, e.results]) {
@@ -135,12 +135,9 @@ export function savedPositionContext(symbol: string) {
       }
     }
   }
-  const sources = listRecords<ResearchItem>('research-items', { desc: true,
+  const sources = listRecords<Source>('sources', { desc: true,
     where: r => (!!r.symbol && sameSymbol(r.symbol, symbol)) || sourceIds.has(r.id) });
-  const research = sources.slice(0, 12).map(({ value }) => ({ ...value,
-    read: !!readRecord('source-text', value.id),
-    review: listRecords<{ sourceId: string; assessment: string; affectedPremise: string; reason: string; at: string }>(
-      'research-reviews', { desc: true, limit: 1, where: r => r.sourceId === value.id })[0]?.value ?? null }));
+  const research = sources.slice(0, 12).map(({ value }) => ({ ...itemOf(value), read: value.text !== undefined, review: value.review ?? null }));
   return { symbol: canonicalSymbol(symbol), managed: !!snapshot, held, holdingKnown, holding, entry: entry ?? null, positionSnapshot: snapshot ?? null,
     review, candidateReview: candidate, observation, assessmentObservation, candidateThesisStatus, candidateEntryPlan,
     protection: positionProtection(symbol), research, researchTotal: sources.length,

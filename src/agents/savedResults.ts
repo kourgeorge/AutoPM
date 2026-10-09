@@ -1,5 +1,5 @@
-import crypto from 'crypto';
-import { readRecord, appendRecord } from '../core/storage';
+import { readRecord } from '../core/storage';
+import { agentContext } from '../core/agentContext';
 import type { ToolDefinition } from '../core/types';
 
 export const SAVED_RESULT_TOOLS: ToolDefinition[] = [
@@ -27,16 +27,26 @@ export function readSavedResult(name: string, input: Record<string, unknown>): s
     if (row?.result === undefined) throw new Error('Saved tool receipt is unavailable');
     return JSON.stringify({ receiptId: input.receiptId, ...textPage(row.result, offset, limit) });
   }
-  const row = readRecord<{ text: string }>('contexts', String(input.snapshotId));
-  if (!row) throw new Error('Saved cycle context is unavailable');
-  return JSON.stringify({ snapshotId: input.snapshotId, ...textPage(row.text, offset, limit) });
+  const id = String(input.snapshotId), cut = id.lastIndexOf(':context-');
+  const text = cut > 0 ? readRecord<{ saved?: Record<string, string> }>('transcripts', id.slice(0, cut))?.saved?.[id] : undefined;
+  if (text === undefined) throw new Error('Saved cycle context is unavailable');
+  return JSON.stringify({ snapshotId: id, ...textPage(text, offset, limit) });
+}
+
+/** Keep text left out of the model's context on the running transcript. Null outside an agent turn. */
+export function saveContext(text: string): string | null {
+  const store = agentContext.getStore();
+  if (!store?.saved) return null;
+  const id = `${store.requestId}:context-${Object.keys(store.saved).length + 1}`;
+  store.saved[id] = text;
+  return id;
 }
 
 /** Omit whole sections explicitly, keeping the full original available to the model. */
 export function boundedCycleContext(text: string, budget = 22000): string {
   if (text.length <= budget) return text;
-  const id = 'context-' + crypto.randomUUID();
-  appendRecord('contexts', id, new Date().toISOString(), { text });
+  const id = saveContext(text);
+  if (!id) return text;   // Outside an agent turn no model reads it.
   const sections = text.split(/(?=^=== (?!END))/m);
   const lines = [`Full cycle context saved as ${id}. Use get_saved_context(snapshotId) for omitted sections.\nAn omitted section is UNKNOWN, not empty. Read omitted portfolio/protection evidence before trading.\n`];
   let remaining = budget - lines[0].length - sections.length * 180;
