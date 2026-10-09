@@ -23,11 +23,11 @@ import { exposure, type Exposure, type ExposurePosition } from '../strategy/expo
 import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
 import { ui } from '../ui/ui';
+import { ToolRegistry, pickTools } from './toolRegistry';
 import {
   TRADER_TOOL_DEFINITIONS,
   TRADER_REGISTRY,
   brokerOrderView,
-  executeTraderTool,
   getMarketStatusSnapshot,
   getAccountSnapshot,
 } from '../tools/traderTools';
@@ -37,6 +37,25 @@ import type { OpenOrder } from '../broker/IBroker';
 const MAX_ROUNDS = 30;
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
 const PAUSED_RECHECK_MS = 60 * 60_000;
+
+/** The trader's own tools. get_tool_result and get_saved_context are added to every agent. */
+export const TRADER_TOOLS = [
+  'get_position_review', 'get_thesis_status', 'record_position_review', 'record_candidate_review',
+  'get_market_context', 'get_intraday_volume', 'compare_position_actions', 'get_economic_calendar',
+  'get_company_filings', 'get_research_updates', 'read_source', 'record_research_review',
+  'get_evidence', 'get_decision_followup', 'get_entry_plan', 'get_lessons', 'get_requests',
+  'get_market_status', 'get_account', 'get_positions', 'get_open_orders', 'execute_entry',
+  'annotate_position', 'execute_exit', 'get_pending_events', 'get_actions', 'ack_event', 'get_journal',
+  'get_scorecard', 'get_benchmark', 'get_price_stats', 'write_lesson', 'get_macro_regime',
+  'get_signals', 'get_watchlist_scan', 'get_correlation', 'get_exposure', 'get_calendar',
+  'get_fundamentals', 'request_research', 'sleep', 'get_stock_bars', 'get_stock_snapshot',
+  'get_stock_latest_quote', 'get_most_active_stocks', 'get_market_movers', 'get_news',
+  'get_portfolio_history', 'web_search',
+] as const;
+let traderRegistry: ToolRegistry | null = null;
+/** Built on first use, like the researcher's: `traderTools` is not ready while this module loads. */
+const traderTools = () => traderRegistry ??= new ToolRegistry(pickTools(TRADER_TOOLS, TRADER_TOOL_DEFINITIONS),
+  (name, input) => TRADER_REGISTRY.execute(name, input));
 
 // Old "review only" research tasks belong to the research worker (`researcher.ts`), which
 // takes them over at startup. The trader never runs one, even if one is still queued.
@@ -113,7 +132,7 @@ export class Trader {
     updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? getPendingEvents().map(e => e.id), wokenBy: command.wokenBy ?? wokenBy });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
-      provider: this.provider, registry: TRADER_REGISTRY, systemPrompt: systemPrompt(), revision: hash,
+      provider: this.provider, registry: traderTools(), systemPrompt: systemPrompt(), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
       messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],

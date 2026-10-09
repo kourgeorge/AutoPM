@@ -16,8 +16,10 @@ export type DecisionKind =
   | 'entry'
   /** Intent to close a position; orderStatus describes its outcome. */
   | 'exit'
-  /** A deliberate decision NOT to act — including an event acked as seen or ignored. */
+  /** A deliberate decision to keep a position you hold as it is — a holding review, or an event about it acked without acting. */
   | 'hold'
+  /** A deliberate decision not to act on a stock you do not hold — e.g. an entry signal acked without buying. */
+  | 'skip'
   /** The L4 guard refused the intent. It never reached the venue. */
   | 'veto'
   /** The guard allowed it and the venue refused it. */

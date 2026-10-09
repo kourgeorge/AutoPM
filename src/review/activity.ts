@@ -32,7 +32,7 @@ export function activityHistory(opts: { type: string; query: string; offset: num
     symbol: record.symbol, kind: record.kind,
     status: record.orderStatus ?? (record.executed
       ? record.actor === 'broker' && record.kind === 'exit' && confirmedExits.has(`${record.orderId}:${record.symbol}`) ? 'reconciled fill' : 'recorded outcome'
-      : record.kind === 'hold' ? 'no action' : 'recorded'),
+      : record.kind === 'hold' || record.kind === 'skip' ? 'no action' : 'recorded'),
     reason: record.rationale, record,
     action: record.actionId ? actions.get(record.actionId) ?? null : null,
     transitions: record.actionId ? transitions.get(record.actionId) ?? [] : [],

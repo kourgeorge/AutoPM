@@ -195,6 +195,7 @@ test('sleep rejects later calls and truncated model output executes no tools', a
   const request = storage.readRecord('requests', receipt.requestId);
   assert.deepEqual(request.wokenBy, ['startup', 'message'], 'the cycle records what woke it');
   assert.ok(Array.isArray(request.eventIds), 'and which events it was shown');
+  assert.equal(storage.readRecord('tool-calls', `${receipt.requestId}:1:0`).kind, 'housekeeping', 'each tool call records its kind');
   const turn = storage.readRecord('transcripts', receipt.requestId);
   assert.match(turn.messages.at(-1).content[1].content, /not executed/);
   let executed = 0;
@@ -236,6 +237,17 @@ test('critical observation remains open and acting requires a linked action', as
   assert.equal(events.getPendingEvents()[0].handling, 'observed');
   assert.equal(events.getPendingEvents()[0].ackedAt, null);
   assert.equal(storage.readRecords('alerts').find(e => e.id === event.id).handling, 'observed', 'event.jsonl records the handling');
+});
+
+test('an answered event is journalled as hold for a stock you hold and skip for one you do not', async () => {
+  const p = policy.getPolicy(), tick = { cooldowns: {}, armed: new Set(), dirty: false };
+  const hit = symbol => ({ symbol, cooldownKey: 'kind:' + symbol, severity: 'urgent', headline: 'Review ' + symbol, evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } });
+  const [held, notHeld] = events.processHits('ema_cross_down', [hit('AAPL'), hit('LLY')], p, tick);
+  state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-1' } } });
+  for (const e of [held, notHeld]) assert.equal(JSON.parse(await traderTools.executeTraderTool('ack_event', { id: e.id, disposition: 'acknowledged', note: 'Reviewed; no action needed' })).ok, true);
+  const kindFor = id => journal.readDecisions().find(d => d.triggerEventId === id)?.kind;
+  assert.equal(kindFor(held.id), 'hold');
+  assert.equal(kindFor(notHeld.id), 'skip');
 });
 
 test('pending urgent incidents and handling survive registry restart', () => {
@@ -378,8 +390,8 @@ test('research asked for in chat posts its summary to the chat when it finishes'
   const assistant = new AssistantAgent(() => assert.fail('Research is not relayed to the trader'));
   let rounds = 0;
   assistant.provider = { chat: async request => {
-    assert.match(request.systemPrompt, /call research_symbol; do not relay research to the trader/);
-    if (rounds++ === 0) return toolResponse([['research_symbol', { symbol: 'msft' }]]);
+    assert.match(request.systemPrompt, /call request_research; do not relay research to the trader/);
+    if (rounds++ === 0) return toolResponse([['request_research', { symbol: 'msft' }]]);
     const result = JSON.parse(request.messages.flatMap(m => m.content).find(b => b.type === 'tool_result').content);
     assert.equal(result.requestId, dashboard.id, 'a stock already queued is not researched twice');
     return { ...textResponse(), content: [{ type: 'text', text: 'Research on MSFT has started.' }] };

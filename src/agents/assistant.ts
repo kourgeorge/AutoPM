@@ -1,5 +1,5 @@
 import { runtimeContract } from './runtimeContract';
-import { ToolRegistry } from './toolRegistry';
+import { ToolRegistry, pickTools } from './toolRegistry';
 import { runAgentLoop, compactMessages } from './agentLoop';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest, type AgentRequest } from '../core/requests';
 import { getOpenActions } from '../core/actions';
@@ -7,7 +7,6 @@ import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
 import { agentContext } from '../core/agentContext';
 import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
-import { startResearch } from './researcher';
 /**
  * Assistant Agent — the user-facing conversational layer.
  *
@@ -27,61 +26,9 @@ import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState } from '../state/state';
 import { TRADER_TOOL_DEFINITIONS, executeTraderTool } from '../tools/traderTools';
-import { ALPACA_DATA_TOOL_DEFINITIONS } from '../tools/alpacaDataTools';
-import { RESEARCH_TOOL_DEFINITIONS } from '../tools/researchTools';
+import { toolKind } from '../tools/toolKinds';
 import { CHART_TOOL_DEFINITIONS, executeChartTool } from '../tools/chartTools';
 import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
-
-/**
- * Tools the assistant shares verbatim with the trader.
- *
- * Picked BY NAME out of `TRADER_TOOL_DEFINITIONS`, never restated. Every one of these is
- * executed by `executeTraderTool` — the assistant adds no behaviour to any of them — so a
- * second copy of the definition could differ only in its prose, and it did: the trader's
- * `get_exposure` carries an anti-fabrication warning ("a sector weight you did not read
- * from here is a fabricated one") that the copy here had silently dropped. One definition,
- * one description, one place to change it.
- */
-const SHARED_WITH_TRADER = [
-  'get_account',
-  'get_requests',
-  'get_lessons',
-  'get_actions',
-  'get_positions',
-  'get_open_orders',
-  'get_market_status',
-  'get_pending_events',
-  'get_journal',
-  'get_scorecard',
-  'get_benchmark',
-  'get_price_stats',
-  'get_macro_regime',
-  'get_signals',
-  'get_watchlist_scan',
-  'get_correlation',
-  'get_exposure',
-  'get_calendar',
-  'get_fundamentals',
-] as const;
-
-/**
- * Resolve the shared names against the trader's array.
- *
- * Throws at MODULE LOAD, not at call time: a trader tool that gets renamed must fail the
- * next start loudly, rather than quietly leaving the assistant one capability short and
- * the operator wondering why it claims it cannot read the book.
- */
-function sharedTools(): ToolDefinition[] {
-  return SHARED_WITH_TRADER.map((name) => {
-    const def = TRADER_TOOL_DEFINITIONS.find((t) => t.name === name);
-    if (!def) {
-      throw new Error(
-        `Assistant expects trader tool "${name}", which is no longer in TRADER_TOOL_DEFINITIONS.`,
-      );
-    }
-    return def;
-  });
-}
 
 /** Read helpers and action/relay tools owned by the assistant. */
 const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
@@ -116,15 +63,6 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: 'research_symbol',
-    description: 'Start full research on one stock in the research worker: business, news and SEC filings, trend, catalysts, portfolio fit and proposed entry/stop/target levels, ending in a saved buy/wait/skip or holding verdict. Returns immediately; the finished summary is posted to this chat automatically. It places no orders and runs even while trading is paused. A stock already being researched is not started twice.',
-    input_schema: {
-      type: 'object',
-      properties: { symbol: { type: 'string', description: 'Ticker as written, e.g. "BRK.B".' } },
-      required: ['symbol'],
-    },
-  },
-  {
     name: 'get_policy_playbook',
     description: 'Read the rendered account playbook and platform execution contract. Use this to quote or explain strategy prose; use get_strategy_settings for a concise view of saved numeric settings and approval behavior. Platform constraints and numeric risk settings take precedence over conflicting playbook prose.',
     input_schema: { type: 'object', properties: {}, required: [] },
@@ -154,8 +92,6 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   },
 ];
 
-/** Tools that change something. Their full inputs and results are what the trace is for. */
-const ACTION_TOOLS = new Set(['update_trading_settings', 'execute_entry', 'execute_exit', 'annotate_position', 'ack_event', 'write_lesson', 'send_to_trader', 'research_symbol', 'request_research', 'sleep']);
 
 /**
  * The stored turn, flattened to what was said and done. The opening context message is left
@@ -187,7 +123,8 @@ function requestTrace(requestId: string): string {
       for (const b of m.content) {
         if (b.type === 'text' && b.text.trim()) steps.push({ wrote: clip(b.text, 1500) });
         if (b.type === 'tool_use') {
-          const full = ACTION_TOOLS.has(b.name);
+          // Tools that change something: their full inputs and results are what the trace is for.
+          const kind = toolKind(b.name), full = kind !== null && kind !== 'read';
           steps.push({ call: b.name, input: full ? b.input : clip(b.input, 200), result: clip(results.get(b.id) ?? 'no result recorded', full ? 600 : 160) });
         }
       }
@@ -202,13 +139,22 @@ function requestTrace(requestId: string): string {
   });
 }
 
-const ASSISTANT_TOOLS: ToolDefinition[] = [
-  ...sharedTools(),
-  ...ASSISTANT_OWN_TOOLS,
-  ...ALPACA_DATA_TOOL_DEFINITIONS,
-  ...RESEARCH_TOOL_DEFINITIONS,
-  ...CHART_TOOL_DEFINITIONS,
-];
+/**
+ * The assistant's own tools. Tools it shares with the trader are picked by name from
+ * `TRADER_TOOL_DEFINITIONS`, never restated: one definition, one description. Every shared
+ * one runs through `executeTraderTool`; get_tool_result and get_saved_context are added to every agent.
+ */
+export const ASSISTANT_TOOL_NAMES = [
+  'get_account', 'get_requests', 'get_lessons', 'get_actions', 'get_positions', 'get_open_orders',
+  'get_market_status', 'get_pending_events', 'get_journal', 'get_scorecard', 'get_benchmark',
+  'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan', 'get_correlation',
+  'get_exposure', 'get_calendar', 'get_fundamentals', 'get_strategy_settings', 'get_state',
+  'get_request_trace', 'send_to_trader', 'request_research', 'get_policy_playbook',
+  'update_trading_settings', 'get_stock_bars', 'get_stock_snapshot', 'get_stock_latest_quote',
+  'get_most_active_stocks', 'get_market_movers', 'get_news', 'get_portfolio_history', 'web_search',
+  'show_price_history', 'show_performance_comparison',
+] as const;
+const ASSISTANT_TOOLS: ToolDefinition[] = pickTools(ASSISTANT_TOOL_NAMES, [...TRADER_TOOL_DEFINITIONS, ...ASSISTANT_OWN_TOOLS, ...CHART_TOOL_DEFINITIONS]);
 
 const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
 
@@ -222,7 +168,7 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
  */
 const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
-When the operator asks you to research or assess a stock, call research_symbol; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
+When the operator asks you to research or assess a stock, call request_research; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
 Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_actions for the outcome.
 You cannot place trades, approve actions or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
 For pause/resume and approvals, direct the operator to the account controls.
@@ -318,12 +264,6 @@ export class AssistantAgent {
     }
 
     if (name === 'get_request_trace') return requestTrace(String(input.requestId ?? ''));
-
-    if (name === 'research_symbol') {
-      const request = startResearch(String(input.symbol ?? ''), agentContext.getStore()?.actorId ?? 'operator', { replyToChat: true });
-      return JSON.stringify({ ok: true, requestId: request.id, status: request.status, symbol: request.symbol,
-        note: 'The summary is posted to this chat when the research finishes. Use get_requests for its status.' });
-    }
 
     if (name === 'send_to_trader') {
       const message = input.message as string;
