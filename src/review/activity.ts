@@ -1,5 +1,5 @@
 import { getAllActions } from '../core/actions';
-import { readActionHistory } from '../core/actionHistory';
+import type { Action } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readFills } from './fills';
 import { readAlertLog } from '../features/alertLog';
@@ -16,17 +16,15 @@ import { itemOf, type Source } from '../collect/research';
 import { getRequest } from '../core/requests';
 import { getPolicyHash } from '../policy/load';
 
+/** An action's status changes, each tagged with the action it belongs to. */
+const stepsOf = (a: Action) => (a.history ?? []).map(step => ({ ...step, actionId: a.id, symbol: a.symbol }));
+
 /** A read-only view of decisions, broker fills and events, including their saved queue state. */
 export function activityHistory(opts: { type: string; query: string; offset: number; limit: number }) {
   const actions = new Map(getAllActions().map(action => [action.id, action]));
   const brokerFills = readFills();
   const confirmedExits = new Set(brokerFills.filter(fill => fill.side === 'sell').map(fill => `${fill.orderId}:${fill.symbol}`));
-  const transitions = new Map<string, ReturnType<typeof readActionHistory>>();
-  for (const event of readActionHistory()) {
-    const list = transitions.get(event.action.id) ?? [];
-    list.push(event);
-    transitions.set(event.action.id, list);
-  }
+  const transitions = new Map([...actions.values()].map(action => [action.id, stepsOf(action)]));
   const decisions = readDecisions().map(record => ({
     id: `decision:${record.id}`, type: 'decision', at: record.at,
     symbol: record.symbol, kind: record.kind,
@@ -154,7 +152,7 @@ export function savedRequestDetails(id: string) {
     .map(a => `${a.result!.orderId}:${canonicalSymbol(a.symbol)}:${a.kind === 'entry' ? 'buy' : 'sell'}`));
   const fills = readFills().filter(f => orders.has(`${f.orderId}:${canonicalSymbol(f.symbol)}:${f.side}`));
   const calls = listRecords<any>('tool-calls', { where: c => c.requestId === id });
-  const transitions = readActionHistory().filter(event => actionIds.has(event.action.id));
+  const transitions = actions.flatMap(stepsOf).sort((a, b) => a.at.localeCompare(b.at));
   const transcript = readRecord<any>('transcripts', id);
   return { request, actions, transitions: transitions.slice(-100), decisions: decisions.slice(-100), fills: fills.slice(-100),
     tools: calls.slice(-100).map(r => ({ id: r.id, name: r.value.name, input: r.value.input,

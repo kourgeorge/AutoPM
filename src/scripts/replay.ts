@@ -52,7 +52,6 @@ import {
 import { useEphemeralLessons } from '../journal/lessons';
 import type { DecisionRecord } from '../journal/types';
 import { useEphemeralFillsLedger } from '../review/fills';
-import { useEphemeralActionHistory } from '../core/actionHistory';
 import {
   createAction,
   decideAction,
@@ -115,7 +114,6 @@ useEphemeralAlertLog();
 // Same reasoning again: a manual-path scenario creates and transitions real `Action`
 // objects, and the audit trail for those must not land in the operator's real
 // `data/actions.jsonl`.
-useEphemeralActionHistory();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

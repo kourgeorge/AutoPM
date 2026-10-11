@@ -45,6 +45,15 @@ export interface Action {
   decidedAt: number | null;
   rejectReason: string | null;
   result: { orderId?: string; qty?: number; filledQty?: number; filledPrice?: number; error?: string } | null;
+  /** Hashes of (request + intent) that resolve to this action, so a replayed request reuses it. */
+  dedupKeys?: string[];
+  /** Each status change, oldest first, with what changed at that step. */
+  history?: ActionStep[];
+}
+export interface ActionStep {
+  at: string; transition: ActionStatus | 'created';
+  decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
+  result?: NonNullable<Action['result']>; decisionId?: string;
 }
 
 export interface SystemState {
