@@ -9,7 +9,7 @@
 import { ui } from '../ui/ui';
 import type { Trader } from '../agents/trader';
 import { getLastTick } from '../features/lastTick';
-import { getOpenActions } from './actions';
+import { pendingOrders } from './orders';
 import { automationSummary } from './automation';
 import { readLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
@@ -53,7 +53,7 @@ export function registerOperatorCommands(trader: Trader): void {
     name: 'status',
     api: true,
     aliases: ['s'],
-    help: 'Account, market hours, trader state and open actions.',
+    help: 'Account, market hours, trader state and open orders.',
     run: async () => {
       const tick = getLastTick();
       const t = trader.status;
@@ -79,8 +79,8 @@ export function registerOperatorCommands(trader: Trader): void {
       } catch (err: any) {
         lines.push(`Market     unknown — broker clock check failed: ${err.message}`);
       }
-      const open = getOpenActions();
-      lines.push(`Actions  ${open.length} waiting${open.length ? ' — /actions to list them' : ''}`);
+      const open = pendingOrders();
+      lines.push(`Orders  ${open.length} waiting${open.length ? ' — /orders to list them' : ''}`);
       ui.reply(lines.join('\n'));
     },
   });
@@ -119,7 +119,7 @@ export function registerOperatorCommands(trader: Trader): void {
   ui.registerCommand({
     name: 'pause',
     api: true,
-    help: 'Pause queued trading actions and new trader cycles. Existing broker orders stay active.',
+    help: 'Pause queued trading orders and new trader cycles. Existing broker orders stay active.',
     run: () => {
       if (trader.status.paused) return ui.reply('The trader is already paused.');
       trader.pause();
@@ -150,12 +150,12 @@ export function registerOperatorCommands(trader: Trader): void {
   });
 
   ui.registerCommand({
-    name: 'actions',
+    name: 'orders',
     api: true,
     help: 'Trades waiting for your approve/reject.',
     run: () => {
-      const open = getOpenActions();
-      if (open.length === 0) return ui.reply('No actions waiting.');
+      const open = pendingOrders();
+      if (open.length === 0) return ui.reply('No orders waiting.');
       const now = Date.now();
       ui.reply(open.map((p) => {
         const mins = Math.max(0, Math.round((p.expiresAt - now) / 60_000));

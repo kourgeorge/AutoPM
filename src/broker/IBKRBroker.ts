@@ -580,7 +580,7 @@ export class IBKRBroker implements IBroker {
         return [{
           execId:  e.execId!,
           // Non-durable across client sessions, which is why `permId` is carried too.
-          orderId: e.orderId != null ? String(e.orderId) : '',
+          brokerOrderId: e.orderId != null ? String(e.orderId) : '',
           // 0 means the trade originated outside IB and has no TWS id.
           permId:  e.permId ? String(e.permId) : null,
           symbol:  contract.symbol ?? '',

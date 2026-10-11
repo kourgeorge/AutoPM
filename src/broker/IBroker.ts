@@ -100,8 +100,8 @@ export interface Fill {
    */
   execId: string;
   /** What `placeOrder` returned. The join back to the journal's decision record. */
-  orderId: string;
-  /** IBKR's durable order id, which survives client sessions where `orderId` does not. */
+  brokerOrderId: string;
+  /** IBKR's durable order id, which survives client sessions where `brokerOrderId` does not. */
   permId: string | null;
   /** Canonical symbol, matching what `getPositions` reports for the same instrument. */
   symbol: string;

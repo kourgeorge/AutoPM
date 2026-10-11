@@ -1,6 +1,6 @@
 import { runtimeStatus } from '../core/runtime';
 import { getLastTick } from '../features/lastTick';
-import { getOpenActions } from '../core/actions';
+import { pendingOrders } from '../core/orders';
 import { getState } from '../state/state';
 import { protectionIntents } from '../strategy/protectionIntent';
 import { sameSymbol } from '../core/symbols';
@@ -15,7 +15,7 @@ export function serviceStatus() {
   if (tick?.positionsStale) issues.push('Holdings could not be refreshed');
   if (tick?.ordersStale) issues.push('Broker orders could not be refreshed');
   if (tick?.account.equity == null) issues.push('Account equity is unavailable');
-  const unresolved = getOpenActions().filter(p => p.status === 'unknown');
+  const unresolved = pendingOrders().filter(p => p.status === 'unknown');
   if (unresolved.length) issues.push(`${unresolved.length} broker action(s) need reconciliation`);
   const protection = Object.values(protectionIntents()).filter(p => p.status !== 'confirmed');
   if (protection.length) issues.push(`${protection.length} protection request(s) need review`);

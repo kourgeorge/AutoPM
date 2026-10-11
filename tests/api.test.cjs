@@ -91,7 +91,7 @@ test('missing holdings and orders are unavailable rather than an empty portfolio
   const headers={};
   recordTick({positions:{},positionsStale:true,positionsError:'Broker timeout',ordersStale:true,orders:[],account:{equity:null},portfolio:{},watchlist:{},tickAt:new Date().toISOString()});
   const positions=(await request('/api/positions',undefined,headers)).body;
-  const orders=(await request('/api/orders',undefined,headers)).body;
+  const orders=(await request('/api/broker-orders',undefined,headers)).body;
   assert.equal(positions.available,false);assert.equal(positions.positions,null);
   assert.equal(orders.available,false);assert.equal(orders.orders,null);
 });
@@ -174,12 +174,12 @@ test('unavailable ticker history stays unavailable without synthetic candles or 
 
 test('activity history includes durable decisions, action transitions and corrected fills with pagination',async()=>{
   const {recordDecision,decision}=require('../src/journal/journal');
-  const {createAction,decideAction}=require('../src/core/actions');
+  const {createOrder,decideOrder}=require('../src/core/orders');
   const {recordFills}=require('../src/review/fills');
   const hold=recordDecision(decision('hold','trader',{symbol:'HISTORY',rationale:'Wait for a clearer signal'}));
-  const action=createAction({kind:'entry',symbol:'HISTORY',venue:'paper',params:{qty:3},reason:'History proposal',timeoutMs:60000});
-  decideAction(action.id,'reject','human','Exposure too high');
-  const fill={execId:'history-exec.01',orderId:'history-order',permId:null,symbol:'HISTORY',side:'buy',qty:1,price:100,fee:null,at:'2026-10-08T12:00:00Z'};
+  const action=createOrder({kind:'entry',symbol:'HISTORY',venue:'paper',params:{qty:3},reason:'History proposal',timeoutMs:60000});
+  decideOrder(action.id,'reject','human','Exposure too high');
+  const fill={execId:'history-exec.01',brokerOrderId:'history-order',permId:null,symbol:'HISTORY',side:'buy',qty:1,price:100,fee:null,at:'2026-10-08T12:00:00Z'};
   recordFills([fill,{...fill,execId:'history-exec.02',qty:2,price:101}]);
   storage.closeStorage();
   const history=(await request('/api/activity-history?q=HISTORY&limit=2')).body;
@@ -188,7 +188,7 @@ test('activity history includes durable decisions, action transitions and correc
   const entries=[...history.entries,...page2.entries];
   assert.equal(new Set(entries.map(e=>e.id)).size,3);
   assert.ok(entries.some(e=>e.record.id===hold.id && e.status==='no action'));
-  const proposal=entries.find(e=>e.record.actionId===action.id);
+  const proposal=entries.find(e=>e.record.orderId===action.id);
   assert.equal(proposal.status,'rejected');assert.equal(proposal.action.rejectReason,'Exposure too high');
   assert.deepEqual(proposal.transitions.map(e=>e.transition),['created','rejected']);
   const fills=(await request('/api/activity-history?type=fill&q=HISTORY')).body.entries;
@@ -208,7 +208,7 @@ test('event history retains handled events, merges escalations and shows queue s
   recordAlertHandling(current);
   const resolved={...make('position_drop','2026-10-08T12:01:00Z'),handling:'resolved',ackedAt:'2026-10-08T12:05:00Z',ackDisposition:'acknowledged',ackNote:'Position already closed'};
   appendAlertLog(resolved);
-  const awaiting={...make('stop_breach','2026-10-08T12:02:00Z'),handling:'action_pending',actionId:'not-reconciled-by-history'};
+  const awaiting={...make('stop_breach','2026-10-08T12:02:00Z'),handling:'order_pending',orderId:'not-reconciled-by-history'};
   appendAlertLog(awaiting);
   const fresh=make('heartbeat','2026-10-08T12:03:00Z');appendAlertLog(fresh);
   const registry={pending:[current,awaiting,fresh],live:[current,awaiting,fresh]};
@@ -224,7 +224,7 @@ test('event history retains handled events, merges escalations and shows queue s
   assert.equal(events.find(event=>event.record.id===current.id).record.wakeCount,2);
   assert.equal(events.find(event=>event.record.id===resolved.id).queued,false);
   assert.equal(events.find(event=>event.record.id===resolved.id).status,'resolved');
-  assert.equal(events.find(event=>event.record.id===awaiting.id).status,'action pending');
+  assert.equal(events.find(event=>event.record.id===awaiting.id).status,'order pending');
   assert.equal(events.find(event=>event.record.id===fresh.id).status,'unreviewed');
   assert.deepEqual(storage.readValue('eventRegistry'),registry,'reading history must not reconcile or acknowledge queued events');
   const filtered=(await request('/api/activity-history?type=event&q=Position%20already%20closed')).body;
@@ -234,9 +234,9 @@ test('event history retains handled events, merges escalations and shows queue s
 test('broker exit labels distinguish a reconciled fill from an outcome with no matching fill',async()=>{
   const {recordDecision,decision}=require('../src/journal/journal');
   const {recordFills}=require('../src/review/fills');
-  const confirmed=recordDecision(decision('exit','broker',{symbol:'RECONLABEL',executed:true,qty:5,price:1159.8,orderId:'reconciled-exit',rationale:'Closed at the venue — reconciled from fills.'}));
-  const unmatched=recordDecision(decision('exit','broker',{symbol:'RECONLABEL',executed:true,qty:5,price:1159.8,orderId:'no-fill',rationale:'Previously recorded outcome'}));
-  recordFills([{execId:'recon-label-fill',orderId:'reconciled-exit',permId:null,symbol:'RECONLABEL',side:'sell',qty:5,price:1159.8,fee:null,at:'2026-10-08T14:01:07Z'}]);
+  const confirmed=recordDecision(decision('exit','broker',{symbol:'RECONLABEL',executed:true,qty:5,price:1159.8,brokerOrderId:'reconciled-exit',rationale:'Closed at the venue — reconciled from fills.'}));
+  const unmatched=recordDecision(decision('exit','broker',{symbol:'RECONLABEL',executed:true,qty:5,price:1159.8,brokerOrderId:'no-fill',rationale:'Previously recorded outcome'}));
+  recordFills([{execId:'recon-label-fill',brokerOrderId:'reconciled-exit',permId:null,symbol:'RECONLABEL',side:'sell',qty:5,price:1159.8,fee:null,at:'2026-10-08T14:01:07Z'}]);
   const history=(await request('/api/activity-history?type=decision&q=RECONLABEL')).body;
   assert.equal(history.entries.find(entry=>entry.record.id===confirmed.id).status,'reconciled fill');
   assert.equal(history.entries.find(entry=>entry.record.id===unmatched.id).status,'recorded outcome');

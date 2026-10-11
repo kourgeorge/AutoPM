@@ -14,18 +14,18 @@ global.fetch = denyNetwork;
 const state = require('../src/state/state');
 const store = require('../src/core/storage');
 const policy = require('../src/policy/load');
-const actions = require('../src/core/actions');
+const actions = require('../src/core/orders');
 const orders = require('../src/strategy/orderManager');
 const validateRealEntry = orders.validateEntry;
 const { broker } = require('../src/broker');
-const executor = require('../src/strategy/actionExecutor');
+const executor = require('../src/strategy/orderExecutor');
 const journal = require('../src/journal/journal');
 const runtime = require('../src/core/runtime');
 const { HeadlessUI } = require('../src/ui/headless');
 let placed, brokerOrder, held;
 const signal = { symbol: 'AAPL', signal: 'buy', price: 100, stopLoss: 95, takeProfit: 110, atr: 2, reason: 'test' };
 function entry(automatic = false) {
-  return actions.createAction({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic });
+  return actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic });
 }
 beforeEach(async () => {
   store.resetStorage();
@@ -45,49 +45,49 @@ after(() => { runtime.stopRuntime(); store.closeStorage(); });
 
 test('manual approval and automatic execution share bookkeeping; baselines wait for fills', async () => {
   const p = entry();
-  actions.decideAction(p.id, 'approve', 'human', undefined, 'alice');
+  actions.decideOrder(p.id, 'approve', 'human', undefined, 'alice');
   brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 0, filledPrice: null, status: 'open' };
-  await executor.sweepActions();
+  await executor.sweepOrders();
   assert.equal(placed, 1);
-  assert.equal(actions.getAction(p.id).status, 'submitted');
+  assert.equal(actions.getOrder(p.id).status, 'submitted');
   assert.equal(state.getPositionSnapshot('AAPL'), undefined);
   assert.equal(journal.readDecisions({ filter: r => r.kind === 'entry' }).length, 1);
   brokerOrder = { ...brokerOrder, status: 'filled', filledQty: 2, filledPrice: 100.5 };
-  await executor.sweepActions();
+  await executor.sweepOrders();
   assert.equal(placed, 1);
-  assert.equal(actions.getAction(p.id).status, 'executed');
+  assert.equal(actions.getOrder(p.id).status, 'executed');
   assert.equal(state.getPositionSnapshot('AAPL').entryPrice, 100.5);
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel, 95);
-  assert.equal(actions.getAction(p.id).actorId, 'alice');
+  assert.equal(actions.getOrder(p.id).actorId, 'alice');
 });
 
 test('restart in the broker acceptance window recovers once without resubmission', async () => {
   const p = entry(true);
-  actions.transitionAction(p.id, 'executing');
+  actions.transitionOrder(p.id, 'executing');
   brokerOrder = { id: 'broker-existing', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 2, filledPrice: 101, status: 'filled' };
-  await executor.sweepActions();
+  await executor.sweepOrders();
   assert.equal(placed, 0);
-  assert.equal(actions.getAction(p.id).status, 'executed');
+  assert.equal(actions.getOrder(p.id).status, 'executed');
   assert.equal(journal.readDecisions().length, 1);
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel, 95);
 });
 
 test('unknown broker outcomes block another account action', async () => {
   const first = entry(true);
-  actions.transitionAction(first.id, 'executing');
-  const second = actions.createAction({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { signal: { ...signal, symbol: 'MSFT' }, qty: 1 }, reason: 'test', timeoutMs: 60000, automatic: true });
-  await executor.sweepActions();
-  assert.equal(actions.getAction(first.id).status, 'unknown');
-  assert.equal(actions.getAction(second.id).status, 'approved');
+  actions.transitionOrder(first.id, 'executing');
+  const second = actions.createOrder({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { signal: { ...signal, symbol: 'MSFT' }, qty: 1 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  await executor.sweepOrders();
+  assert.equal(actions.getOrder(first.id).status, 'unknown');
+  assert.equal(actions.getOrder(second.id).status, 'approved');
   assert.equal(placed, 0);
 });
 
 test('pause blocks execution and survives a fresh process', async () => {
   const p = entry(true);
   state.updateState({ paused: true });
-  await executor.sweepActions();
+  await executor.sweepOrders();
   assert.equal(placed, 0);
-  assert.equal(actions.getAction(p.id).status, 'approved');
+  assert.equal(actions.getOrder(p.id).status, 'approved');
   const child = spawnSync(process.execPath, ['-r','ts-node/register','-e', "console.log(require('./src/state/state').getState().paused)"], { cwd: process.cwd(), env: process.env, encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);
   assert.match(child.stdout, /true/);
@@ -95,16 +95,16 @@ test('pause blocks execution and survives a fresh process', async () => {
 
 test('expired approval is rejected even before a sweep', () => {
   const p = entry();
-  store.saveRecord('actions', p.id, { ...p, expiresAt: Date.now() - 1 });
-  assert.throws(() => actions.decideAction(p.id, 'approve', 'human'), /expired/);
-  assert.equal(actions.getAction(p.id).status, 'expired');
+  store.saveRecord('orders', p.id, { ...p, expiresAt: Date.now() - 1 });
+  assert.throws(() => actions.decideOrder(p.id, 'approve', 'human'), /expired/);
+  assert.equal(actions.getOrder(p.id).status, 'expired');
 });
 
 test('an action is not executed after the strategy changed', async () => {
   const p = entry(true);
-  store.saveRecord('actions', p.id, { ...p, policyHash: 'changed' });
-  await executor.sweepActions();
-  assert.equal(actions.getAction(p.id).status, 'failed');
+  store.saveRecord('orders', p.id, { ...p, policyHash: 'changed' });
+  await executor.sweepOrders();
+  assert.equal(actions.getOrder(p.id).status, 'failed');
   assert.equal(placed, 0);
 });
 
@@ -129,13 +129,13 @@ test('an accepted but unfilled exit retains its position baseline', async () => 
   held = [{ symbol: 'AAPL', qty: 2, avgCost: 100, marketValue: 200 }];
   state.openPositionSnapshot({ symbol: 'AAPL', entryPrice: 100, stopLevel: 95 });
   orders.validateExit = async () => ({ pos: held[0], sellQty: 2, price: 100, pnl: 0 });
-  const p = actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  const p = actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
   brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'sell', qty: 2, filledQty: 0, filledPrice: null, status: 'open' };
-  await executor.sweepActions();
-  assert.equal(actions.getAction(p.id).status, 'submitted');
+  await executor.sweepOrders();
+  assert.equal(actions.getOrder(p.id).status, 'submitted');
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel, 95);
   held = []; brokerOrder = { ...brokerOrder, filledQty: 2, filledPrice: 100, status: 'filled' };
-  await executor.sweepActions();
+  await executor.sweepOrders();
   assert.equal(state.getPositionSnapshot('AAPL'), undefined);
 });
 
@@ -143,9 +143,9 @@ test('a filled new entry replaces a stale trade snapshot and protection IDs', as
   state.openPositionSnapshot({symbol:'AAPL',entryPrice:60,stopLevel:50,stopOrderId:'old-stop',openedAt:'2020-01-01T00:00:00Z',entryDecisionId:'old'});
   const p=entry(true);
   brokerOrder={id:'broker-1',symbol:'AAPL',side:'buy',qty:2,filledQty:2,filledPrice:101,status:'filled'};
-  await executor.sweepActions();
+  await executor.sweepOrders();
   const saved=state.getPositionSnapshot('AAPL');
-  assert.equal(saved.stopLevel,95);assert.equal(saved.stopOrderId,undefined);assert.equal(saved.entryDecisionId,'action-'+p.id);
+  assert.equal(saved.stopLevel,95);assert.equal(saved.stopOrderId,undefined);assert.equal(saved.entryDecisionId,'order-'+p.id);
 });
 
 test('a policy change while validation awaits invalidates the approval', async () => {
@@ -155,8 +155,8 @@ test('a policy change while validation awaits invalidates the approval', async (
     policy.saveStrategy({...previous.policy,risk:{...previous.policy.risk,maxPositions:2}},previous.hash,'alice');
     return {...s,regimeQty:q};
   };
-  await executor.sweepActions();
-  assert.equal(placed,0);assert.equal(actions.getAction(p.id).status,'expired');
+  await executor.sweepOrders();
+  assert.equal(placed,0);assert.equal(actions.getOrder(p.id).status,'expired');
 });
 
 test('an external order is never cancelled to free shares for an exit', async () => {
@@ -183,8 +183,8 @@ test('uncertain protection survives restart semantics and is never blindly place
 test('pending exits keep their baseline across multiple protection sweeps', async () => {
   const { sweepStops }=require('../src/strategy/stopOrders');
   state.openPositionSnapshot({symbol:'AAPL',stopLevel:95,stopOrderId:'our-stop'});
-  const p=actions.createAction({kind:'exit',symbol:'AAPL',venue:'paper',params:{qty:2},reason:'test',timeoutMs:60000,automatic:true});
-  actions.transitionAction(p.id,'executing');actions.transitionAction(p.id,'submitted',{result:{orderId:'exit',qty:2}});
+  const p=actions.createOrder({kind:'exit',symbol:'AAPL',venue:'paper',params:{qty:2},reason:'test',timeoutMs:60000,automatic:true});
+  actions.transitionOrder(p.id,'executing');actions.transitionOrder(p.id,'submitted',{result:{brokerOrderId:'exit',qty:2}});
   held=[];
   for(let i=0;i<6;i++)await sweepStops();
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel,95);

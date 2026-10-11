@@ -1,4 +1,4 @@
-import { sweepActions } from './actionExecutor';
+import { sweepOrders } from './orderExecutor';
 import { sweepStops } from './stopOrders';
 import { executionHealthy, runtimeFailed } from '../core/runtime';
 import { logger } from '../core/logger';
@@ -14,7 +14,7 @@ export class ExecutionLoop {
     if (!this.running) return;
     this.active = (async () => {
       try {
-        await sweepActions();
+        await sweepOrders();
         await sweepStops();
         await refreshJournalProtection();
         executionHealthy();

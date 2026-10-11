@@ -22,7 +22,7 @@ import { dailyLossStatus } from '../strategy/riskManager';
 import { etNow } from '../core/time';
 import { ackEvent, getPendingEvents, type AckDisposition } from '../features/eventBus';
 import { automationLevel } from '../core/automation';
-import { createAction, getOpenActions, getAllActions } from '../core/actions';
+import { createOrder, pendingOrders, listOrders } from '../core/orders';
 import { config } from '../core/config';
 
 import { RESEARCH_TOOL_DEFINITIONS, executeResearchTool } from './researchTools';
@@ -97,7 +97,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     }, required: ['symbol', 'price', 'stopLoss', 'takeProfit'] },
   },
   { name: 'get_lessons', description: 'Read the latest active, evidence-linked advisory lessons.', input_schema: { type: 'object', properties: {}, required: [] } },
-  { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked action IDs. Read get_actions for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
+  { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked order IDs. Read get_orders for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
   {
     name: 'get_market_status',
     description: 'Get current market status: open/closed, ET time, and minutes until next open or close.',
@@ -120,7 +120,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'execute_entry',
-    description: "Queue a whole-share long equity entry under the active strategy. ok:true is a queue receipt. An automatic or human-approved action is executed separately using an IOC limit buy; fills and broker protection are reconciled later. Inspect get_actions before reporting any fill or stop as confirmed.",
+    description: "Queue a whole-share long equity entry under the active strategy. ok:true is a queue receipt. An automatic or human-approved order is executed separately using an IOC limit buy; fills and broker protection are reconciled later. Inspect get_orders before reporting any fill or stop as confirmed.",
     input_schema: {
       type: 'object',
       properties: {
@@ -179,25 +179,25 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
-    name: 'get_actions',
-    description: "Read automatic and manual actions and their authoritative parameters, statuses, and broker results. Only pending actions await a human decision. approved waits for execution; submitted/partial await fills; unknown needs broker review. No model can approve or reject an action.",
+    name: 'get_orders',
+    description: "Read automatic and manual orders and their authoritative parameters, statuses, and broker results. Only pending orders await a human decision. approved waits for execution; submitted/partial await fills; unknown needs broker review. No model can approve or reject an action.",
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string', description: 'Optional — filter to one symbol.' },
-        includeDecided: { type: 'boolean', description: 'Include already-decided actions (approved/rejected/expired/executed/failed), not just ones still open. Default false — only pending and approved-not-yet-executed.' },
+        includeDecided: { type: 'boolean', description: 'Include already-decided orders (approved/rejected/expired/executed/failed), not just ones still open. Default false — only pending and approved-not-yet-executed.' },
       },
       required: [],
     },
   },
   {
     name: 'ack_event',
-    description: "Record how an incident is being handled. acting requires an existing actionId linked to this event; the incident remains open until that action succeeds. Acknowledging a critical or urgent incident records observation without resolving it. ignoring requires a reason and explicitly declines action.",
+    description: "Record how an incident is being handled. acting requires an existing orderId linked to this event; the incident remains open until that order succeeds. Acknowledging a critical or urgent incident records observation without resolving it. ignoring requires a reason and explicitly declines action.",
     input_schema: {
       type: 'object',
       properties: {
         id: { type: 'string', description: 'The event id, verbatim from MACHINE EVENTS or get_pending_events.' },
-        actionId: { type: 'string', description: 'Required for acting: an existing action linked to this event.' },
+        orderId: { type: 'string', description: 'Required for acting: an existing order linked to this event.' },
         disposition: {
           type: 'string',
           enum: ['acting', 'acknowledged', 'ignoring'],
@@ -347,7 +347,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: "End this trader cycle. Call it separately, after inspecting all earlier action results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again.",
+    description: "End this trader cycle. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again.",
     input_schema: {
       type: 'object',
       properties: {
@@ -395,7 +395,7 @@ async function dispatchTraderTool(
       case 'annotate_position':   return await toolAnnotatePosition(input);
       case 'execute_exit':        return await toolExecuteExit(input);
       case 'get_pending_events':  return toolGetPendingEvents();
-      case 'get_actions':       return toolGetActions(input);
+      case 'get_orders':       return toolGetOrders(input);
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
       case 'get_scorecard':       return toolGetScorecard(input);
@@ -745,7 +745,7 @@ async function toolGetAccount(): Promise<string> {
  * type, is what says whose order it is.
  */
 const VENUE_STOPS_CAVEAT =
-  'This system queues entry/exit orders and manages protective stops and targets. A stop whose orderId matches the position\'s stopOrderIdRecordedHere is this system\'s own, placed from the recorded stopLevel; any other order listed here was placed outside this system. The two facts stay separate on purpose: stopLevelRecordedHere is what the stop detector compares the price against while this process runs, and venueStop is what protects the position when it is not running. Crypto can have no venue stop at all — the venue rejects a plain stop on a coin.';
+  'This system queues entry/exit orders and manages protective stops and targets. A stop whose brokerOrderId matches the position\'s stopOrderIdRecordedHere is this system\'s own, placed from the recorded stopLevel; any other order listed here was placed outside this system. The two facts stay separate on purpose: stopLevelRecordedHere is what the stop detector compares the price against while this process runs, and venueStop is what protects the position when it is not running. Crypto can have no venue stop at all — the venue rejects a plain stop on a coin.';
 
 export interface BrokerOrderView {
   /** Every order resting at the venue, ungrouped. */
@@ -764,7 +764,7 @@ export interface BrokerOrderView {
      * worth surfacing, and it stays a separate field from `stopLevelRecordedHere` rather than
      * being merged into "has a stop", because which place the stop lives in is the question.
      */
-    venueStop: { orderId: string; level: number; isOurs: boolean } | null;
+    venueStop: { brokerOrderId: string; level: number; isOurs: boolean } | null;
     orders: OpenOrder[];
   }>;
   /** Resting orders with no matching open position — a buy waiting to fill, or an orphan. */
@@ -825,7 +825,7 @@ export async function brokerOrderView(): Promise<BrokerOrderView> {
       stopLevelRecordedHere: snap?.stopLevel ?? null,
       stopOrderIdRecordedHere: recordedId,
       venueStop: chosen
-        ? { orderId: chosen.id, level: chosen.stopPrice!, isOurs: chosen.id === recordedId }
+        ? { brokerOrderId: chosen.id, level: chosen.stopPrice!, isOurs: chosen.id === recordedId }
         : null,
       orders: mine,
     };
@@ -1012,9 +1012,9 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
 
 
 
-  // Nothing is recorded or moved yet — `actionExecutor.ts` re-validates from these exact
+  // Nothing is recorded or moved yet — `orderExecutor.ts` re-validates from these exact
   // raw inputs and calls `actAnnotation` itself once a human decides.
-  const action = createAction({
+  const action = createOrder({
     kind: stopManual || !targetManual ? 'stop_adjust' : 'target_adjust',
     automatic: !stopManual && !targetManual,
     symbol: validated.symbol,
@@ -1024,7 +1024,7 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     timeoutMs: getPolicy().automation.timeoutMs,
   });
   return JSON.stringify({
-    ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(action.status), status: action.status, actionId: action.id,
+    ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(action.status), status: action.status, orderId: action.id,
     symbol: validated.symbol, stopLoss: validated.stopLoss, takeProfit: validated.takeProfit,
     note: `Adjustment queued as ${action.id}. ${action.automatic ? 'Automatic execution is enabled.' : 'Human approval is required.'} Broker confirmation will be reported separately.`,
   });
@@ -1056,7 +1056,7 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
   const reason = `${why} Invalidated if: ${invalidation}`;
   try {
     const result = await enterPosition({ symbol, signal: 'buy', price, stopLoss, takeProfit, atr, reason, thesis, observationIds, contextVariant: 'decision-context-v1' }, qty, resolveEventId(eventId, symbol) ?? undefined);
-    return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Action queued. Read its status to distinguish approval, submission, and fills.' });
+    return JSON.stringify({ ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(result.status), symbol, ...result, note: 'Order queued. Read its status to distinguish approval, submission, and fills.' });
   } catch (err) { const refusal = journalRefusal(err, { symbol, rationale: reason, qty, price }); if (refusal) return refusal; throw err; }
 }
 
@@ -1081,9 +1081,9 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
 }
 
 
-function toolGetActions(input: Record<string, unknown>): string {
+function toolGetOrders(input: Record<string, unknown>): string {
   const { symbol, includeDecided } = input as { symbol?: string; includeDecided?: boolean };
-  const all = includeDecided ? getAllActions() : getOpenActions();
+  const all = includeDecided ? listOrders() : pendingOrders();
   const filtered = symbol ? all.filter(p => sameSymbol(p.symbol, symbol)) : all;
   return JSON.stringify({
     count: filtered.length,
@@ -1142,8 +1142,8 @@ function resolveAckId(id: string): { id: string; symbol: string | null; correcte
 }
 
 function toolAckEvent(input: Record<string, unknown>): string {
-  const { id: givenId, disposition, note, actionId } = input as {
-    id: string; disposition: AckDisposition; note?: string; actionId?: string;
+  const { id: givenId, disposition, note, orderId } = input as {
+    id: string; disposition: AckDisposition; note?: string; orderId?: string;
   };
   // Resolved before the ack: `ackEvent` deletes from `pending`, so afterwards there is no
   // event left to ask which symbol it was about.
@@ -1162,7 +1162,7 @@ function toolAckEvent(input: Record<string, unknown>): string {
   }
   const { id, symbol, corrected } = resolved;
 
-  if (!ackEvent(id, disposition, note, actionId)) {
+  if (!ackEvent(id, disposition, note, orderId)) {
     return JSON.stringify({ ok: false, error: 'unknown or already-acked event id' });
   }
 

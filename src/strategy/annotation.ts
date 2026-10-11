@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { broker } from '../broker';
-import { getState, getPositionSnapshot, upsertPositionSnapshot, type Action } from '../state/state';
+import { getState, getPositionSnapshot, upsertPositionSnapshot, type Order } from '../state/state';
 import { sameSymbol, isCryptoSymbol } from '../core/symbols';
 import { canTighten, canLowerTakeProfit, moveStopTo, moveOcoTo } from './stopOrders';
 import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
@@ -30,7 +30,7 @@ export type AnnotationValidation =
 /**
  * Everything `toolAnnotatePosition` knows once the position, price and tighten-only checks
  * have passed. Pure — reads the broker/state but writes nothing, so it is safe for
- * `actionExecutor.ts` to re-run from scratch against whatever the position looks like by
+ * `orderExecutor.ts` to re-run from scratch against whatever the position looks like by
  * the time a human decides, not against what it looked like when the action was created.
  */
 export async function validateAnnotation(input: AnnotateInput): Promise<AnnotationValidation> {
@@ -138,14 +138,14 @@ export async function validateAnnotation(input: AnnotateInput): Promise<Annotati
  * approved: recording a tighter stop that is then rejected would misreport what this system
  * believes protects the position, which is the reason this is a separate function at all.
  */
-export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true }>, action?: Action): Promise<string> {
-  const id = action ? 'action-' + action.id : crypto.randomUUID();
+export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true }>, action?: Order): Promise<string> {
+  const id = action ? 'order-' + action.id : crypto.randomUUID();
   const old = getPositionSnapshot(v.symbol);
   if (!old) throw new Error('Position is no longer managed');
   transaction(() => {
     recordDecision(decision('adjustment', 'trader', {
       symbol: v.symbol, rationale: v.thesis, intendedStop: v.stopLoss, intendedTarget: v.takeProfit,
-      actionId: action?.id, requestId: action?.requestId, actorId: action?.requestedBy,
+      orderId: action?.id, requestId: action?.requestId, actorId: action?.requestedBy,
       orderStatus: 'executing', protectionStatus: 'pending',
     }), id);
     upsertPositionSnapshot(v.symbol, { stopLevel: v.stopLoss,
@@ -162,9 +162,9 @@ export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true 
     }
     const result = await moveStopTo(v.symbol, v.heldQty, v.stopLoss);
     recordDecisionOutcome(id, { executed: result.ok, protectionStatus: result.ok ? 'confirmed' : 'unknown',
-      venueStopId: result.ok ? result.orderId : null, venueStopMissing: result.ok ? null : result.reason,
+      venueStopId: result.ok ? result.brokerOrderId : null, venueStopMissing: result.ok ? null : result.reason,
       orderStatus: result.ok ? 'executed' : 'unknown' });
-    return JSON.stringify({ ok: result.ok, decisionId: id, venueStop: result.ok ? result : { orderId: null, note: result.reason } });
+    return JSON.stringify({ ok: result.ok, decisionId: id, venueStop: result.ok ? result : { brokerOrderId: null, note: result.reason } });
   } catch (err: any) {
     recordDecisionOutcome(id, { protectionStatus: 'unknown', orderStatus: 'unknown', venueStopMissing: err.message });
     throw err;

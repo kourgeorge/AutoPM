@@ -117,7 +117,7 @@ export interface ImmutablePolicy {
 /** `auto` — the machine acts immediately. `manual` — an action is created and a human decides. */
 export type AutomationLevel = 'auto' | 'manual';
 
-/** One level per action kind the gate covers — see `ActionKind` in `state/state.ts`. */
+/** One level per action kind the gate covers — see `OrderKind` in `state/state.ts`. */
 export interface AutomationLevels {
   /** `execute_entry` — new capital committed. */
   entry: AutomationLevel;
@@ -134,7 +134,7 @@ export type AutomationTimeout = 'deny' | 'allow';
 
 /**
  * The automation gate: for each action kind, does the machine act or does a human decide via a
- * action (`core/actions.ts`)?
+ * action (`core/orders.ts`)?
  *
  * The level applies uniformly on paper and live — there is no venue-based exemption.
  *

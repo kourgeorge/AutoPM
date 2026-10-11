@@ -13,7 +13,7 @@ try {
   if (!input.accountId || input.accountId !== getState().accountId) throw new Error('Fill import must match the bound accountId, including broker and venue');
   if (!Array.isArray(input.fills) || input.fills.length > 100000) throw new Error('Expected at most 100000 fills');
   for (const f of input.fills) {
-    if (!f.execId || !f.orderId || !f.symbol || !['buy','sell'].includes(f.side) || !Number.isFinite(f.qty) || f.qty <= 0 || !Number.isFinite(f.price) || f.price <= 0 || !Number.isFinite(Date.parse(f.at)) || !(f.fee === null || Number.isFinite(f.fee))) throw new Error('Malformed fill: ' + String(f.execId));
+    if (!f.execId || !f.brokerOrderId || !f.symbol || !['buy','sell'].includes(f.side) || !Number.isFinite(f.qty) || f.qty <= 0 || !Number.isFinite(f.price) || f.price <= 0 || !Number.isFinite(Date.parse(f.at)) || !(f.fee === null || Number.isFinite(f.fee))) throw new Error('Malformed fill: ' + String(f.execId));
   }
   const count = transaction(() => {
     const added = recordFills(input.fills as Fill[]);

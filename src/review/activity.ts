@@ -1,5 +1,5 @@
-import { getAllActions } from '../core/actions';
-import type { Action } from '../state/state';
+import { listOrders } from '../core/orders';
+import type { Order } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readFills } from './fills';
 import { readAlertLog } from '../features/alertLog';
@@ -18,23 +18,23 @@ import { getRequest } from '../core/requests';
 import { getPolicyHash } from '../policy/load';
 
 /** An action's status changes, each tagged with the action it belongs to. */
-const stepsOf = (a: Action) => (a.history ?? []).map(step => ({ ...step, actionId: a.id, symbol: a.symbol }));
+const stepsOf = (a: Order) => (a.history ?? []).map(step => ({ ...step, orderId: a.id, symbol: a.symbol }));
 
 /** A read-only view of decisions, broker fills and events, including their saved queue state. */
 export function activityHistory(opts: { type: string; query: string; offset: number; limit: number }) {
-  const actions = new Map(getAllActions().map(action => [action.id, action]));
+  const actions = new Map(listOrders().map(action => [action.id, action]));
   const brokerFills = readFills();
-  const confirmedExits = new Set(brokerFills.filter(fill => fill.side === 'sell').map(fill => `${fill.orderId}:${fill.symbol}`));
+  const confirmedExits = new Set(brokerFills.filter(fill => fill.side === 'sell').map(fill => `${fill.brokerOrderId}:${fill.symbol}`));
   const transitions = new Map([...actions.values()].map(action => [action.id, stepsOf(action)]));
   const decisions = readDecisions().map(record => ({
     id: `decision:${record.id}`, type: 'decision', at: record.at,
     symbol: record.symbol, kind: record.kind,
     status: record.orderStatus ?? (record.executed
-      ? record.actor === 'broker' && record.kind === 'exit' && confirmedExits.has(`${record.orderId}:${record.symbol}`) ? 'reconciled fill' : 'recorded outcome'
+      ? record.actor === 'broker' && record.kind === 'exit' && confirmedExits.has(`${record.brokerOrderId}:${record.symbol}`) ? 'reconciled fill' : 'recorded outcome'
       : record.kind === 'hold' || record.kind === 'skip' ? 'no action' : 'recorded'),
     reason: record.rationale, record,
-    action: record.actionId ? actions.get(record.actionId) ?? null : null,
-    transitions: record.actionId ? transitions.get(record.actionId) ?? [] : [],
+    action: record.orderId ? actions.get(record.orderId) ?? null : null,
+    transitions: record.orderId ? transitions.get(record.orderId) ?? [] : [],
   }));
   const fills = brokerFills.map(record => ({
     id: `fill:${record.execId}`, type: 'fill', at: record.at,
@@ -54,7 +54,7 @@ export function activityHistory(opts: { type: string; query: string; offset: num
     id: `event:${record.id}`, type: 'event', at: record.firedAt,
     symbol: record.symbol, kind: record.kind,
     status: record.handling?.replaceAll('_', ' ') ?? (record.ackDisposition === 'ignoring' ? 'declined'
-      : record.ackDisposition === 'acting' ? 'action pending'
+      : record.ackDisposition === 'acting' ? 'order pending'
       : record.ackDisposition === 'acknowledged' ? 'observed' : record.ackedAt ? 'handled' : 'unreviewed'),
     queued: queued.has(record.id), reason: record.headline, record,
   }));
@@ -146,16 +146,16 @@ export function savedPositionContext(symbol: string) {
 export function savedRequestDetails(id: string) {
   const request = getRequest(id);
   if (!request) return null;
-  const actions = getAllActions().filter(a => a.requestId === id || request.actionIds?.includes(a.id));
-  const actionIds = new Set(actions.map(a => a.id));
-  const decisions = readDecisions().filter(d => d.requestId === id || (d.actionId && actionIds.has(d.actionId)));
-  const orders = new Set(actions.filter(a => a.result?.orderId && ['entry','exit'].includes(a.kind))
-    .map(a => `${a.result!.orderId}:${canonicalSymbol(a.symbol)}:${a.kind === 'entry' ? 'buy' : 'sell'}`));
-  const fills = readFills().filter(f => orders.has(`${f.orderId}:${canonicalSymbol(f.symbol)}:${f.side}`));
+  const actions = listOrders().filter(a => a.requestId === id || request.orderIds?.includes(a.id));
+  const orderIds = new Set(actions.map(a => a.id));
+  const decisions = readDecisions().filter(d => d.requestId === id || (d.orderId && orderIds.has(d.orderId)));
+  const orders = new Set(actions.filter(a => a.result?.brokerOrderId && ['entry','exit'].includes(a.kind))
+    .map(a => `${a.result!.brokerOrderId}:${canonicalSymbol(a.symbol)}:${a.kind === 'entry' ? 'buy' : 'sell'}`));
+  const fills = readFills().filter(f => orders.has(`${f.brokerOrderId}:${canonicalSymbol(f.symbol)}:${f.side}`));
   const calls = listRecords<any>('tool-calls', { where: c => c.requestId === id });
   const transitions = actions.flatMap(stepsOf).sort((a, b) => a.at.localeCompare(b.at));
   const transcript = readRecord<any>('transcripts', id);
-  return { request, actions, transitions: transitions.slice(-100), decisions: decisions.slice(-100), fills: fills.slice(-100),
+  return { request, orders: actions, transitions: transitions.slice(-100), decisions: decisions.slice(-100), fills: fills.slice(-100),
     tools: calls.slice(-100).map(r => ({ id: r.id, name: r.value.name, input: r.value.input,
       startedAt: r.value.startedAt ?? r.at, finishedAt: r.value.finishedAt ?? null, resultSaved: r.value.result !== undefined })),
     transcript: transcript ? { status: transcript.status, rounds: transcript.rounds,

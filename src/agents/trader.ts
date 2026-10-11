@@ -18,7 +18,7 @@ import { getState, updateState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
-import { getOpenActions } from '../core/actions';
+import { pendingOrders } from '../core/orders';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
 import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
@@ -45,7 +45,7 @@ export const TRADER_TOOLS = [
   'get_company_filings', 'get_research_updates', 'read_source', 'record_research_review',
   'get_evidence', 'get_decision_followup', 'get_entry_plan', 'get_lessons', 'get_requests',
   'get_market_status', 'get_account', 'get_positions', 'get_open_orders', 'execute_entry',
-  'annotate_position', 'execute_exit', 'get_pending_events', 'get_actions', 'ack_event', 'get_journal',
+  'annotate_position', 'execute_exit', 'get_pending_events', 'get_orders', 'ack_event', 'get_journal',
   'get_scorecard', 'get_benchmark', 'get_price_stats', 'write_lesson', 'get_macro_regime',
   'get_signals', 'get_watchlist_scan', 'get_correlation', 'get_exposure', 'get_calendar',
   'get_fundamentals', 'request_research', 'sleep', 'get_stock_bars', 'get_stock_snapshot',
@@ -139,10 +139,10 @@ export class Trader {
       maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
-    const actions = getRequest(command.id)?.actionIds ?? [];
+    const actions = getRequest(command.id)?.orderIds ?? [];
     // The request is the agent's work, so it ends with the turn. Each queued action tracks its own outcome.
     updateRequest(command.id, { status: turn.status,
-      result: turn.error ?? (actions.length ? `Actions queued: ${actions.join(', ')}. Each action records its own outcome.` : turn.text || 'Review completed; no trade action was queued.') });
+      result: turn.error ?? (actions.length ? `Orders queued: ${actions.join(', ')}. Each action records its own outcome.` : turn.text || 'Review completed; no trade action was queued.') });
     return { inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }
@@ -534,13 +534,13 @@ function buildMachineEvents(): string {
 }
 
 /**
- * Actions the automation policy is holding for a human to decide, and any that a human has
+ * Orders the automation policy is holding for a human to decide, and any that a human has
  * already decided but the executor hasn't gotten to yet. Read-only for the trader — there is no
  * tool to approve or reject one, on purpose, so this block exists only to make what is already
  * waiting visible across cycle boundaries, not to invite the model to act on it.
  */
-function buildPendingActions(): string {
-  const actions = getOpenActions();
+function buildPendingOrders(): string {
+  const actions = pendingOrders();
   if (actions.length === 0) return '';
 
   const lines = [`=== PENDING PROPOSALS (${actions.length}) ===`];
@@ -551,7 +551,7 @@ function buildPendingActions(): string {
     lines.push(`[${p.id}] ${p.status.toUpperCase()} ${p.kind} ${p.symbol} — ${p.reason} (${remaining})`);
   }
 
-  lines.push('Only PENDING actions await human approval. Automatic, submitted, partial and unknown actions have their own execution states. get_actions provides details and confirmed outcomes.');
+  lines.push('Only PENDING actions await human approval. Automatic, submitted, partial and unknown actions have their own execution states. get_orders provides details and confirmed outcomes.');
   lines.push('=== END PENDING PROPOSALS ===');
   return lines.join('\n');
 }
@@ -719,8 +719,8 @@ async function renderCycleContext(
   const eventCtx = buildMachineEvents();
   if (eventCtx) { lines.push(eventCtx); lines.push(''); }
 
-  const actionCtx = buildPendingActions();
-  if (actionCtx) { lines.push(actionCtx); lines.push(''); }
+  const orderCtx = buildPendingOrders();
+  if (orderCtx) { lines.push(orderCtx); lines.push(''); }
 
   lines.push(await buildAccountStatus());
 

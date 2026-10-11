@@ -258,7 +258,7 @@ test('live planning and execution enforce the same risk constraints and record t
     await assert.rejects(() => orders.validateEntry(signal, plan.maxQty + 1), e => e.rule === 'risk_per_trade');
     await assert.rejects(() => orders.validateEntry({ ...signal, takeProfit: 110 }, 1), e => e.rule === 'reward_risk_too_low');
     const queued = await orders.enterPosition(signal, plan.maxQty);
-    assert.equal(require('../src/core/actions').getAction(queued.actionId).params.riskAssessment.plannedLoss, plan.plannedLoss);
+    assert.equal(require('../src/core/orders').getOrder(queued.orderId).params.riskAssessment.plannedLoss, plan.plannedLoss);
     const held = [{ symbol: 'MSFT', qty: 400, marketValue: 40000 }];
     broker.getPositions = async () => held;
     loader.useEphemeralPolicy(policy({ riskPerTradePct: 1, targetVolatilityPct: 10, maxSectorWeightPct: 100, earningsBlackoutDays: 0 }));

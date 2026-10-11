@@ -313,7 +313,7 @@ export class AlpacaBroker implements IBroker {
 
         fills.push({
           execId:  a.id,
-          orderId: a.order_id,
+          brokerOrderId: a.order_id,
           permId:  null,
           symbol:  a.symbol,
           side,

@@ -9,7 +9,7 @@ export interface AgentRequest {
   id: string; role: AgentRole; actorId: string; text: string;
   parentId?: string; createdAt: string;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
-  result?: string; actionIds: string[];
+  result?: string; orderIds: string[];
   /** Trader cycles: every pending event the cycle was shown, including older ones it already saw. */
   eventIds?: string[];
   /** Trader cycles: what woke the trader for this cycle. */
@@ -40,7 +40,7 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     if (!text.trim() || text.length > 4000) throw new Error('A message must contain 1–4000 characters');
     if (pendingRequests(role).length >= 20) throw new Error('Agent queue is full; wait for a pending request to finish');
     const command: AgentRequest = { id, role, actorId: parent?.actorId ?? actorId, parentId: parent?.requestId,
-      text, createdAt: new Date().toISOString(), status: 'queued', actionIds: [], ...options };
+      text, createdAt: new Date().toISOString(), status: 'queued', orderIds: [], ...options };
     saveRecord('requests', id, command);
     if (parent) recordToolResult({ ok: true, receipt: { requestId: id, status: getState().paused ? 'queued_paused' : 'queued' } });
     return command;
@@ -53,7 +53,7 @@ export function onRequestFinished(listener: (request: AgentRequest) => void): ()
 }
 const FINISHED = ['completed', 'failed'];
 
-export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat' | 'eventIds' | 'wokenBy'>>): AgentRequest {
+export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'orderIds' | 'replyToChat' | 'eventIds' | 'wokenBy'>>): AgentRequest {
   return transaction(() => {
     const current = getRequest(id);
     if (!current) throw new Error('Unknown command');
@@ -80,8 +80,8 @@ export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'sta
     return next;
   });
 }
-export function linkRequestAction(requestId: string | undefined, actionId: string): void {
+export function linkRequestOrder(requestId: string | undefined, orderId: string): void {
   if (!requestId) return;
   const command = getRequest(requestId);
-  if (command && !command.actionIds.includes(actionId)) updateRequest(requestId, { actionIds: [...command.actionIds, actionId] });
+  if (command && !command.orderIds.includes(orderId)) updateRequest(requestId, { orderIds: [...command.orderIds, orderId] });
 }

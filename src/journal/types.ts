@@ -53,7 +53,7 @@ export interface DecisionRecord {
   intendedTarget: number | null;
   atrAtEntry: number | null;
 
-  orderId: string | null;
+  brokerOrderId: string | null;
   /** Which guard rule refused it. Only ever set on `veto`. */
   vetoRule: string | null;
   /** The venue's own words. Only ever set on `rejected` — the antidote to an invented cause. */
@@ -81,7 +81,7 @@ export interface DecisionRecord {
   /** `Policy.version` at the moment of the decision — a number, as declared. */
   policyVersion: number;
   policyHash?: string;
-  actionId?: string;
+  orderId?: string;
   orderStatus?: string;
   requestId?: string;
   actorId?: string;

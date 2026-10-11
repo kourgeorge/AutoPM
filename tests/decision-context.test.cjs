@@ -260,7 +260,7 @@ test('candidate review rejects signal snapshots and raw metric citations, then s
   assert.equal(row.nextReviewAt, input.nextReviewAt);
   assert.equal(thesis.evaluatePremises(row.thesis, dossier.data.metrics).status, 'contradicted');
   assert.equal(JSON.parse(storage.readRecord('tool-calls', 'lly-candidate').result).reviewId, saved.reviewId);
-  assert.equal(storage.listRecords('actions').length, 0);
+  assert.equal(storage.listRecords('orders').length, 0);
 });
 
 test('candidate snapshot errors distinguish missing citations, unknown positions and held symbols', async () => {
@@ -339,7 +339,7 @@ test('follow-up retains decisions and explicitly marks one failed history withou
 test('entry requests require fresh measured thesis evidence, check catalyst acceptance, and carry the thesis to the queue', async () => {
   const original = orderManager.enterPosition;
   let intent;
-  orderManager.enterPosition = async signal => { intent = signal; return { status: 'pending', actionId: 'test-action', automatic: false }; };
+  orderManager.enterPosition = async signal => { intent = signal; return { status: 'pending', orderId: 'test-action', automatic: false }; };
   const e = evidence.recordEvidence('get_position_review', { symbol: 'AAPL', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null,
     metrics: { rsi: { value: 55 } }, fundamentals: { calendar: { daysUntil: 3 } } });
   const input = { symbol: 'AAPL', qty: 1, price: 100, atr: 2, stopLoss: 95, takeProfit: 115,

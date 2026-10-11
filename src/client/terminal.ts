@@ -43,7 +43,7 @@ export class TerminalClient {
     if (input.length > 4000) throw new Error('Input must be at most 4000 characters');
     const decision = /^\/?(approve|reject)\s+(\S+)(?:\s+([\s\S]*))?$/i.exec(input);
     if (decision) {
-      await this.request(`actions/${encodeURIComponent(decision[2])}/${decision[1].toLowerCase()}`, { reason: decision[3] });
+      await this.request(`orders/${encodeURIComponent(decision[2])}/${decision[1].toLowerCase()}`, { reason: decision[3] });
       return;
     }
     const command = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(input);
@@ -88,7 +88,7 @@ export class TerminalClient {
       this.view.setVenueOpen(s.venueOpen);
       if (s.tick) this.view.setTick(s.tick);
       this.view.setEvents(s.events, s.activity);
-      this.view.setActions(s.actions);
+      this.view.setOrders(s.actions);
       this.view.setCycle(s.cycle);
       if (s.usage) this.view.setDailyUsage(s.usage);
       this.view.setTraderActivity(health.paused

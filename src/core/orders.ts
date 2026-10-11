@@ -1,16 +1,16 @@
 import crypto from 'crypto';
 import { notifyAccount } from './notifications';
 import { sameSymbol, canonicalSymbol } from './symbols';
-import { updateState, type Action, type ActionKind, type ActionStatus } from '../state/state';
+import { updateState, type Order, type OrderKind, type OrderStatus } from '../state/state';
 import { getPolicyHash } from '../policy/load';
 import { listRecords, readRecord, saveRecord, transaction } from './storage';
 import { agentContext, assertAgentActive, recordToolResult } from './agentContext';
-import { linkRequestAction } from './requests';
+import { linkRequestOrder } from './requests';
 import { decision, recordDecision, recordDecisionOutcome, readDecision } from '../journal/journal';
 import { playDing } from './sound';
 
-const OPEN: ActionStatus[] = ['pending', 'approved', 'executing', 'submitted', 'partial', 'unknown'];
-const NEXT: Record<ActionStatus, ActionStatus[]> = {
+const OPEN: OrderStatus[] = ['pending', 'approved', 'executing', 'submitted', 'partial', 'unknown'];
+const NEXT: Record<OrderStatus, OrderStatus[]> = {
   pending: ['approved', 'rejected', 'expired'],
   approved: ['executing', 'expired', 'failed'],
   executing: ['submitted', 'partial', 'executed', 'unknown', 'failed'],
@@ -19,41 +19,41 @@ const NEXT: Record<ActionStatus, ActionStatus[]> = {
   unknown: ['submitted', 'partial', 'executed', 'failed'],
   rejected: [], expired: [], executed: [], failed: [],
 };
-/** action.jsonl is the one copy of every action, open or finished. */
-export function getAction(id: string): Action | undefined { return readRecord<Action>('actions', id); }
-export function getAllActions(): Action[] { return listRecords<Action>('actions').map(r => r.value); }
-export function getOpenActions(): Action[] { return getAllActions().filter(p => OPEN.includes(p.status)); }
+/** orders.jsonl is the one copy of every action, open or finished. */
+export function getOrder(id: string): Order | undefined { return readRecord<Order>('orders', id); }
+export function listOrders(): Order[] { return listRecords<Order>('orders').map(r => r.value); }
+export function pendingOrders(): Order[] { return listOrders().filter(p => OPEN.includes(p.status)); }
 
-export interface CreateActionInput {
-  kind: ActionKind; symbol: string; venue: 'paper' | 'live'; params: Record<string, unknown>;
+export interface CreateOrderInput {
+  kind: OrderKind; symbol: string; venue: 'paper' | 'live'; params: Record<string, unknown>;
   reason: string; eventId?: string | null; timeoutMs: number; automatic?: boolean;
 }
-export function createAction(input: CreateActionInput): Action {
+export function createOrder(input: CreateOrderInput): Order {
   return transaction(() => {
     assertAgentActive();
     const context = agentContext.getStore();
     const stable = (v: any): any => Array.isArray(v) ? v.map(stable) : v && typeof v === 'object'
       ? Object.fromEntries(Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => [k, stable(v[k])])) : v;
-    const intent = (p: typeof input | Action) => JSON.stringify(stable({ kind: p.kind, symbol: canonicalSymbol(p.symbol), venue: p.venue, params: p.params, reason: p.reason, eventId: p.eventId ?? null }));
+    const intent = (p: typeof input | Order) => JSON.stringify(stable({ kind: p.kind, symbol: canonicalSymbol(p.symbol), venue: p.venue, params: p.params, reason: p.reason, eventId: p.eventId ?? null }));
     const key = context ? crypto.createHash('sha256').update(context.requestId + intent(input)).digest('hex') : undefined;
-    const receipt = (p: Action) => {
-      linkRequestAction(context?.requestId, p.id);
-      recordToolResult({ ok: true, pending: OPEN.includes(p.status), actionId: p.id, status: p.status, params: p.params, automatic: p.automatic });
+    const receipt = (p: Order) => {
+      linkRequestOrder(context?.requestId, p.id);
+      recordToolResult({ ok: true, pending: OPEN.includes(p.status), orderId: p.id, status: p.status, params: p.params, automatic: p.automatic });
       return p;
     };
-    const previous = key ? getAllActions().find(p => p.dedupKeys?.includes(key)) : undefined;
+    const previous = key ? listOrders().find(p => p.dedupKeys?.includes(key)) : undefined;
     if (previous) return receipt(previous);
-    const duplicate = getOpenActions().find(p => p.kind === input.kind && sameSymbol(p.symbol, input.symbol));
+    const duplicate = pendingOrders().find(p => p.kind === input.kind && sameSymbol(p.symbol, input.symbol));
     if (duplicate) {
       if (intent(duplicate) !== intent(input)) throw new Error(`Conflicting open action ${duplicate.id}: ${JSON.stringify(duplicate.params)}. Review it before requesting different parameters.`);
       if (!key) return receipt(duplicate);
       const shared = { ...duplicate, dedupKeys: [...(duplicate.dedupKeys ?? []), key] };
-      saveRecord('actions', shared.id, shared);
+      saveRecord('orders', shared.id, shared);
       return receipt(shared);
     }
     const now = Date.now();
     const id = crypto.randomBytes(12).toString('hex');
-    const action: Action = {
+    const action: Order = {
       id, kind: input.kind, symbol: canonicalSymbol(input.symbol), venue: input.venue,
       policyHash: getPolicyHash(), clientOrderId: 'at-' + id,
       automatic: input.automatic ?? false, params: input.params, reason: input.reason,
@@ -63,39 +63,39 @@ export function createAction(input: CreateActionInput): Action {
       rejectReason: null, result: null,
       ...(key ? { dedupKeys: [key] } : {}), history: [{ at: new Date(now).toISOString(), transition: 'created' }],
     };
-    saveRecord('actions', id, action);
-    ensureActionDecision(action);
+    saveRecord('orders', id, action);
+    ensureOrderDecision(action);
     if (!action.automatic) notifyAccount('approval_required', `${action.kind} ${action.symbol}: ${action.reason}`, action.id);
     return receipt(action);
   });
 }
-export function ensureActionDecision(action: Action): void {
-  if (readDecision('action-' + action.id)) return;
+export function ensureOrderDecision(action: Order): void {
+  if (readDecision('order-' + action.id)) return;
   const signal = action.params.signal as import('./types').SignalResult | undefined;
   recordDecision(decision(action.kind === 'entry' || action.kind === 'exit' ? action.kind : 'adjustment', 'trader', {
-    symbol: action.symbol, rationale: action.reason, actionId: action.id, requestId: action.requestId, actorId: action.requestedBy,
+    symbol: action.symbol, rationale: action.reason, orderId: action.id, requestId: action.requestId, actorId: action.requestedBy,
     triggerEventId: action.eventId, orderStatus: action.status, requestedQty: Number(action.params.qty ?? 0) || null,
     filledQty: 0, qty: 0, intendedPrice: signal?.price ?? action.params.price as number ?? null, intendedStop: signal?.stopLoss ?? action.params.stopLoss as number ?? null,
     intendedTarget: signal?.takeProfit ?? action.params.takeProfit as number ?? null,
     thesis: signal?.thesis, observationIds: signal?.observationIds ?? action.params.observationIds as string[] | undefined, contextVariant: signal?.contextVariant,
     atrAtEntry: signal?.atr ?? null, protectionStatus: action.kind === 'exit' ? undefined : 'pending',
-  }), 'action-' + action.id);
+  }), 'order-' + action.id);
 }
 export interface TransitionMeta {
   decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
-  result?: NonNullable<Action['result']>; decisionId?: string;
+  result?: NonNullable<Order['result']>; decisionId?: string;
 }
-export function transitionAction(id: string, status: ActionStatus, meta: TransitionMeta = {}): Action {
+export function transitionOrder(id: string, status: OrderStatus, meta: TransitionMeta = {}): Order {
   const next = transaction(() => {
-    const p = getAction(id);
-    if (!p) throw new Error('no such action: ' + id);
-    if (!NEXT[p.status].includes(status)) throw new Error(`Action ${id} is already ${p.status}; cannot change to ${status}`);
-    const next: Action = { ...p, ...meta, status,
+    const p = getOrder(id);
+    if (!p) throw new Error('no such order: ' + id);
+    if (!NEXT[p.status].includes(status)) throw new Error(`Order ${id} is already ${p.status}; cannot change to ${status}`);
+    const next: Order = { ...p, ...meta, status,
       decidedAt: ['approved','rejected','expired'].includes(status) ? Date.now() : p.decidedAt,
       history: [...(p.history ?? []), { at: new Date().toISOString(), transition: status, ...meta }] };
-    saveRecord('actions', id, next);
-    ensureActionDecision(p);
-    recordDecisionOutcome('action-' + id, { orderStatus: status });
+    saveRecord('orders', id, next);
+    ensureOrderDecision(p);
+    recordDecisionOutcome('order-' + id, { orderStatus: status });
     if (status === 'unknown') { updateState({ paused: true }); notifyAccount('broker_outcome_unknown', `${p.kind} ${p.symbol}: ${meta.result?.error ?? 'Broker outcome needs review'}`, p.id); }
     return next;
   });
@@ -103,14 +103,14 @@ export function transitionAction(id: string, status: ActionStatus, meta: Transit
   if (status === 'executed' && (next.kind === 'entry' || next.kind === 'exit')) playDing();
   return next;
 }
-export function decideAction(id: string, decision: 'approve' | 'reject', decidedBy: 'human' | 'timeout', rejectReason?: string, actorId = 'operator'): Action {
-  const current = getAction(id);
-  if (!current) throw new Error('no such action: ' + id);
+export function decideOrder(id: string, decision: 'approve' | 'reject', decidedBy: 'human' | 'timeout', rejectReason?: string, actorId = 'operator'): Order {
+  const current = getOrder(id);
+  if (!current) throw new Error('no such order: ' + id);
   if (current.status === (decision === 'approve' ? 'approved' : 'rejected')) return current;
   if (current.status === 'pending' && Date.now() >= current.expiresAt) {
-    transitionAction(id, 'expired', { decidedBy: 'timeout' });
-    throw new Error('Action expired; request a fresh action');
+    transitionOrder(id, 'expired', { decidedBy: 'timeout' });
+    throw new Error('Order expired; request a fresh action');
   }
   if (decision === 'approve' && current.policyHash !== getPolicyHash()) throw new Error('Strategy changed; request a fresh action');
-  return transitionAction(id, decision === 'approve' ? 'approved' : 'rejected', { decidedBy, rejectReason, actorId });
+  return transitionOrder(id, decision === 'approve' ? 'approved' : 'rejected', { decidedBy, rejectReason, actorId });
 }

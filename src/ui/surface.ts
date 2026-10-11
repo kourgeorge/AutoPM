@@ -10,7 +10,7 @@
  * in `core/config.ts`, which throws at import time when `AI_API_KEY` is missing.
  */
 import * as dotenv from 'dotenv';
-import type { Cycle, DailyUsage, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
+import type { Cycle, DailyUsage, Environment, EventRow, Lane, OrderRow, TickSnapshot } from './dashboard';
 import type { ChartData } from './chart';
 import type { ToolCallDetails } from '../core/types';
 
@@ -63,7 +63,7 @@ export interface OperatorUI {
   alert(msg: string): void;
   setTick(tick: TickSnapshot): void;
   setEvents(events: EventRow[], eventLog: EventRow[]): void;
-  setActions(actions: ActionRow[]): void;
+  setOrders(actions: OrderRow[]): void;
   setEnvironment(env: Environment): void;
   setVenueOpen(open: boolean | null): void;
   setTraderActivity(lane: Lane): void;

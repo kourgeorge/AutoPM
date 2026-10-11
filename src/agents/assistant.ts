@@ -2,7 +2,7 @@ import { runtimeContract } from './runtimeContract';
 import { ToolRegistry, pickTools } from './toolRegistry';
 import { runAgentLoop, compactMessages, readTranscript } from './agentLoop';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest, type AgentRequest } from '../core/requests';
-import { getOpenActions } from '../core/actions';
+import { pendingOrders } from '../core/orders';
 import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
 import { agentContext } from '../core/agentContext';
@@ -44,7 +44,7 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'get_request_trace',
-    description: "Read what an agent actually did for one request: who started it, the text the model wrote, and every tool call in order with its inputs and a short result. Take the requestId from an action or from get_requests. Use it to answer why an entry or exit happened — the action's reason is the model's own words, and this shows whether anything in the turn supports them.",
+    description: "Read what an agent actually did for one request: who started it, the text the model wrote, and every tool call in order with its inputs and a short result. Take the requestId from an order or from get_requests. Use it to answer why an entry or exit happened — the action's reason is the model's own words, and this shows whether anything in the turn supports them.",
     input_schema: {
       type: 'object',
       properties: { requestId: { type: 'string', description: 'The request id, verbatim.' } },
@@ -53,7 +53,7 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'send_to_trader',
-    description: 'Queue an operator instruction for the trader and return its durable request ID and actual status. Paused traders keep the request queued; busy traders handle it in a later cycle. Use get_requests and get_actions for outcomes.',
+    description: 'Queue an operator instruction for the trader and return its durable request ID and actual status. Paused traders keep the request queued; busy traders handle it in a later cycle. Use get_requests and get_orders for outcomes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -111,7 +111,7 @@ function previousChat(currentId: string): ChatMessage[] {
 
 function requestTrace(requestId: string): string {
   const command = getRequest(requestId);
-  if (!command) return JSON.stringify({ ok: false, error: `No request with id ${requestId}. Read get_requests or an action's requestId.` });
+  if (!command) return JSON.stringify({ ok: false, error: `No request with id ${requestId}. Read get_requests or an order's requestId.` });
   const clip = (s: unknown, n: number) => { const t = typeof s === 'string' ? s : JSON.stringify(s); return t.length > n ? t.slice(0, n) + '…' : t; };
   const steps: Record<string, unknown>[] = [];
   const turn = readTranscript(requestId);
@@ -133,7 +133,7 @@ function requestTrace(requestId: string): string {
   const wroteText = steps.some(s => 'wrote' in s);
   return JSON.stringify({
     command: { id: command.id, agent: command.role, startedBy: command.actorId === 'system' ? 'scheduler (no operator instruction)' : command.actorId,
-      request: command.text, status: command.status, result: command.result, actionIds: command.actionIds },
+      request: command.text, status: command.status, result: command.result, orderIds: command.orderIds },
     ...(wroteText ? {} : { note: 'The model wrote no text in this request; the only reasons it gave are the tool inputs below.' }),
     steps: steps.slice(-60),
   });
@@ -145,7 +145,7 @@ function requestTrace(requestId: string): string {
  * one runs through `executeTraderTool`; get_tool_result and get_saved_context are added to every agent.
  */
 export const ASSISTANT_TOOL_NAMES = [
-  'get_account', 'get_requests', 'get_lessons', 'get_actions', 'get_positions', 'get_open_orders',
+  'get_account', 'get_requests', 'get_lessons', 'get_orders', 'get_positions', 'get_open_orders',
   'get_market_status', 'get_pending_events', 'get_journal', 'get_scorecard', 'get_benchmark',
   'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan', 'get_correlation',
   'get_exposure', 'get_calendar', 'get_fundamentals', 'get_strategy_settings', 'get_state',
@@ -169,19 +169,19 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
 const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
 When the operator asks you to research or assess a stock, call request_research; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
-Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_actions for the outcome.
-You cannot place trades, approve actions or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
+Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_orders for the outcome.
+You cannot place trades, approve orders or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
 For pause/resume and approvals, direct the operator to the account controls.
 A one-off instruction goes to the trader. A lasting settings change is saved with update_trading_settings.
-To explain why a position was entered or exited, read get_actions for that symbol (includeDecided), then get_request_trace with the action's requestId: say who started the request, the stated reason, and whether the turn shows evidence for it. If the recorded reason contradicts the action — a hold sentence on a sell, "operator-directed" when the scheduler started it, or no reason at all — say so plainly; do not present it as a deliberate decision.
-get_state shows pause, account and outstanding actions. get_journal explains decisions, newest kept when trimmed; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
+To explain why a position was entered or exited, read get_orders for that symbol (includeDecided), then get_request_trace with the order's requestId: say who started the request, the stated reason, and whether the turn shows evidence for it. If the recorded reason contradicts the action — a hold sentence on a sell, "operator-directed" when the scheduler started it, or no reason at all — say so plainly; do not present it as a deliberate decision.
+get_state shows pause, account and outstanding orders. get_journal explains decisions, newest kept when trimmed; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
 Read get_strategy_settings afresh before describing current settings or suggesting a change. Its summary is the presentation baseline; use its correctly scaled values, not remembered defaults or old conversation results.
 For a general settings question, lead with the saved profile, then group risk controls, investment limits and approvals into short labeled lines or bullets. Include the allowed symbols in a full overview. Answer a narrow question using just the relevant settings. Avoid raw JSON, YAML keys, revision hashes and Markdown tables; the account chat displays plain text.
 Explain risk per trade as planned loss at the stop and position size as money invested. Name volatility as an annualized estimate, reward:risk as planned upside versus downside, and blank controls as not configured. A daily loss threshold halts new entries; it does not guarantee losses cannot exceed it. Distinguish alerts from entry limits and saved settings from actual holdings or trading status.
 Settings questions do not wake the trader. When the operator asks to change a setting, save it with update_trading_settings and report the before and after values from its result. When you are only suggesting values, label them as suggestions and ask before saving. Never claim a change was saved unless the tool returned ok:true; if it returned errors, say what was rejected.
 Read get_policy_playbook when quoting or explaining account strategy prose. Lessons are advisory observations and must not override strategy or platform behavior.
 Use chart tools when the operator asks to see history or a comparison. Their results state whether a comparison is available.
-Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued action filled or that a paused trader started immediately.
+Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued order filled or that a paused trader started immediately.
 Keep answers concise. Tools available: ${ASSISTANT_TOOLS.map(t => t.name).join(', ')}.`;
 
 export class AssistantAgent {
@@ -223,7 +223,7 @@ export class AssistantAgent {
             { role: 'user', content: [{ type: 'text', text: command.text }] }],
           maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
         });
-        const result = turn.error ?? (turn.text || 'Request processed. Check linked actions for execution status.');
+        const result = turn.error ?? (turn.text || 'Request processed. Check linked orders for execution status.');
         updateRequest(command.id, { status: turn.status, result });
         if (turn.status === 'interrupted') return;
       } catch (err: any) {
@@ -247,7 +247,7 @@ export class AssistantAgent {
         paused: state.paused,
         accountId: state.accountId,
         strategyHash: getPolicyHash(),
-        actions: getOpenActions(),
+        orders: pendingOrders(),
         startOfDayEquity: state.startOfDayEquity,
         lastResetDate: state.lastResetDate,
         watchlist: getPolicy().strategy.watchlist,

@@ -15,7 +15,7 @@ import * as blessed from 'blessed';
 import { InputEditor } from './inputEditor';
 import { renderChart, type ChartData } from './chart';
 import {
-  isOpenAction,
+  isPendingOrder,
   needsAttention,
   POS_ROW_COLS,
   renderEventsPanel,
@@ -28,7 +28,7 @@ import {
   type Environment,
   type EventRow,
   type Lane,
-  type ActionRow,
+  type OrderRow,
   type TickSnapshot,
 } from './dashboard';
 import { escapeTags, plainWidth, wrapPlain } from './format';
@@ -244,7 +244,7 @@ export class TerminalUI implements OperatorUI {
   private eventsAvailable = true;
   private events: EventRow[] = [];
   private eventLog: EventRow[] = [];
-  private actions: ActionRow[] = [];
+  private actions: OrderRow[] = [];
   private tick: TickSnapshot | null = null;
   private venueOpen: boolean | null = null;
   private env: Environment = { broker: '', venue: '', provider: '', model: '' };
@@ -589,8 +589,8 @@ export class TerminalUI implements OperatorUI {
     this.paint();
   }
 
-  /** Pushed every tick from `daemon.ts`, next to `setEvents` — see `core/actions.ts`. */
-  setActions(actions: ActionRow[]): void {
+  /** Pushed every tick from `daemon.ts`, next to `setEvents` — see `core/orders.ts`. */
+  setOrders(actions: OrderRow[]): void {
     this.actions = actions;
     this.paint();
   }
@@ -795,13 +795,13 @@ export class TerminalUI implements OperatorUI {
   /**
    * Resolve one `approve <id>` / `reject <id> [reason]` command against the live action
    * store. A synchronous state mutation, not a promise settle — creation and decision are
-   * fully decoupled, and `strategy/actionExecutor.ts` picks up an `approved` action on its
+   * fully decoupled, and `strategy/orderExecutor.ts` picks up an `approved` action on its
    * own next tick, independent of whatever this process does next.
    */
   private decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
     try {
       if (this.remote) { this.onSubmit?.(`${decision} ${id}${reason ? ' ' + reason : ''}`); return; }
-      const p = require('../core/actions').decideAction(id, decision, 'human', reason?.trim() || undefined);
+      const p = require('../core/orders').decideOrder(id, decision, 'human', reason?.trim() || undefined);
       this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
     } catch (err: any) {
       this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
@@ -1085,9 +1085,9 @@ export class TerminalUI implements OperatorUI {
     const f2 = this.panelEnabled
       ? (this.mode === 'off' ? 'F2 panel (needs a bigger window)' : 'F2 panel off')
       : 'F2 panel on';
-    // Actions lead the count: an action is the one thing on this panel that ONLY a human can
+    // Orders lead the count: an action is the one thing on this panel that ONLY a human can
     // move, so it is the more urgent reason to open the inbox.
-    const openActions = this.actions.filter(isOpenAction).length;
+    const openActions = this.actions.filter(isPendingOrder).length;
     const unacked = openActions + this.events.filter(needsAttention).length;
     const f3 = !this.eventsAvailable
       ? 'F3 inbox (needs a taller window)'

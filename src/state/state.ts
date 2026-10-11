@@ -18,13 +18,13 @@ export interface PositionSnapshot {
   takeProfitOrderId?: string;
 }
 
-export type ActionKind = 'entry' | 'exit' | 'stop_adjust' | 'target_adjust';
+export type OrderKind = 'entry' | 'exit' | 'stop_adjust' | 'target_adjust';
 
-export type ActionStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'executing' | 'submitted' | 'partial' | 'unknown' | 'executed' | 'failed';
+export type OrderStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'executing' | 'submitted' | 'partial' | 'unknown' | 'executed' | 'failed';
 
-export interface Action {
+export interface Order {
   id: string;
-  kind: ActionKind;
+  kind: OrderKind;
   symbol: string;
   venue: 'paper' | 'live';
   policyHash?: string;
@@ -40,20 +40,20 @@ export interface Action {
   eventId: string | null;
   createdAt: number;
   expiresAt: number;
-  status: ActionStatus;
+  status: OrderStatus;
   decidedBy: 'human' | 'timeout' | null;
   decidedAt: number | null;
   rejectReason: string | null;
-  result: { orderId?: string; qty?: number; filledQty?: number; filledPrice?: number; error?: string } | null;
+  result: { brokerOrderId?: string; qty?: number; filledQty?: number; filledPrice?: number; error?: string } | null;
   /** Hashes of (request + intent) that resolve to this action, so a replayed request reuses it. */
   dedupKeys?: string[];
   /** Each status change, oldest first, with what changed at that step. */
-  history?: ActionStep[];
+  history?: OrderStep[];
 }
-export interface ActionStep {
-  at: string; transition: ActionStatus | 'created';
+export interface OrderStep {
+  at: string; transition: OrderStatus | 'created';
   decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
-  result?: NonNullable<Action['result']>; decisionId?: string;
+  result?: NonNullable<Order['result']>; decisionId?: string;
 }
 
 export interface SystemState {
@@ -116,7 +116,7 @@ export function getState(): Readonly<SystemState> {
 
 export function useEphemeralState(seed: Partial<SystemState> = {}): void {
   useEphemeralStorage();
-  forgetEphemeralRecords('actions');   // actions used to live in state; each scenario starts with none
+  forgetEphemeralRecords('orders');   // actions used to live in state; each scenario starts with none
   ephemeral = normalize(seed);
 }
 

@@ -17,7 +17,7 @@ import { reconcileOnStartup } from './review/reconcile';
 import { DATA_DIR } from './core/paths';
 import { config } from './core/config';
 import { automationLevel, automationSummary } from './core/automation';
-import { getOpenActions } from './core/actions';
+import { pendingOrders } from './core/orders';
 import type { EventRow } from './ui/dashboard';
 import { getMarketStatusSnapshot } from './tools/traderTools';
 import { registerOperatorCommands } from './core/operatorCommands';
@@ -40,7 +40,7 @@ logger.info(`[Boot] data dir: ${DATA_DIR}`);
 // from the endpoint (see resolveVenue), so this line and the gate read the same truth. Unlike
 // the old approval gate, there is no channel to wire up here: a human decides a pending
 // action by typing `approve <id>`/`reject <id>` straight into the UI, which reads and writes
-// the action store (`core/actions.ts`) directly.
+// the action store (`core/orders.ts`) directly.
 logger.info(`[Boot] automation: ${automationSummary()}`);
 
 /**
@@ -121,7 +121,7 @@ const scheduler = new FeatureScheduler({
     ui.setTick(data);
     const activity = readDecisions({ limit: 20, filter: isTradeAction }).map(decisionToActivityRow);
     ui.setEvents(getPendingEvents(), activity);
-    ui.setActions(getOpenActions());
+    ui.setOrders(pendingOrders());
     pushEnvironment(); // policy may have been reloaded since the last tick
   },
 });
