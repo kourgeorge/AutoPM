@@ -98,11 +98,11 @@ export interface EventRow {
 }
 
 /**
- * Structural subset of `core/actions.ts`'s `Action` — same reasoning as `EventRow` above:
+ * Structural subset of `core/orders.ts`'s `Order` — same reasoning as `EventRow` above:
  * this file must stay import-free of `state/state.ts`, so the shape is copied, and
- * `getOpenActions()`'s real return value satisfies it directly.
+ * `pendingOrders()`'s real return value satisfies it directly.
  */
-export interface ActionRow {
+export interface OrderRow {
   id: string;
   kind: string;
   symbol: string;
@@ -178,8 +178,8 @@ export interface DashboardModel {
   events: EventRow[];
   /** Tail of the durable event log, oldest-first — see `src/features/eventLog.ts`. */
   eventLog: EventRow[];
-  /** Every action currently in the store — see `src/core/actions.ts`'s `getAllActions()`. */
-  actions: ActionRow[];
+  /** Every action currently in the store — see `src/core/orders.ts`'s `listOrders()`. */
+  actions: OrderRow[];
 }
 
 // ── Small internal helpers ────────────────────────────────────────────────────
@@ -924,7 +924,7 @@ function eventRow(m: DashboardModel, f: Fmt, e: EventRow, width: number): string
   return packRow(f, width, cols);
 }
 
-// ── Actions ─────────────────────────────────────────────────────────────────
+// ── Orders ─────────────────────────────────────────────────────────────────
 
 const PROPOSAL_KIND_W = 12;
 const PROPOSAL_SYM_W = 6;
@@ -933,16 +933,16 @@ const PROPOSAL_AGE_W = 9;
 const PROPOSAL_HEADLINE_MIN = 10;
 
 /** Only `pending`/`approved` are still waiting on anything — everything else is history. */
-export function isOpenAction(p: ActionRow): boolean {
+export function isPendingOrder(p: OrderRow): boolean {
   return ['pending','approved','executing','submitted','partial','unknown'].includes(p.status);
 }
 
 /** Soonest deadline first — that is the one an operator is about to miss. */
-function sortedActions(actions: ActionRow[]): ActionRow[] {
+function sortedOrders(actions: OrderRow[]): OrderRow[] {
   return [...actions].sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
-function actionColor(status: string): string {
+function orderColor(status: string): string {
   switch (status) {
     case 'pending':
       return 'yellow-fg';
@@ -959,7 +959,7 @@ function actionColor(status: string): string {
 }
 
 /** Same reasoning as `planEventColumns`: the headline has no width of its own, so this runs first. */
-function planActionColumns(width: number): { headlineW: number; sym: boolean; kind: boolean; age: boolean } {
+function planOrderColumns(width: number): { headlineW: number; sym: boolean; kind: boolean; age: boolean } {
   const candidates: Array<{ key: 'sym' | 'kind' | 'age'; w: number }> = [
     { key: 'sym', w: PROPOSAL_SYM_W },
     { key: 'kind', w: PROPOSAL_KIND_W },
@@ -976,8 +976,8 @@ function planActionColumns(width: number): { headlineW: number; sym: boolean; ki
   return { headlineW: Math.max(PROPOSAL_HEADLINE_MIN, width - trailingW), ...show };
 }
 
-function actionLegend(width: number): Col[] {
-  const plan = planActionColumns(width);
+function orderLegend(width: number): Col[] {
+  const plan = planOrderColumns(width);
   const legend: Col[] = [{ text: '', w: plan.headlineW }];
   if (plan.sym) legend.push({ text: 'sym', w: PROPOSAL_SYM_W, right: true });
   if (plan.kind) legend.push({ text: 'kind', w: PROPOSAL_KIND_W, right: true });
@@ -985,17 +985,17 @@ function actionLegend(width: number): Col[] {
   return legend;
 }
 
-function actionRow(m: DashboardModel, f: Fmt, p: ActionRow, width: number): string {
+function orderRow(m: DashboardModel, f: Fmt, p: OrderRow, width: number): string {
   const g = m.glyphs;
-  const plan = planActionColumns(width);
-  const color = actionColor(p.status);
+  const plan = planOrderColumns(width);
+  const color = orderColor(p.status);
 
   const cols: Col[] = [{ text: `[${p.id}] ${p.status} — ${p.reason}`, w: plan.headlineW, color }];
   if (plan.sym) cols.push({ text: p.symbol, w: PROPOSAL_SYM_W, color: 'bold' });
   if (plan.kind) cols.push({ text: p.kind.replace(/_/g, ' '), w: PROPOSAL_KIND_W, color: 'gray-fg' });
   if (plan.age) {
     const remainingMs = p.expiresAt - m.now;
-    const text = !isOpenAction(p) ? g.dash : remainingMs > 0 ? f.duration(remainingMs) : 'due';
+    const text = !isPendingOrder(p) ? g.dash : remainingMs > 0 ? f.duration(remainingMs) : 'due';
     cols.push({ text, w: PROPOSAL_AGE_W, right: true, color: 'gray-fg' });
   }
   return packRow(f, width, cols);
@@ -1024,14 +1024,14 @@ export function renderEventsPanel(m: DashboardModel, width: number, height: numb
   if (width <= 0 || height <= 0) return [];
   const f = makeFormat(m.glyphs);
 
-  const actions = sortedActions(m.actions);
+  const actions = sortedOrders(m.actions);
   const lines: string[] = [];
 
   if (actions.length > 0 && height >= 2) {
     const budget = Math.min(1 + actions.length, height);
-    lines.push(sectionHeader(f, width, 'PROPOSALS', actions.length, actionLegend(width)));
+    lines.push(sectionHeader(f, width, 'PROPOSALS', actions.length, orderLegend(width)));
     lines.push(
-      ...listBody(f, width, budget - 1, actions, (p, w) => actionRow(m, f, p, w), 'nothing pending'),
+      ...listBody(f, width, budget - 1, actions, (p, w) => orderRow(m, f, p, w), 'nothing pending'),
     );
     if (height - lines.length >= 3) lines.push(' '.repeat(width));
   }

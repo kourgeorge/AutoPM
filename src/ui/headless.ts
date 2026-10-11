@@ -21,8 +21,8 @@ import { subscribeActivity } from '../core/storage';
 import { notifyAccount } from '../core/notifications';
 import { appendActivity, readActivity } from '../core/storage';
 import { AsyncLocalStorage } from 'async_hooks';
-import { decideAction } from '../core/actions';
-import type { Cycle, DailyUsage, Environment, EventRow, Lane, ActionRow, TickSnapshot } from './dashboard';
+import { decideOrder } from '../core/orders';
+import type { Cycle, DailyUsage, Environment, EventRow, Lane, OrderRow, TickSnapshot } from './dashboard';
 import { DECIDE_COMMAND, type LogLevel, type OperatorUI, type SlashCommand } from './surface';
 import type { ChartData } from './chart';
 import type { ToolCallDetails } from '../core/types';
@@ -57,7 +57,7 @@ export interface HeadlessSnapshot {
   tick: TickSnapshot | null;
   events: EventRow[];
   activity: EventRow[];
-  actions: ActionRow[];
+  actions: OrderRow[];
   usage?: DailyUsage;
 }
 
@@ -164,7 +164,7 @@ export class HeadlessUI implements OperatorUI {
     this.state.activity = eventLog;
   }
 
-  setActions(actions: ActionRow[]): void {
+  setOrders(actions: OrderRow[]): void {
     this.state.actions = actions;
   }
 
@@ -278,12 +278,12 @@ export class HeadlessUI implements OperatorUI {
 
   /**
    * Same as the terminal's `approve`/`reject`: a synchronous state change on the action store.
-   * `strategy/actionExecutor.ts` picks an approved action up on its own next tick.
+   * `strategy/orderExecutor.ts` picks an approved action up on its own next tick.
    * Throws on an unknown id or an illegal transition so the API can answer with an error.
    */
   decide(decision: 'approve' | 'reject', id: string, reason?: string, actorId = 'operator'): void {
     try {
-      const p = decideAction(id, decision, 'human', reason?.trim() || undefined, actorId);
+      const p = decideOrder(id, decision, 'human', reason?.trim() || undefined, actorId);
       this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
     } catch (err: any) {
       this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);

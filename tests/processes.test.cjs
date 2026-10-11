@@ -52,8 +52,8 @@ test('independent engine, web, and TUI share commands while clients never open s
   await until(async () => (await (await fetch(webUrl + '/api/status')).json()).health.paused, 'TUI pause did not reach web');
   assert.equal((await fetch(webUrl + '/api/commands/resume', { method: 'POST', headers: { origin: webUrl, 'content-type': 'application/json' }, body: '{}' })).status, 200);
   await until(() => terminal.messages.at(-1)?.lane?.state === 'sleeping', 'web resume did not reach TUI');
-  terminal.send({ type: 'input', value: `approve ${e.actionId}` });
-  await until(async () => (await (await fetch(webUrl + '/api/actions?status=all')).json()).actions.some(action => action.id === e.actionId && action.status === 'approved'), 'TUI approval did not reach engine');
+  terminal.send({ type: 'input', value: `approve ${e.orderId}` });
+  await until(async () => (await (await fetch(webUrl + '/api/orders?status=all')).json()).orders.some(action => action.id === e.orderId && action.status === 'approved'), 'TUI approval did not reach engine');
 
   // A second engine must fail before opening storage, even with a different port.
   const duplicate = spawnSync(process.execPath, ['-r', 'ts-node/register', 'src/daemon.ts'], {

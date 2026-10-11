@@ -30,7 +30,7 @@ import {
   isAtMaxPositions,
 } from './riskManager';
 import { automationLevel } from '../core/automation';
-import { createAction } from '../core/actions';
+import { createOrder } from '../core/orders';
 import { config } from '../core/config';
 import { hasRiskProfile } from '../policy/riskProfiles';
 import { assessEntryRisk, entryLimitPrice, type RiskAssessment } from './riskBudget';
@@ -334,9 +334,9 @@ export interface ValidatedEntry {
   reason: string;
 }
 
-export type SubmittedEntry = { status: 'submitted'; orderId: string; qty: number };
+export type SubmittedEntry = { status: 'submitted'; brokerOrderId: string; qty: number };
 
-export type QueuedAction = { status: import('../state/state').ActionStatus; actionId: string; automatic: boolean };
+export type QueuedOrder = { status: import('../state/state').OrderStatus; orderId: string; automatic: boolean };
 
 /**
  * The guard chain, unchanged from before the automation split — every `reject()` call below
@@ -512,17 +512,17 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
 export async function actEntry(v: ValidatedEntry, clientOrderId?: string): Promise<SubmittedEntry> {
   const { id } = await guardedBroker().placeOrder({ symbol: v.symbol, side: 'buy', qty: v.regimeQty,
     type: 'limit', limitPrice: v.price, timeInForce: 'ioc', clientOrderId });
-  return { status: 'submitted', orderId: id, qty: v.regimeQty };
+  return { status: 'submitted', brokerOrderId: id, qty: v.regimeQty };
 }
 
-export async function enterPosition(signal: SignalResult, qty: number, eventId?: string): Promise<QueuedAction> {
+export async function enterPosition(signal: SignalResult, qty: number, eventId?: string): Promise<QueuedOrder> {
   const validated = await validateEntry(signal, qty);
   const automatic = automationLevel('entry') === 'auto';
-  const action = createAction({ kind: 'entry', symbol: validated.symbol, venue: config.venue,
+  const action = createOrder({ kind: 'entry', symbol: validated.symbol, venue: config.venue,
     automatic, params: { signal, qty, maxQty: validated.regimeQty, price: signal.price,
       stopLoss: signal.stopLoss, takeProfit: signal.takeProfit, riskAssessment: validated.riskAssessment }, reason: signal.reason, eventId,
     timeoutMs: getPolicy().automation.timeoutMs });
-  return { status: action.status, actionId: action.id, automatic: action.automatic ?? false };
+  return { status: action.status, orderId: action.id, automatic: action.automatic ?? false };
 }
 
 /**
@@ -603,7 +603,7 @@ export interface ValidatedExit {
   pnl: number | null;
 }
 
-export type ExitedPosition = { status: 'submitted'; orderId: string; cancelled: string[]; qty: number };
+export type ExitedPosition = { status: 'submitted'; brokerOrderId: string; cancelled: string[]; qty: number };
 
 
 export async function validateExit(symbol: string, qty?: number): Promise<ValidatedExit> {
@@ -718,25 +718,25 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
     }
 
     logger.trade(`Exit order ${id} submitted for ${symbol}`);
-    return { status: 'submitted', orderId: id, cancelled, qty: sellQty };
+    return { status: 'submitted', brokerOrderId: id, cancelled, qty: sellQty };
   });
 }
 
 /**
  * When the automation level for `exit` is `manual`, this validates and then STOPS — it creates
  * an action and returns `pending` immediately, WITHOUT cancelling the resting stop/take-profit
- * pair or touching the venue. A human's `approve <id>` is picked up by `actionExecutor.ts`'s
- * `sweepActions()` on a later tick, which re-validates against the position as it stands at
+ * pair or touching the venue. A human's `approve <id>` is picked up by `orderExecutor.ts`'s
+ * `sweepOrders()` on a later tick, which re-validates against the position as it stands at
  * that moment and only then calls `actExit` — the point in the code where cancellation happens,
  * unchanged from before this split.
  */
-export async function exitPosition(symbol: string, reason: string, qty?: number, eventId?: string, observationIds?: string[]): Promise<QueuedAction> {
+export async function exitPosition(symbol: string, reason: string, qty?: number, eventId?: string, observationIds?: string[]): Promise<QueuedOrder> {
   const validated = await validateExit(symbol, qty);
   const automatic = automationLevel('exit') === 'auto';
-  const action = createAction({ kind: 'exit', symbol, venue: config.venue, reason, eventId, automatic,
+  const action = createOrder({ kind: 'exit', symbol, venue: config.venue, reason, eventId, automatic,
     params: { qty: validated.sellQty, price: validated.price, pnl: validated.pnl, observationIds },
     timeoutMs: getPolicy().automation.timeoutMs });
-  return { status: action.status, actionId: action.id, automatic: action.automatic ?? false };
+  return { status: action.status, orderId: action.id, automatic: action.automatic ?? false };
 }
 
 function guardedBroker() { assertExecutionOwner(); return broker; }

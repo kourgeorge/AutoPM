@@ -5,7 +5,7 @@ let commands = [], commandMatches = [], commandIndex = 0, commandDismissed = fal
 let stream = null, awaitingReply = 0, view = 'live';
 let aiSettingsLoaded = false, aiSettingsSaving = false;
 let conversationClearKey = null, conversationClearedThrough = 0;
-const openActionDetails = new Set(), lastPrices = new Map();
+const pendingOrderDetails = new Set(), lastPrices = new Map();
 const messageInput = $('message-text');
 const riskFractions = ['positionSizePct','maxDailyLossPct','maxGrossExposurePct'];
 const riskNumbers = ['maxPositions','stopLossAtrMult','maxSingleWeightPct','maxSectorWeightPct'];
@@ -407,7 +407,7 @@ async function refresh() {
   refreshing = true;
   try {
     const review = view === 'review';
-    const [s,p,o,a,e,f,c,l,sc,w] = await Promise.all([api('status'),api('positions'),api('orders'),api('actions?status=all'),api('equity-history'),api(`feed?after=${cursor}&limit=200`),
+    const [s,p,o,a,e,f,c,l,sc,w] = await Promise.all([api('status'),api('positions'),api('broker-orders'),api('orders?status=all'),api('equity-history'),api(`feed?after=${cursor}&limit=200`),
       review ? api('agent-commands') : null, review ? api('lessons') : null, review ? api('scorecard' + ($('score-days').value ? '?days=' + $('score-days').value : '')) : null,
       api('watchlist').catch(()=>({watchlist:[],lastTickAt:null,error:'Watchlist unavailable'}))]);
     status = s;
@@ -426,7 +426,7 @@ async function refresh() {
     }
     rows('orders',o.orders||[],v=>[v.symbol,`${v.side} / ${v.type}`,v.qty,v.filled,v.stopPrice||v.limitPrice||'Market',v.status,v.id]);
     $('orders-status').textContent=o.available?(o.orders.length?'Orders reported by the broker.':'No open broker orders.'):'Broker orders are unavailable.';
-    renderActions(a.actions);
+    renderOrders(a.orders);
     if (review) { renderRequests(c.commands); renderLessons(l.lessons); renderScorecard(sc); }
     if (view === 'activity') await loadHistory();
   } finally {
@@ -701,7 +701,7 @@ $('chart-trend').onclick=()=>{tickerChart.mode='trend';drawTickerChart();};
 $('ticker-interval').onchange=loadTickerChart;
 $('refresh-ticker-chart').onclick=loadTickerChart;
 
-function actionDetails(card, p, includeReason = false) {
+function orderDetails(card, p, includeReason = false) {
   const body = text('div', '', 'action-detail');
   const signal = p.params.signal || p.params, facts = text('dl', '', 'action-facts');
   for (const [label, value] of [
@@ -717,7 +717,7 @@ function actionDetails(card, p, includeReason = false) {
   const created = recordTime(p.createdAt);created.title = `Created: ${historyDate(p.createdAt)}`;
   references.append(created);
   if (p.status === 'pending' || p.status === 'approved') references.append(text('span', `Expires ${historyDate(p.expiresAt)}`));
-  const id = text('code', p.id);id.title = 'Action ID';references.append(id);
+  const id = text('code', p.id);id.title = 'Order ID';references.append(id);
   body.append(references);
   if (includeReason) body.append(text('p', p.reason, 'action-rationale'));
   const risk = p.params.riskAssessment;
@@ -728,19 +728,19 @@ function actionDetails(card, p, includeReason = false) {
   if (p.result?.error) body.append(text('p', p.result.error, 'down'));
   card.append(body);
 }
-function renderActions(actions) {
+function renderOrders(actions) {
   const pending = actions.filter(p => p.status === 'pending'), recent = actions.filter(p => p.status !== 'pending').slice(0, 25);
   $('action-count').textContent = `${pending.length} pending`;
   $('action-count').classList.toggle('has-pending', pending.length > 0);
   const cards = pending.map(p => {
     const card = text('article', '', 'card attention');
     card.append(text('span', 'Needs your decision', 'badge pending'), text('h3', `${p.kind.replaceAll('_',' ')} · ${p.symbol}`), text('p', p.reason));
-    actionDetails(card, p);
+    orderDetails(card, p);
     const buttons = text('div', '', 'actions');
     for (const decision of ['approve','reject']) {
-      const b = text('button', decision === 'approve' ? 'Approve action' : 'Reject', decision === 'approve' ? 'primary' : '');
+      const b = text('button', decision === 'approve' ? 'Approve order' : 'Reject', decision === 'approve' ? 'primary' : '');
       b.disabled = p.expiresAt <= Date.now();
-      b.onclick = attempt(async () => { await api(`actions/${p.id}/${decision}`, {}); await refresh(); });
+      b.onclick = attempt(async () => { await api(`orders/${p.id}/${decision}`, {}); await refresh(); });
       buttons.append(b);
     }
     card.append(buttons);
@@ -749,12 +749,12 @@ function renderActions(actions) {
   const timeline = text('ol', '', 'timeline');
   timeline.append(...recent.map(p => {
     const item = document.createElement('li'), details = document.createElement('details'), summary = document.createElement('summary');
-    details.open = openActionDetails.has(p.id);
-    details.ontoggle = () => details.open ? openActionDetails.add(p.id) : openActionDetails.delete(p.id);
+    details.open = pendingOrderDetails.has(p.id);
+    details.ontoggle = () => details.open ? pendingOrderDetails.add(p.id) : pendingOrderDetails.delete(p.id);
     const reason = text('span', p.reason, 'reason');reason.title = p.reason;
     summary.append(recordTime(p.createdAt), text('span', p.status, 'badge ' + p.status), text('strong', `${p.kind.replaceAll('_',' ')} · ${p.symbol}`), reason);
     details.append(summary);
-    actionDetails(details, p, true);
+    orderDetails(details, p, true);
     item.append(details);
     return item;
   }));
@@ -823,19 +823,19 @@ function historyDetail(entry) {
   }
   const details = text('div','','history-record');
   if (entry.transitions?.length) {
-    details.append(text('h3','Action timeline'));
+    details.append(text('h3','Order timeline'));
     const timeline = text('ol','','history-transitions');
     for (const event of entry.transitions) {
       const item = text('li','');
       item.append(text('time',historyDate(event.at)),text('strong',event.transition));
-      const { at, transition, actionId, symbol, ...changed } = event;
+      const { at, transition, orderId, symbol, ...changed } = event;
       if (Object.keys(changed).length) { const step = document.createElement('details'); step.append(text('summary','What changed at this step'),recordedFields(changed)); item.append(step); }
       timeline.append(item);
     }
     details.append(timeline);
   }
   details.append(text('h3',fill ? 'Broker fill' : 'Decision record'),recordedFields(record));
-  if (action) details.append(text('h3','Action & risk assessment'),recordedFields(action));
+  if (action) details.append(text('h3','Order & risk assessment'),recordedFields(action));
   card.append(details);
   return card;
 }
@@ -963,8 +963,8 @@ function renderRequests(list) {
     [recordTime(command.createdAt),roleLabel(command.role),command.actorId,text('span',taskProgress(command.status),'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
       const detail = text('div','','history-detail request-detail');
       detail.append(historyFacts([['Request',command.text],['Mode',taskMode(command)],['Outcome',command.result || 'No outcome recorded yet.']]));
-      detail.append(uiButton('Open request trail: tools, decisions, actions and fills',()=>openAgentTask(command.id)));
-      if (command.actionIds?.length) { const links = text('div','','record-links');links.append(text('span','Actions'),...command.actionIds.map(historyReference));detail.append(links); }
+      detail.append(uiButton('Open request trail: tools, decisions, orders and fills',()=>openAgentTask(command.id)));
+      if (command.orderIds?.length) { const links = text('div','','record-links');links.append(text('span','Orders'),...command.orderIds.map(historyReference));detail.append(links); }
       const references = text('div','','request-references');
       references.append(text('span',historyDate(command.createdAt)),text('span',`ID ${command.id}`));
       if (command.parentId) references.append(uiButton(`Parent request ${command.parentId}`,()=>openAgentTask(command.parentId)));
@@ -1203,7 +1203,7 @@ $('settings').onsubmit=attempt(async()=>{
   if(!changes.length){notice('No changes to save.',true);return;}
   pendingStrategy={policy:p,playbook:f.playbook.value,expectedHash:strategy.hash};$('review-text').textContent=changes.join('\n');$('review').showModal();
 });
-$('review').onclose=attempt(async()=>{if($('review').returnValue!=='save')return;await api('strategy',pendingStrategy);await loadStrategy();notice('Strategy saved. Older approved actions will require a fresh action.',true);});
+$('review').onclose=attempt(async()=>{if($('review').returnValue!=='save')return;await api('strategy',pendingStrategy);await loadStrategy();notice('Strategy saved. Older approved orders will require a fresh order.',true);});
 
 $('pause').onclick=attempt(async()=>{await api('commands/'+(status.health.paused?'resume':'pause'),{});await refresh();});
 $('reconcile').onclick=attempt(async()=>{await api('reconcile',{});notice('Broker outcomes checked.',true);await refresh();});
@@ -1219,7 +1219,7 @@ $('protection').onsubmit=attempt(async()=>{const f=$('protection').elements;awai
 let reviewSymbol = '', reviewLoad = 0, inspectorLoad = 0, reviewSubmitting = false, reviewLoading = false, positionTab = 'assessment';
 const savedTime = at => at != null && at !== '' && Number.isFinite(new Date(at).getTime()) ? historyDate(at) : 'Not recorded';
 const reviewDue = at => at && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.now();
-const taskProgress = value => ({queued:'Queued',running:'Working',waiting:'Waiting for actions',completed:'Finished',failed:'Failed',interrupted:'Interrupted · awaiting retry',cancelled:'Cancelled'})[value] || value;
+const taskProgress = value => ({queued:'Queued',running:'Working',waiting:'Waiting for orders',completed:'Finished',failed:'Failed',interrupted:'Interrupted · awaiting retry',cancelled:'Cancelled'})[value] || value;
 function uiButton(label, onClick, cls = 'link') {
   const button = text('button',label,cls);button.type='button';button.onclick=onClick;return button;
 }
@@ -1332,7 +1332,7 @@ function renderPositionReview(data) {
   if(data.held===true && !data.managed)controls.append(uiButton('Adopt holding',()=>{
     $('position-review-dialog').close();$('adopt-form').elements.symbol.value=data.symbol;$('adopt').showModal();
   },''));
-  const overviewActions=text('div','','position-overview-actions');overviewActions.append(flags,controls);summary.append(overviewActions);
+  const overviewOrders=text('div','','position-overview-actions');overviewOrders.append(flags,controls);summary.append(overviewOrders);
   if(data.managed && !holding)summary.append(text('p','A saved AutoTrade management record exists; current holdings remain unverified.','review-meta'));
   const latest=reviewSection(panels.assessment,'Latest assessment');
   if (assessment) {
@@ -1454,14 +1454,14 @@ async function openAgentTask(id) {
     if(data.totals.decisions>data.decisions.length)decisions.append(text('p',`Showing the latest ${data.decisions.length} decisions.`));
     if(!data.decisions.length)decisions.append(text('p','No journal decisions linked to this request. Candidate assessments can be found in the review tool’s saved output.'));
     for(const d of data.decisions){const card=text('article','','review-card');card.append(text('h4',`${d.symbol || 'Portfolio'} · ${d.kind} · ${d.orderStatus || 'Recorded decision'}`),text('p',savedTime(d.at),'review-meta'),text('p',d.rationale),decisionLink(d.id));evidenceLinks(card,d.observationIds,'Saved observations',id);decisions.append(card);}
-    const actions=reviewSection(parent,`Trading actions (${data.actions.length})`);
-    if(!data.actions.length)actions.append(text('p','No trading actions linked to this request.'));
-    for(const a of data.actions){const card=text('article','','review-card');card.append(text('h4',`${a.symbol} · ${a.kind} · ${a.status}`));actionDetails(card,a,true);card.append(decisionLink(a.id));actions.append(card);}
-    if(data.transitions?.length){const history=document.createElement('details');history.append(text('summary',`Action progress history (${data.totals.transitions})`));if(data.totals.transitions>data.transitions.length)history.append(text('p',`Showing the latest ${data.transitions.length} transitions.`));for(const event of data.transitions)history.append(text('p',`${savedTime(event.at)} · ${event.symbol} · ${event.transition} · ${event.actionId}`));actions.append(history);}
+    const actions=reviewSection(parent,`Orders (${data.orders.length})`);
+    if(!data.orders.length)actions.append(text('p','No orders linked to this request.'));
+    for(const a of data.orders){const card=text('article','','review-card');card.append(text('h4',`${a.symbol} · ${a.kind} · ${a.status}`));orderDetails(card,a,true);card.append(decisionLink(a.id));actions.append(card);}
+    if(data.transitions?.length){const history=document.createElement('details');history.append(text('summary',`Order progress history (${data.totals.transitions})`));if(data.totals.transitions>data.transitions.length)history.append(text('p',`Showing the latest ${data.transitions.length} transitions.`));for(const event of data.transitions)history.append(text('p',`${savedTime(event.at)} · ${event.symbol} · ${event.transition} · ${event.orderId}`));actions.append(history);}
     const fills=reviewSection(parent,`Confirmed broker fills (${data.totals.fills})`);
     if(data.totals.fills>data.fills.length)fills.append(text('p',`Showing the latest ${data.fills.length} fills.`));
     if(!data.fills.length)fills.append(text('p','No confirmed fills linked to this request’s orders.'));
-    for(const f of data.fills)fills.append(historyFacts([['Symbol / side',`${f.symbol} / ${f.side}`],['Executed',savedTime(f.at)],['Shares',historyNumber(f.qty)],['Price',historyPrice(f.price)],['Broker order',f.orderId],['Execution ID',f.execId]]));
+    for(const f of data.fills)fills.append(historyFacts([['Symbol / side',`${f.symbol} / ${f.side}`],['Executed',savedTime(f.at)],['Shares',historyNumber(f.qty)],['Price',historyPrice(f.price)],['Broker order',f.brokerOrderId],['Execution ID',f.execId]]));
     if(data.children.length){const children=reviewSection(parent,'Related agent requests');for(const child of data.children)children.append(uiButton(`${child.role} · ${taskProgress(child.status)} · ${child.text}`,()=>openAgentTask(child.id)));}
     parent.append(uiButton('Refresh saved request trail',()=>openAgentTask(id),''));
   }catch(error){if(token===inspectorLoad)parent.replaceChildren(text('p',`Request trail unavailable: ${error.message}`));}

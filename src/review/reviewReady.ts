@@ -82,7 +82,7 @@ function backfillMissingExits(fresh: TradeOutcome[]): void {
       executed: true,
       qty: o.qty,
       price: o.exitPrice,
-      orderId: o.exitOrderIds[0] ?? null,
+      brokerOrderId: o.exitOrderIds[0] ?? null,
       pnl: o.grossPnL,
       rationale,
     }));

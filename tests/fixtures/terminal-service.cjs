@@ -5,7 +5,7 @@ const uiModule = require.resolve('../../src/ui/ui');
 const report = () => {
   const ui = require.cache[uiModule]?.exports.ui;
   if (!ui) return;
-  const forbidden = Object.keys(require.cache).filter(file => /\/src\/(broker\/|core\/(storage|config)\.|agents\/|strategy\/(adopt|executionLoop|actionExecutor|stopOrders|protectionIntent)\.)/.test(file));
+  const forbidden = Object.keys(require.cache).filter(file => /\/src\/(broker\/|core\/(storage|config)\.|agents\/|strategy\/(adopt|executionLoop|orderExecutor|stopOrders|protectionIntent)\.)/.test(file));
   process.send?.({ state: true, env: ui.env, lane: ui.traderLane, forbidden });
 };
 const timer = setInterval(report, 100); timer.unref();

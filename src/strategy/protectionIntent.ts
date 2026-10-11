@@ -6,7 +6,7 @@ import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { getState, patchPositionSnapshot, updateState } from '../state/state';
 import { broker } from '../broker';
 import { assertExecutionOwner } from '../core/runtime';
-import { getOpenActions, transitionAction } from '../core/actions';
+import { pendingOrders, transitionOrder } from '../core/orders';
 
 interface ProtectionIntent {
   id: string; symbol: string; at: string; stop: number; target?: number;
@@ -55,12 +55,12 @@ export function recentlyConfirmedIntent(symbol: string, now = Date.now()): Prote
   const intent = protectionIntents()[canonicalSymbol(symbol)];
   return intent?.status === 'confirmed' && now - Date.parse(intent.at) < VANISHED_WINDOW_MS ? intent : undefined;
 }
-export function flagVanishedProtection(symbol: string, orderId: string): void {
+export function flagVanishedProtection(symbol: string, brokerOrderId: string): void {
   const intent = protectionIntents()[canonicalSymbol(symbol)];
   if (!intent) return;
-  save({ ...intent, status: 'unknown', error: `order ${orderId} disappeared from the broker within minutes of being placed` });
+  save({ ...intent, status: 'unknown', error: `order ${brokerOrderId} disappeared from the broker within minutes of being placed` });
   updateState({ paused: true });
-  notifyAccount('protection_unknown', `${symbol}: protective order ${orderId} vanished right after it was placed. Trading is paused; check the broker's orders before resuming.`);
+  notifyAccount('protection_unknown', `${symbol}: protective order ${brokerOrderId} vanished right after it was placed. Trading is paused; check the broker's orders before resuming.`);
 }
 
 /**
@@ -86,7 +86,7 @@ export async function clearUnplacedProtection(symbol: string, actorId: string): 
 
 /** A human can relink a confirmed broker stop after reviewing an interrupted request. */
 export async function confirmProtection(symbol: string, stopId: string, targetId: string | undefined, actorId: string): Promise<void> {
-  const adjustment = getOpenActions().find(p => p.status === 'unknown' && ['stop_adjust','target_adjust'].includes(p.kind) && sameSymbol(p.symbol, symbol));
+  const adjustment = pendingOrders().find(p => p.status === 'unknown' && ['stop_adjust','target_adjust'].includes(p.kind) && sameSymbol(p.symbol, symbol));
   const intent = protectionIntents()[canonicalSymbol(symbol)] ?? (adjustment ? {
     id: adjustment.id, symbol, at: new Date(adjustment.createdAt).toISOString(),
     stop: Number(adjustment.params.stopLoss), target: getState().positionSnapshots[canonicalSymbol(symbol)]?.takeProfitLevel,
@@ -106,7 +106,7 @@ export async function confirmProtection(symbol: string, stopId: string, targetId
   transaction(() => {
     patchPositionSnapshot(symbol, { stopOrderId: stop.id, takeProfitOrderId: target?.id, stopLevel: intent.stop, takeProfitLevel: intent.target });
     save({ ...intent, status: 'confirmed', error: undefined });
-    if (adjustment && Number(adjustment.params.stopLoss) === intent.stop) transitionAction(adjustment.id, 'executed', { actorId, result: {} });
+    if (adjustment && Number(adjustment.params.stopLoss) === intent.stop) transitionOrder(adjustment.id, 'executed', { actorId, result: {} });
     recordOperatorCommand(actorId, 'confirm_protection', { stopId, targetId }, symbol);
   });
 }

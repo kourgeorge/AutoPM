@@ -81,13 +81,13 @@ interface Leg {
   firstAt: string;
   /** Last fill in the leg. */
   lastAt: string;
-  orderIds: Set<string>;
+  brokerOrderIds: Set<string>;
 }
 
 function emptyLeg(): Leg {
   return {
     qty: 0, notional: 0, fees: 0, feesComplete: true,
-    firstAt: '', lastAt: '', orderIds: new Set(),
+    firstAt: '', lastAt: '', brokerOrderIds: new Set(),
   };
 }
 
@@ -102,7 +102,7 @@ function absorb(leg: Leg, fill: Fill, qty: number): void {
   // timestamp of the last scale-in, which shortened `holdingMs` by the whole accumulation.
   if (leg.firstAt === '') leg.firstAt = fill.at;
   leg.lastAt = fill.at;
-  leg.orderIds.add(fill.orderId);
+  leg.brokerOrderIds.add(fill.brokerOrderId);
 }
 
 /**
@@ -197,21 +197,21 @@ export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): T
 }
 
 /**
- * `orderId` -> the decision that placed it.
+ * `brokerOrderId` -> the decision that placed it.
  *
  * Only executed entries and exits are indexed. Vetoes and rejections never reached a venue
  * and so have no fills to join to; they are read straight from the journal, which is the
  * only place they exist at all.
  *
- * IBKR's `orderId` is documented as not unique to an account and is reused across client
+ * IBKR's `brokerOrderId` is documented as not unique to an account and is reused across client
  * sessions, so the LAST decision to claim an id wins — the recent session is the one whose
  * fills are being matched.
  */
 function indexJournal(records: DecisionRecord[]): Map<string, DecisionRecord> {
   const index = new Map<string, DecisionRecord>();
   for (const r of records) {
-    if (r.orderId && r.executed && (r.kind === 'entry' || r.kind === 'exit')) {
-      index.set(`${r.kind}:${r.orderId}`, r);
+    if (r.brokerOrderId && r.executed && (r.kind === 'entry' || r.kind === 'exit')) {
+      index.set(`${r.kind}:${r.brokerOrderId}`, r);
     }
   }
   return index;
@@ -231,8 +231,8 @@ function assemble(
   const exitPrice = exit.notional / exit.qty;
   const grossPnL = (exitPrice - entryPrice) * qty;
 
-  const entryOrderIds = [...entry.orderIds];
-  const exitOrderIds = [...exit.orderIds];
+  const entryOrderIds = [...entry.brokerOrderIds];
+  const exitOrderIds = [...exit.brokerOrderIds];
   const entryDecision = firstMatch(journal, 'entry', entryOrderIds);
   const exitDecision = firstMatch(journal, 'exit', exitOrderIds);
 
@@ -271,9 +271,9 @@ function assemble(
 function firstMatch(
   journal: Map<string, DecisionRecord>,
   kind: 'entry' | 'exit',
-  orderIds: string[],
+  brokerOrderIds: string[],
 ): DecisionRecord | undefined {
-  for (const id of orderIds) {
+  for (const id of brokerOrderIds) {
     const hit = journal.get(`${kind}:${id}`);
     if (hit) return hit;
   }

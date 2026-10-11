@@ -17,13 +17,13 @@ import { isPresent } from '../collect/types';
 import type { Timeframe } from '../collect/yahoo';
 import { confirmProtection, clearUnplacedProtection } from '../strategy/protectionIntent';
 import { adoptHolding, AdoptRefused } from '../strategy/adopt';
-import { sweepActions } from '../strategy/actionExecutor';
+import { sweepOrders } from '../strategy/orderExecutor';
 import http from 'http';
 import { URL } from 'url';
 import { config } from '../core/config';
 import { logger } from '../core/logger';
 import { automationSummary } from '../core/automation';
-import { getAllActions, getOpenActions } from '../core/actions';
+import { listOrders, pendingOrders } from '../core/orders';
 import { getLastTick } from '../features/lastTick';
 import { scorecard } from '../review/metrics';
 import { activityHistory, savedPositionContext, savedRequestDetails } from '../review/activity';
@@ -196,7 +196,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       ? listRecords<FeedEntry>('activity', { desc: true, limit: 200 }).reverse().map(r => ({ ...r.value, seq: r.seq }))
       : ui.feedAfter(after, 200);
     return { instanceId, snapshot: { ...ui.snapshot(), usage: modelUsage(), tick: getLastTick() ?? ui.snapshot().tick,
-      actions: getOpenActions() }, health: serviceStatus(), entries };
+      actions: pendingOrders() }, health: serviceStatus(), entries };
   });
 
   add('GET', '/api/status', () => {
@@ -215,7 +215,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       account: tick?.account ?? null,
       portfolio: tick?.portfolio ?? null,
       positionCount: tick && !tick.positionsStale ? Object.keys(tick.positions).length : null,
-      openActions: getOpenActions().length,
+      openActions: pendingOrders().length,
       pendingEvents: snap.events.length,
       policyVersion: tick?.policyVersion ?? null,
       lastTickAt: tick?.tickAt ?? null,
@@ -314,11 +314,11 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     };
   });
 
-  add('GET', '/api/actions', ({ url }) => {
+  add('GET', '/api/orders', ({ url }) => {
     const status = url.searchParams.get('status') ?? 'open';
     if (status !== 'open' && status !== 'all') throw new HttpError(400, 'status must be "open" or "all"');
-    const list = status === 'open' ? getOpenActions() : getAllActions();
-    return { actions: [...list].sort((a, b) => b.createdAt - a.createdAt) };
+    const list = status === 'open' ? pendingOrders() : listOrders();
+    return { orders: [...list].sort((a, b) => b.createdAt - a.createdAt) };
   });
 
   const decide = (decision: 'approve' | 'reject'): Handler => async ({ params, body }) => {
@@ -327,13 +327,13 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       ui.decide(decision, params.id, reason, OPERATOR);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      // `actions.ts` throws plain Errors; tell "not found" apart from "already decided".
-      throw new HttpError(/no such action/.test(msg) ? 404 : 409, msg);
+      // `orders.ts` throws plain Errors; tell "not found" apart from "already decided".
+      throw new HttpError(/no such order/.test(msg) ? 404 : 409, msg);
     }
-    return { action: getAllActions().find((p) => p.id === params.id) };
+    return { order: listOrders().find((p) => p.id === params.id) };
   };
-  add('POST', '/api/actions/:id/approve', decide('approve'));
-  add('POST', '/api/actions/:id/reject', decide('reject'));
+  add('POST', '/api/orders/:id/approve', decide('approve'));
+  add('POST', '/api/orders/:id/reject', decide('reject'));
 
   add('GET', '/api/notifications', () => ({ notifications: readRecords('notifications', 100) }));
   add('GET', '/api/activity-history', ({ url }) => {
@@ -428,7 +428,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     try { return saveStrategy(input.policy, String(input.expectedHash ?? ''), OPERATOR, input.playbook as string | undefined); }
     catch (err: any) { throw new HttpError(/changed/.test(err.message) ? 409 : 400, err.message); }
   });
-  add('GET', '/api/orders', () => {
+  add('GET', '/api/broker-orders', () => {
     const tick = getLastTick();
     return { available: !!tick && !tick.ordersStale, lastTickAt: tick?.tickAt, orders: tick && !tick.ordersStale ? tick.orders : null };
   });
@@ -450,7 +450,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     return { ok: true };
   });
 
-  add('POST', '/api/reconcile', async () => { await sweepActions(); return serviceStatus(); });
+  add('POST', '/api/reconcile', async () => { await sweepOrders(); return serviceStatus(); });
   return routes;
 }
 

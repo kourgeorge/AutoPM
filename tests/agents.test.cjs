@@ -24,7 +24,7 @@ model.createModelProvider = () => ({ chat: async () => { throw new Error('Set au
 const traderTools = from('tools/traderTools');
 const chartTools = from('tools/chartTools');
 const orders = from('strategy/orderManager');
-const actions = from('core/actions');
+const actions = from('core/orders');
 const journal = from('journal/journal');
 const lessons = from('journal/lessons');
 const events = from('features/eventBus');
@@ -229,13 +229,13 @@ test('critical observation remains open and acting requires a linked action', as
   const hit = { symbol: 'AAPL', cooldownKey: 'audit:stop', severity: 'critical', headline: 'Below stop', evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } };
   const [event] = events.processHits('stop_breach', [hit], p, tick);
   const bad = JSON.parse(await traderTools.executeTraderTool('ack_event', { id: event.id, disposition: 'acting' }));
-  assert.match(bad.error, /actionId/);
+  assert.match(bad.error, /orderId/);
   events.ackEvent(event.id, 'acknowledged', 'Observed');
   assert.equal(events.getPendingEvents().length, 1);
-  const action = actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'Below stop', params: { qty: 2 }, eventId: event.id, automatic: true, timeoutMs: 60000 });
+  const action = actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'Below stop', params: { qty: 2 }, eventId: event.id, automatic: true, timeoutMs: 60000 });
   events.ackEvent(event.id, 'acting', 'Exit queued', action.id);
-  assert.equal(events.getPendingEvents()[0].handling, 'action_pending');
-  actions.transitionAction(action.id, 'failed', { result: { error: 'Cannot execute' } });
+  assert.equal(events.getPendingEvents()[0].handling, 'order_pending');
+  actions.transitionOrder(action.id, 'failed', { result: { error: 'Cannot execute' } });
   assert.equal(events.getPendingEvents()[0].handling, 'observed');
   assert.equal(events.getPendingEvents()[0].ackedAt, null);
   assert.equal(storage.readRecords('alerts').find(e => e.id === event.id).handling, 'observed', 'event.jsonl records the handling');
@@ -262,12 +262,12 @@ test('a finished child request is an event for a trader parent and a chat reply 
 
 test('a repeated request reuses its action, and each status change adds a step to the action history', () => {
   const context = { role: 'trader', requestId: 'dedup-request', actorId: 'alice' };
-  const make = () => agentContext.run(context, () => actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
+  const make = () => agentContext.run(context, () => actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
   const first = make();
-  actions.decideAction(first.id, 'reject', 'human', 'Not now', 'alice');
+  actions.decideOrder(first.id, 'reject', 'human', 'Not now', 'alice');
   const again = make();
   assert.equal(again.id, first.id, 'the same request and intent resolve to the same action, even once it is closed');
-  const saved = actions.getAction(first.id);
+  const saved = actions.getOrder(first.id);
   assert.equal(saved.dedupKeys.length, 1);
   assert.deepEqual(saved.history.map(s => s.transition), ['created', 'rejected']);
   assert.equal(saved.history[1].rejectReason, 'Not now');
@@ -312,11 +312,11 @@ test('revised action quantities conflict and identical request identities surviv
   const common = { kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, automatic: true };
   const command = commands.enqueueRequest('trader', 'Exit one share', 'alice');
   agentContext.run({ role: 'trader', requestId: command.id, actorId: 'alice', toolCallId: 'attempt-one' }, () => {
-    const first = actions.createAction({ ...common, params: { qty: 1 } });
-    assert.throws(() => actions.createAction({ ...common, params: { qty: 10 } }), /Conflicting open action/);
-    actions.transitionAction(first.id, 'executing'); actions.transitionAction(first.id, 'executed');
-    assert.equal(actions.createAction({ ...common, params: { qty: 1 } }).id, first.id);
-    assert.equal(commands.getRequest(command.id).actionIds.length, 1);
+    const first = actions.createOrder({ ...common, params: { qty: 1 } });
+    assert.throws(() => actions.createOrder({ ...common, params: { qty: 10 } }), /Conflicting open action/);
+    actions.transitionOrder(first.id, 'executing'); actions.transitionOrder(first.id, 'executed');
+    assert.equal(actions.createOrder({ ...common, params: { qty: 1 } }).id, first.id);
+    assert.equal(commands.getRequest(command.id).orderIds.length, 1);
     assert.equal(first.requestedBy, 'alice');
   });
 });
@@ -324,12 +324,12 @@ test('revised action quantities conflict and identical request identities surviv
 test('restart recovers an action receipt saved before its tool result without rerunning a handler', async () => {
   const command = commands.enqueueRequest('trader', 'Exit AAPL', 'alice');
   const context = { role: 'trader', requestId: command.id, actorId: 'alice', toolCallId: command.id + ':1:0' };
-  agentContext.run(context, () => actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
+  agentContext.run(context, () => actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
   storage.saveRecord('transcripts', command.id, { id: command.id, messages: [{ role: 'user', content: [{ type: 'text', text: 'Exit AAPL' }] }, { role: 'assistant', content: toolResponse([['write', {}]]).content }], rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '' });
   let invoked = 0;
   const registry = new ToolRegistry([{ name: 'write', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { invoked++; return '{}'; });
   const turn = await runAgentLoop({ context, registry, provider: { chat: async request => {
-    assert.match(request.messages.at(-1).content[0].content, /actionId/); return textResponse();
+    assert.match(request.messages.at(-1).content[0].content, /orderId/); return textResponse();
   } }, messages: async () => { throw new Error('Should resume'); }, systemPrompt: '', maxRounds: 3, maxTokens: 100 });
   assert.equal(invoked, 0); assert.equal(turn.status, 'completed');
 });
@@ -416,7 +416,7 @@ test('research runs while trading is paused, without order or sleep tools, and r
   assert.ok(activity.some(e => e.kind === 'log' && e.source === 'researcher' && e.text === '[Research] BRK.B: wait for trend repair.'));
   assert.ok(!activity.some(e => e.kind === 'reply'), 'research from the dashboard is not a chat reply');
   assert.equal(researchStatus().queued, 0);
-  assert.equal(storage.listRecords('actions').length, 0);
+  assert.equal(storage.listRecords('orders').length, 0);
 });
 
 test('research asked for in chat posts its summary to the chat when it finishes', async () => {
@@ -498,14 +498,14 @@ test('stopping a turn during an awaited tool prevents a later local mutation', a
   const began = new Promise(resolve => { entered = resolve; });
   const registry = new ToolRegistry([{ name: 'write', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => {
     entered(); await waiting;
-    actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } });
+    actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } });
     return '{}';
   });
   const work = runAgentLoop({ context: { role: 'trader', requestId: 'cancelled', actorId: 'alice' }, registry, provider: { chat: async () => toolResponse([['write', {}]]) },
     messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100, signal: abort.signal });
   await began; abort.abort(); release();
   const result = await work;
-  assert.equal(result.status, 'interrupted'); assert.equal(actions.getAllActions().length, 0);
+  assert.equal(result.status, 'interrupted'); assert.equal(actions.listOrders().length, 0);
 });
 
 test('a model timeout fails the turn with a plain message instead of interrupting it', async () => {
@@ -531,10 +531,10 @@ test('restart honors saved truncation and terminal model responses', async () =>
 });
 
 test('legacy queued actions acquire a journal record before transitioning', () => {
-  const p = actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'legacy', timeoutMs: 60000, params: { qty: 1 } });
-  storage.deleteRecord('journal', 'action-' + p.id);
-  actions.decideAction(p.id, 'approve', 'human', undefined, 'alice');
-  assert.equal(journal.readDecision('action-' + p.id).orderStatus, 'approved');
+  const p = actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'legacy', timeoutMs: 60000, params: { qty: 1 } });
+  storage.deleteRecord('journal', 'order-' + p.id);
+  actions.decideOrder(p.id, 'approve', 'human', undefined, 'alice');
+  assert.equal(journal.readDecision('order-' + p.id).orderStatus, 'approved');
 });
 
 test('only full broker coverage is reported as confirmed journal protection', async () => {

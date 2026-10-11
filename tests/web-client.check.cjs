@@ -42,7 +42,7 @@ test('browser opened before its engine recovers commands, strategy and live even
     await page.locator('#message-text').fill('/pause ');
     await page.locator('#message-text').press('Enter');
     await expect(page.locator('#pause')).toHaveText('Resume trading');
-    await page.getByRole('button', { name: 'Approve action', exact: true }).click();
+    await page.getByRole('button', { name: 'Approve order', exact: true }).click();
     await expect(page.locator('#actions')).toContainText('approved');
   } finally {
     await browser?.close();

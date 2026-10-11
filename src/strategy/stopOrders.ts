@@ -21,7 +21,7 @@ import { assertExecutionOwner } from '../core/runtime';
  */
 
 import { broker } from '../broker';
-import { getOpenActions } from '../core/actions';
+import { pendingOrders } from '../core/orders';
 import type { OcoRequest, OpenOrder, OrderRequest, Position } from '../broker/IBroker';
 import { logger } from '../core/logger';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
@@ -380,7 +380,7 @@ export function isStopLocked(symbol: string): boolean {
 // ── Acting ────────────────────────────────────────────────────────────────────
 
 export type ArmResult =
-  | { ok: true; orderId: string }
+  | { ok: true; brokerOrderId: string }
   | { ok: false; reason: string };
 
 /** Place a durable protective stop. Record its broker ID before confirming the intent. */
@@ -396,7 +396,7 @@ export async function armStop(symbol: string, qty: number, stopLevel: number): P
       return placed;
     });
     logger.trade(`Stop armed for ${symbol}: ${qty} @ $${stopLevel} resting as ${id}`);
-    return { ok: true, orderId: id };
+    return { ok: true, brokerOrderId: id };
   } catch (err: any) {
     return { ok: false, reason: err?.venueMessage ?? err?.message ?? String(err) };
   }
@@ -415,7 +415,7 @@ export async function moveStopTo(
       try {
         const order = (await broker.getOpenOrders()).find(o => o.id === existingId && sameSymbol(o.symbol, symbol) && o.side === 'sell' && o.type === 'stop');
         if (!order) throw new Error('Recorded stop is not confirmed at the broker');
-        if (order.stopPrice === nextLevel) return { ok: true as const, orderId: existingId };
+        if (order.stopPrice === nextLevel) return { ok: true as const, brokerOrderId: existingId };
         const { id } = await protect(symbol, nextLevel, undefined, async () => {
           const placed = await guardedBroker().replaceStopOrder(existingId, nextLevel);
           patchPositionSnapshot(symbol, { stopOrderId: placed.id });
@@ -423,7 +423,7 @@ export async function moveStopTo(
         });
         patchPositionSnapshot(symbol, { stopOrderId: id });
         logger.trade(`Stop for ${symbol} moved to $${nextLevel} (order ${id})`);
-        return { ok: true as const, orderId: id };
+        return { ok: true as const, brokerOrderId: id };
       } catch (err: any) {
         // Restating a stop at the level it already rests at is how a thesis or an earnings
         // date gets recorded, and Alpaca refuses that no-op replace with "order parameters are
@@ -433,7 +433,7 @@ export async function moveStopTo(
         const venueText = String(err?.venueMessage ?? err?.message ?? '');
         if (/parameters are not changed/i.test(venueText)) {
           logger.info(`[Stops] ${symbol}: stop already rests at $${nextLevel} (order ${existingId}) — nothing to move`);
-          return { ok: true as const, orderId: existingId };
+          return { ok: true as const, brokerOrderId: existingId };
         }
         // The venue refused the move. The old stop may still be resting at the OLD level, so the
         // id is left alone rather than cleared — the sweep verifies it against the venue and
@@ -448,7 +448,7 @@ export async function moveStopTo(
     }
 
     const armed = await armStop(symbol, qty, nextLevel);
-    if (armed.ok) patchPositionSnapshot(symbol, { stopOrderId: armed.orderId });
+    if (armed.ok) patchPositionSnapshot(symbol, { stopOrderId: armed.brokerOrderId });
     return armed;
   });
 }
@@ -573,7 +573,7 @@ export async function sweepStops(): Promise<void> {
   }
 
   // An unconfirmed exit owns its reservation until reconciliation establishes the outcome.
-  const exiting = new Set(getOpenActions().filter(p => ['executing','submitted','partial','unknown'].includes(p.status)).map(p => canonicalSymbol(p.symbol)));
+  const exiting = new Set(pendingOrders().filter(p => ['executing','submitted','partial','unknown'].includes(p.status)).map(p => canonicalSymbol(p.symbol)));
   for (const [key, intent] of Object.entries(protectionIntents())) if (intent.status !== 'confirmed') exiting.add(key);
   positions = positions.filter(p => !exiting.has(canonicalSymbol(p.symbol)));
 
@@ -664,7 +664,7 @@ export async function sweepStops(): Promise<void> {
       armStop(candidate.symbol, candidate.qty, candidate.stopLevel));
 
     if (armed.ok) {
-      patchPositionSnapshot(candidate.symbol, { stopOrderId: armed.orderId });
+      patchPositionSnapshot(candidate.symbol, { stopOrderId: armed.brokerOrderId });
       lastFailure.delete(canonicalSymbol(candidate.symbol));
     } else {
       logFailureOnce(candidate.symbol, armed.reason);

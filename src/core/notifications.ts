@@ -2,12 +2,12 @@ import crypto from 'crypto';
 import { readValue, saveValue, appendRecord, transaction } from './storage';
 
 interface Notification {
-  id: string; at: string; type: string; message: string; actionId?: string;
+  id: string; at: string; type: string; message: string; orderId?: string;
   attempts: number; nextAttempt: number;
 }
 export function pendingNotifications(): Notification[] { return readValue('notificationOutbox') ?? []; }
-export function notifyAccount(type: string, message: string, actionId?: string): void {
-  const item: Notification = { id: crypto.randomUUID(), at: new Date().toISOString(), type, message, actionId, attempts: 0, nextAttempt: 0 };
+export function notifyAccount(type: string, message: string, orderId?: string): void {
+  const item: Notification = { id: crypto.randomUUID(), at: new Date().toISOString(), type, message, orderId, attempts: 0, nextAttempt: 0 };
   transaction(() => {
     appendRecord('notifications', item.id, item.at, item);
     // Delivery is opt-in. The durable activity record exists even without a destination.

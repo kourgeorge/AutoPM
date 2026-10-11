@@ -29,7 +29,7 @@ import { reconcileFills } from '../review/reconcile';
 import { publishReviewReady } from '../review/reviewReady';
 import { publishPortfolioReview } from '../review/scheduledReview';
 import { sweepStops } from '../strategy/stopOrders';
-import { sweepActions } from '../strategy/actionExecutor';
+import { sweepOrders } from '../strategy/orderExecutor';
 import { collectAndCompute, type TickData } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, releaseAllLatches, type Detector, type TriggerEvent } from './eventBus';

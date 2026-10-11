@@ -53,13 +53,13 @@ import { useEphemeralLessons } from '../journal/lessons';
 import type { DecisionRecord } from '../journal/types';
 import { useEphemeralFillsLedger } from '../review/fills';
 import {
-  createAction,
-  decideAction,
-  getOpenActions,
-  getAction,
-  transitionAction,
-} from '../core/actions';
-import { sweepActions } from '../strategy/actionExecutor';
+  createOrder,
+  decideOrder,
+  pendingOrders,
+  getOrder,
+  transitionOrder,
+} from '../core/orders';
+import { sweepOrders } from '../strategy/orderExecutor';
 import { getPolicy, parsePolicy, readPolicyText } from '../policy/load';
 import type { Policy } from '../policy/types';
 import { crossedAbove, ema, rsi } from '../strategy/indicators';
@@ -111,9 +111,9 @@ useEphemeralLessons();
 // No scenario should splice a synthetic entry into the operator's real event history —
 // same reasoning, one file over.
 useEphemeralAlertLog();
-// Same reasoning again: a manual-path scenario creates and transitions real `Action`
+// Same reasoning again: a manual-path scenario creates and transitions real `Order`
 // objects, and the audit trail for those must not land in the operator's real
-// `data/actions.jsonl`.
+// `data/orders.jsonl`.
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -878,7 +878,7 @@ function journalSeam(): void {
     kind: 'entry', actor: 'trader', symbol: 'REPLAY',
     triggerEventId: null, rationale: 'replay harness — must never reach disk',
     executed: true, qty: 1, price: 1, intendedStop: 0.9, intendedTarget: 1.2,
-    atrAtEntry: 0.05, orderId: null, vetoRule: null, venueMessage: null,
+    atrAtEntry: 0.05, brokerOrderId: null, vetoRule: null, venueMessage: null,
     venueStopId: null, venueStopMissing: null, pnl: null,
     policyVersion: getPolicy().version,
   });
@@ -2221,15 +2221,15 @@ function concentrationSingleBreach(): void {
 }
 
 /**
- * 31. Action lifecycle — pending, approved/rejected, and the illegal moves that must throw.
+ * 31. Order lifecycle — pending, approved/rejected, and the illegal moves that must throw.
  *
- * Exercises `core/actions.ts` directly: no broker, no venue call. The `transitionAction(...,
+ * Exercises `core/orders.ts` directly: no broker, no venue call. The `transitionOrder(...,
  * 'executed', ...)` call below stands in for what the real executor's act step would record
  * after a successful `actEntry`/`actAnnotation` — calling those for real would need a broker,
  * which this harness never touches.
  */
-function actionLifecycle(): void {
-  const toReject = createAction({
+function orderLifecycle(): void {
+  const toReject = createOrder({
     kind: 'entry',
     symbol: 'AAPL',
     venue: 'paper',
@@ -2238,10 +2238,10 @@ function actionLifecycle(): void {
     timeoutMs: 60_000,
   });
   check('a fresh action is pending', toReject.status === 'pending');
-  check('a fresh action is visible via getAction', getAction(toReject.id)?.id === toReject.id);
-  check('a fresh action is open', getOpenActions().some((p) => p.id === toReject.id));
+  check('a fresh action is visible via getOrder', getOrder(toReject.id)?.id === toReject.id);
+  check('a fresh action is open', pendingOrders().some((p) => p.id === toReject.id));
 
-  const toApprove = createAction({
+  const toApprove = createOrder({
     kind: 'stop_adjust',
     symbol: 'MSFT',
     venue: 'paper',
@@ -2250,30 +2250,30 @@ function actionLifecycle(): void {
     timeoutMs: 60_000,
   });
 
-  decideAction(toReject.id, 'reject', 'human', 'not now');
-  const afterReject = getAction(toReject.id);
+  decideOrder(toReject.id, 'reject', 'human', 'not now');
+  const afterReject = getOrder(toReject.id);
   check('rejecting moves the action to rejected', afterReject?.status === 'rejected');
   check('the reject reason is recorded', afterReject?.rejectReason === 'not now');
-  check('a rejected action is no longer open', !getOpenActions().some((p) => p.id === toReject.id));
+  check('a rejected action is no longer open', !pendingOrders().some((p) => p.id === toReject.id));
 
-  decideAction(toApprove.id, 'approve', 'human');
-  const afterApprove = getAction(toApprove.id);
+  decideOrder(toApprove.id, 'approve', 'human');
+  const afterApprove = getOrder(toApprove.id);
   check('approving moves the action to approved', afterApprove?.status === 'approved');
   check(
     'an approved-but-unexecuted action is still open',
-    getOpenActions().some((p) => p.id === toApprove.id),
+    pendingOrders().some((p) => p.id === toApprove.id),
   );
 
-  transitionAction(toApprove.id, 'executing');
-  transitionAction(toApprove.id, 'submitted', { result: { orderId: 'sim-1' } });
-  transitionAction(toApprove.id, 'executed', { result: { orderId: 'sim-1' } });
-  const afterExecute = getAction(toApprove.id);
+  transitionOrder(toApprove.id, 'executing');
+  transitionOrder(toApprove.id, 'submitted', { result: { brokerOrderId: 'sim-1' } });
+  transitionOrder(toApprove.id, 'executed', { result: { brokerOrderId: 'sim-1' } });
+  const afterExecute = getOrder(toApprove.id);
   check('executing moves the action to executed', afterExecute?.status === 'executed');
-  check('an executed action is no longer open', !getOpenActions().some((p) => p.id === toApprove.id));
+  check('an executed action is no longer open', !pendingOrders().some((p) => p.id === toApprove.id));
 
   let threwOnExecutedApprove = false;
   try {
-    transitionAction(toApprove.id, 'approved');
+    transitionOrder(toApprove.id, 'approved');
   } catch {
     threwOnExecutedApprove = true;
   }
@@ -2281,7 +2281,7 @@ function actionLifecycle(): void {
 
   let threwOnRejectedApprove = false;
   try {
-    transitionAction(toReject.id, 'approved');
+    transitionOrder(toReject.id, 'approved');
   } catch {
     threwOnRejectedApprove = true;
   }
@@ -2289,13 +2289,13 @@ function actionLifecycle(): void {
 }
 
 /**
- * 32. Action timeout — the default policy's onTimeout:deny expires a stale action
+ * 32. Order timeout — the default policy's onTimeout:deny expires a stale action
  * without ever reaching the venue. Deliberately not testing onTimeout:allow: that path falls
- * through to sweepActions()'s second, broker-touching pass in the SAME call, which this
+ * through to sweepOrders()'s second, broker-touching pass in the SAME call, which this
  * no-broker harness must never run.
  */
-async function actionTimeout(): Promise<void> {
-  const stale = createAction({
+async function orderTimeout(): Promise<void> {
+  const stale = createOrder({
     kind: 'exit',
     symbol: 'TSLA',
     venue: 'paper',
@@ -2305,15 +2305,15 @@ async function actionTimeout(): Promise<void> {
   });
   check(
     'an action with a past deadline is still pending until swept',
-    getAction(stale.id)?.status === 'pending',
+    getOrder(stale.id)?.status === 'pending',
   );
 
-  await sweepActions();
+  await sweepOrders();
 
-  const after = getAction(stale.id);
+  const after = getOrder(stale.id);
   check('the default policy onTimeout:deny expires a stale action', after?.status === 'expired');
   check('the expiry is attributed to the timeout, not a human', after?.decidedBy === 'timeout');
-  check('an expired action is no longer open', !getOpenActions().some((p) => p.id === stale.id));
+  check('an expired action is no longer open', !pendingOrders().some((p) => p.id === stale.id));
 }
 
 async function main(): Promise<void> {
@@ -2387,14 +2387,14 @@ async function main(): Promise<void> {
   await scenario('29. Concentration — a single name alone breaching the limit', plain, concentrationSingleBreach);
   await scenario('30. OCO pairing — the take-profit leg rests linked to the stop, not alone', plain, ocoPairing);
   await scenario(
-    '31. Action lifecycle — pending, approved, rejected, and the illegal moves that must throw',
+    '31. Order lifecycle — pending, approved, rejected, and the illegal moves that must throw',
     {},
-    actionLifecycle,
+    orderLifecycle,
   );
   await scenario(
-    '32. Action timeout — deny expires it without ever reaching the venue',
+    '32. Order timeout — deny expires it without ever reaching the venue',
     {},
-    actionTimeout,
+    orderTimeout,
   );
   await scenario('33. Position alerts wait for the open — nothing fires at midnight', plain, positionAlertsWaitForOpen);
 

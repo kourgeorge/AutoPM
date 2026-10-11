@@ -23,7 +23,7 @@ import { TRADER_REGISTRY } from '../tools/traderTools';
 
 /** The researcher's own tools: reads plus the verdict tools. Never order, protection, event or sleep tools. */
 export const RESEARCH_TOOLS = ['get_entry_plan', 'get_lessons', 'get_requests', 'get_market_status',
-  'get_account', 'get_positions', 'get_open_orders', 'get_actions', 'get_journal', 'get_scorecard',
+  'get_account', 'get_positions', 'get_open_orders', 'get_orders', 'get_journal', 'get_scorecard',
   'get_benchmark', 'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan',
   'get_correlation', 'get_exposure', 'get_calendar', 'get_fundamentals', 'get_position_review',
   'get_thesis_status', 'get_market_context', 'get_intraday_volume', 'get_economic_calendar',
