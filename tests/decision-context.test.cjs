@@ -11,7 +11,7 @@ const denyNetwork = () => { throw new Error('Unexpected network access in decisi
 require('node:http').request = require('node:https').request = global.fetch = denyNetwork;
 const from = name => require('../src/' + name);
 const storage = from('core/storage'), state = from('state/state'), policy = from('policy/load');
-const evidence = from('journal/evidence'), thesis = from('journal/thesis');
+const evidence = from('journal/evidence'), thesis = from('journal/thesis'), reviews = from('journal/reviews');
 const { agentContext } = from('core/agentContext');
 const { broker } = from('broker');
 const barSource = from('collect/barSource'), calendar = from('collect/marketCalendar');
@@ -203,7 +203,7 @@ test('material reviews are durable, atomic, idempotent and scoped to the entry l
     evidenceIds: [e.id], snapshotId: e.id, unknowns: ['Demand'], nextReviewAt: new Date(Date.now() + 3600000).toISOString(), price: 100,
     policyHash: policy.getPolicyHash(), contextVariant: 'decision-context-v1', holdingHorizonDays: 20 };
   const result = agentContext.run({ ...context, toolCallId: 'review-call' }, () => thesis.savePositionReview(input));
-  assert.equal(storage.listRecords('reviews').filter(r => r.value.type === 'position').length, 1); assert.equal(journal.readDecision(result.reviewId).kind, 'hold');
+  assert.equal(reviews.listReviews('record_position_review').length, 1); assert.equal(journal.readDecision(result.reviewId).kind, 'hold');
   assert.equal(JSON.parse(storage.readRecord('tool-calls', 'review-call').result).reviewId, result.reviewId);
   assert.equal(thesis.savePositionReview(input).unchanged, true);
   state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-new' } } });
@@ -247,13 +247,13 @@ test('candidate review rejects signal snapshots and raw metric citations, then s
     const result = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', input));
     assert.equal(result.ok, false);
     assert.ok(result.error.includes(`metrics.${premise.metric}.value`));
-    assert.equal(storage.listRecords('reviews').length, 0);
+    assert.equal(reviews.listReviews('record_candidate_review').length, 0);
     premise.evidenceIds = [dossier.id];
   }
   const saved = JSON.parse(await agentContext.run({ ...context, toolCallId: 'lly-candidate' },
     () => traderTools.executeTraderTool('record_candidate_review', input)));
   assert.equal(saved.ok, true);
-  const row = storage.readRecord('reviews', saved.reviewId);
+  const row = reviews.listReviews('record_candidate_review', r => r.id === saved.reviewId)[0];
   assert.equal(row.snapshotId, dossier.id);
   assert.deepEqual(row.thesis, input.thesis);
   assert.deepEqual(row.unknowns, input.unknowns);
@@ -281,7 +281,7 @@ test('candidate snapshot errors distinguish missing citations, unknown positions
     assert.equal(result.ok, false);
     assert.match(result.error, expected);
   }
-  assert.equal(storage.listRecords('reviews').length, 0);
+  assert.equal(reviews.listReviews('record_candidate_review').length, 0);
 });
 
 test('source reading refuses private addresses and marks source text as evidence', () => {
@@ -326,7 +326,7 @@ test('position alternatives include projected risk and handle a one-share holdin
 test('follow-up retains decisions and explicitly marks one failed history without losing the rest', async () => {
   const original = barSource.collectBars, history = bars();
   const snapshot = evidence.recordEvidence('get_position_review', { symbol: 'AAPL', metrics: { lastClose: { value: history[0].c, asOf: history[0].t } }, forward: { price: 100 } });
-  storage.appendRecord('reviews', 'past', '2026-01-01T15:00:00Z', { type: 'candidate', id: 'past', symbol: 'AAPL', at: '2026-01-01T15:00:00Z', decision: 'wait', snapshotId: snapshot.id, price: 100, contextVariant: 'test', policyHash: 'test' });
+  reviews.saveReview('record_candidate_review', { id: 'past', symbol: 'AAPL', at: '2026-01-01T15:00:00Z', decision: 'wait', snapshotId: snapshot.id, price: 100, contextVariant: 'test', policyHash: 'test' }, 'seeded');
   barSource.collectBars = async symbol => { if (symbol === 'AAPL') throw new Error('history outage'); return observe(history); };
   try {
     const result = await followup.decisionFollowup(undefined, 365);

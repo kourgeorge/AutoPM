@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { recordOperatorCommand } from '../features/alertLog';
 import { notifyAccount } from '../core/notifications';
 import { readValue, saveValue, transaction, appendRecord } from '../core/storage';
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
@@ -79,7 +80,7 @@ export async function clearUnplacedProtection(symbol: string, actorId: string): 
     saveValue('protectionIntents', rest);
     if (getState().positionSnapshots[key]) patchPositionSnapshot(key, { stopOrderId: undefined, takeProfitOrderId: undefined });
     appendRecord('stop-requests', crypto.randomUUID(), new Date().toISOString(), { ...intent, status: 'cleared', clearedBy: actorId });
-    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { action: 'rearm', symbol: key, actorId, intentId: intent.id });
+    recordOperatorCommand(actorId, 'rearm', { intentId: intent.id }, key);
   });
 }
 
@@ -106,6 +107,6 @@ export async function confirmProtection(symbol: string, stopId: string, targetId
     patchPositionSnapshot(symbol, { stopOrderId: stop.id, takeProfitOrderId: target?.id, stopLevel: intent.stop, takeProfitLevel: intent.target });
     save({ ...intent, status: 'confirmed', error: undefined });
     if (adjustment && Number(adjustment.params.stopLoss) === intent.stop) transitionAction(adjustment.id, 'executed', { actorId, result: {} });
-    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { action: 'confirm_protection', symbol, actorId, stopId, targetId });
+    recordOperatorCommand(actorId, 'confirm_protection', { stopId, targetId }, symbol);
   });
 }

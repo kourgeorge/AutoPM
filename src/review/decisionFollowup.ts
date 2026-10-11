@@ -1,6 +1,7 @@
 import crypto from 'crypto';
-import { appendRecord, listRecords, transaction } from '../core/storage';
-import { agentContext, assertAgentActive, recordToolResult } from '../core/agentContext';
+import { listRecords, transaction } from '../core/storage';
+import { agentContext, assertAgentActive } from '../core/agentContext';
+import { listReviews, saveReview } from '../journal/reviews';
 import { readEvidence, validateEvidenceIds } from '../journal/evidence';
 import { validateThesis, evaluatePremises, type PositionReview, type EntryThesis } from '../journal/thesis';
 import { collectBars } from '../collect/barSource';
@@ -12,7 +13,8 @@ import type { DecisionRecord } from '../journal/types';
 import { sameSymbol } from '../core/symbols';
 
 export interface CandidateReviewDetails { thesis?: EntryThesis; entryPlanId?: string; unknowns?: string[]; nextReviewAt?: string }
-export interface CandidateReview extends CandidateReviewDetails { type: 'candidate'; id: string; at: string; symbol: string; decision: 'buy' | 'wait' | 'skip'; reason: string; evidenceIds: string[];
+/** Saved as the result of the record_candidate_review tool call (see `journal/reviews.ts`). */
+export interface CandidateReview extends CandidateReviewDetails { id: string; at: string; symbol: string; decision: 'buy' | 'wait' | 'skip'; reason: string; evidenceIds: string[];
   snapshotId: string; price: number | null; contextVariant: string; policyHash: string }
 
 export function saveCandidateReview(symbol: string, decision: CandidateReview['decision'], reason: string, evidenceIds: string[], snapshotId: string, details: CandidateReviewDetails = {}) {
@@ -44,14 +46,13 @@ export function saveCandidateReview(symbol: string, decision: CandidateReview['d
   }
   const savedDetails = { ...(thesis ? { thesis } : {}), ...(details.entryPlanId ? { entryPlanId: details.entryPlanId } : {}),
     ...(details.unknowns !== undefined ? { unknowns: [...details.unknowns] } : {}), ...(details.nextReviewAt ? { nextReviewAt: details.nextReviewAt } : {}) };
-  const old = listRecords<CandidateReview>('reviews', { where: r => r.type === 'candidate' && sameSymbol(r.symbol, symbol), desc: true, limit: 1 })[0]?.value;
+  const old = listReviews<CandidateReview>('record_candidate_review', r => sameSymbol(r.symbol, symbol), 1)[0];
   if (old?.decision === decision && old.reason === reason && old.policyHash === getPolicyHash()
     && JSON.stringify([old.thesis, old.entryPlanId, old.unknowns, old.nextReviewAt]) === JSON.stringify([thesis, details.entryPlanId, details.unknowns, details.nextReviewAt])) return { ok: true, unchanged: true, reviewId: old.id };
   const id = 'candidate-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
-  const row: CandidateReview = { type: 'candidate', id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
+  const row: CandidateReview = { id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
     price: snapshot.data.forward?.price ?? null, contextVariant: snapshot.data.contextVariant ?? 'decision-context-v1', policyHash: getPolicyHash() };
-  const result = { ok: true, reviewId: id, note: 'Candidate research recommendation saved. This does not place or approve an order; execution rechecks the full strategy.' };
-  return transaction(() => { appendRecord('reviews', id, row.at, row); recordToolResult(result); return result; });
+  return transaction(() => saveReview('record_candidate_review', row, 'Candidate research recommendation saved. This does not place or approve an order; execution rechecks the full strategy.'));
 }
 
 /** Rebase a contemporaneous quote using the SAME daily close observed at decision time. */
@@ -85,7 +86,7 @@ export async function decisionFollowup(symbol?: string, days = 90, limit = 20, r
     return { id: d.id, symbol: d.symbol!, at: d.at, decision: d.kind, snapshotId, price: snapshot.data.forward?.price ?? null,
       contextVariant: snapshot.data.contextVariant ?? 'unknown', policyHash: d.policyHash ?? 'unknown', orderStatus: d.orderStatus ?? 'unknown', executed: d.executed };
   }).filter((r): r is NonNullable<typeof r> => r !== null);
-  const reviews = [...listRecords<PositionReview | CandidateReview>('reviews', { where: matches, desc: true, limit }).map(r => r.value), ...actions]
+  const reviews = [...listReviews<PositionReview>('record_position_review', matches, limit), ...listReviews<CandidateReview>('record_candidate_review', matches, limit), ...actions]
     .sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
   const histories = new Map(await Promise.all([...new Set([...reviews.map(r => r.symbol), 'SPY'])].map(async (s): Promise<[string, { bars: Bar[]; error: string | null }]> => {
     try { const bars = await collectBars(s, 420, '1Day', undefined, 'split'); return [s, isUsable(bars) ? { bars: bars.value, error: null } : { bars: [], error: 'Fresh history unavailable' }]; }

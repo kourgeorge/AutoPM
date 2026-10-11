@@ -12,7 +12,8 @@ import { readDecision } from '../journal/journal';
 import { latestPositionReview, evaluatePremises } from '../journal/thesis';
 import { readEvidence, latestEvidence } from '../journal/evidence';
 import type { CandidateReview } from './decisionFollowup';
-import { itemOf, type Source } from '../collect/research';
+import { listReviews } from '../journal/reviews';
+import { itemOf, latestSourceReview, type Source } from '../collect/research';
 import { getRequest } from '../core/requests';
 import { getPolicyHash } from '../policy/load';
 
@@ -89,7 +90,7 @@ export function positionProtection(symbol: string) {
 
 export function latestCandidateAssessments() {
   const latest = new Map<string, CandidateReview>();
-  for (const { value } of listRecords<CandidateReview>('reviews', { where: r => r.type === 'candidate', desc: true })) {
+  for (const value of listReviews<CandidateReview>('record_candidate_review')) {
     const symbol = canonicalSymbol(value.symbol);
     if (!latest.has(symbol)) latest.set(symbol, value);
   }
@@ -135,7 +136,7 @@ export function savedPositionContext(symbol: string) {
   }
   const sources = listRecords<Source>('sources', { desc: true,
     where: r => (!!r.symbol && sameSymbol(r.symbol, symbol)) || sourceIds.has(r.id) });
-  const research = sources.slice(0, 12).map(({ value }) => ({ ...itemOf(value), read: value.text !== undefined, review: value.review ?? null }));
+  const research = sources.slice(0, 12).map(({ value }) => ({ ...itemOf(value), read: value.text !== undefined, review: latestSourceReview(value.id) }));
   return { symbol: canonicalSymbol(symbol), managed: !!snapshot, held, holdingKnown, holding, entry: entry ?? null, positionSnapshot: snapshot ?? null,
     review, candidateReview: candidate, observation, assessmentObservation, candidateThesisStatus, candidateEntryPlan,
     protection: positionProtection(symbol), research, researchTotal: sources.length,

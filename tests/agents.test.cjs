@@ -48,7 +48,7 @@ broker.getPositions = async () => [];
 broker.getOpenOrders = async () => [];
 const commands = from('core/requests');
 const { agentContext } = from('core/agentContext');
-const { runAgentLoop, compactMessages } = from('agents/agentLoop');
+const { runAgentLoop, compactMessages, readTranscript } = from('agents/agentLoop');
 const { ToolRegistry } = from('agents/toolRegistry');
 const textResponse = () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'Done' }], usage: { inputTokens: 1, outputTokens: 1 } });
 const toolResponse = calls => ({ stopReason: 'tool_use', content: calls.map(([name, input], index) => ({ type: 'tool_use', id: 'audit-' + index, name, input })), usage: { inputTokens: 1, outputTokens: 1 } });
@@ -196,7 +196,9 @@ test('sleep rejects later calls and truncated model output executes no tools', a
   assert.deepEqual(request.wokenBy, ['startup', 'message'], 'the cycle records what woke it');
   assert.ok(Array.isArray(request.eventIds), 'and which events it was shown');
   assert.equal(storage.readRecord('tool-calls', `${receipt.requestId}:1:0`).kind, 'housekeeping', 'each tool call records its kind');
-  const turn = storage.readRecord('transcripts', receipt.requestId);
+  const stored = storage.readRecord('transcripts', receipt.requestId);
+  assert.match(stored.messages.at(-1).content[1].content, /^\[Saved as receipt /, 'the saved transcript keeps the receipt id, not a copy of the result');
+  const turn = readTranscript(receipt.requestId);
   assert.match(turn.messages.at(-1).content[1].content, /not executed/);
   let executed = 0;
   const registry = new ToolRegistry([{ name: 'write', description: 'test', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { executed++; return '{}'; });
@@ -237,6 +239,25 @@ test('critical observation remains open and acting requires a linked action', as
   assert.equal(events.getPendingEvents()[0].handling, 'observed');
   assert.equal(events.getPendingEvents()[0].ackedAt, null);
   assert.equal(storage.readRecords('alerts').find(e => e.id === event.id).handling, 'observed', 'event.jsonl records the handling');
+});
+
+test('a finished child request is an event for a trader parent and a chat reply for an assistant parent', () => {
+  const { publishRequestFinished } = from('features/requestFinished');
+  const stop = commands.onRequestFinished(publishRequestFinished);
+  try {
+    const cycle = commands.enqueueRequest('trader', 'Review', 'system');
+    const research = agentContext.run({ role: 'trader', requestId: cycle.id, actorId: 'system', toolCallId: 'ask-research' }, () => startResearch('PLTR', 'system'));
+    assert.equal(research.parentId, cycle.id);
+    commands.updateRequest(research.id, { status: 'completed', result: 'Wait: no entry yet.' });
+    const event = events.getPendingEvents().find(e => e.kind === 'request_finished');
+    assert.equal(event?.severity, 'urgent'); assert.equal(event?.evidence.requestId, research.id);
+    commands.updateRequest(research.id, { status: 'completed', result: 'Wait: no entry yet.' });
+    assert.equal(events.getPendingEvents().filter(e => e.kind === 'request_finished').length, 1, 'announced once');
+    const chat = commands.enqueueRequest('assistant', 'Tell the trader to review AAPL');
+    const sent = agentContext.run({ role: 'assistant', requestId: chat.id, actorId: 'alice', toolCallId: 'relay' }, () => commands.enqueueRequest('trader', 'Review AAPL'));
+    commands.updateRequest(sent.id, { status: 'completed', result: 'Reviewed AAPL; holding.' });
+    assert.ok(storage.readActivity(0, 1000).some(e => e.kind === 'reply' && e.text === 'The trader request you sent finished: Reviewed AAPL; holding.'));
+  } finally { stop(); }
 });
 
 test('a repeated request reuses its action, and each status change adds a step to the action history', () => {

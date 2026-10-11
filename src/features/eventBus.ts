@@ -53,6 +53,8 @@ export type EventKind =
   | 'heartbeat'
   | 'condition_resolved'
   | 'review_ready'
+  | 'request_finished'
+  | 'operator_command'
   | 'portfolio_review'
   | 'policy_changed'
   | 'policy_reverted'

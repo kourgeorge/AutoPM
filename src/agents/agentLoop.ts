@@ -41,6 +41,26 @@ function boundedResult(raw: string, receiptId?: string): string {
     note: receiptId ? 'Read get_tool_result(receiptId, offset, limit) for complete pages. No evidence was discarded.' : 'Legacy result is oversized; repeat a narrower query to retrieve complete evidence.' });
 }
 
+/**
+ * A saved transcript keeps each tool result as its receipt id, because the text already lives
+ * in tool-calls. `readTranscript` puts the text back exactly as the model saw it.
+ */
+const receiptMark = (receiptId: string) => `[Saved as receipt ${receiptId}; read it with get_tool_result.]`;
+function withoutResults(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(m => ({ ...m, content: m.content.map(b => b.type === 'tool_result' && b.receiptId ? { ...b, content: receiptMark(b.receiptId) } : b) }));
+}
+function withResults(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map(m => ({ ...m, content: m.content.map(b => {
+    if (b.type !== 'tool_result' || !b.receiptId || b.content !== receiptMark(b.receiptId)) return b;
+    const saved = readRecord<ToolCallRecord>('tool-calls', b.receiptId)?.result;
+    return { ...b, content: saved === undefined ? errorResult('Saved tool receipt is unavailable') : boundedResult(saved, b.receiptId) };
+  }) }));
+}
+export function readTranscript(id: string): Transcript | undefined {
+  const run = readRecord<Transcript>('transcripts', id);
+  return run && { ...run, messages: withResults(run.messages) };
+}
+
 /** Repair legacy histories and trim whole exchanges, never leaving orphaned tool results. */
 export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessage[] {
   const messages: ChatMessage[] = [];
@@ -68,7 +88,7 @@ export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessag
     else removed.push(...messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1));
   }
   if (removed.length) {
-    const id = saveContext(JSON.stringify(removed));
+    const id = saveContext(JSON.stringify(withoutResults(removed)));
     const note: ContentBlock = { type: 'text', text: `Earlier exchanges omitted to fit context.${id ? ` Retrieve ${id} with get_saved_context;` : ''} Saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty.` };
     if (messages[0]?.role === 'user') messages[0].content.push(note);
     else messages.unshift({ role: 'user', content: [note] });
@@ -83,13 +103,13 @@ export async function runAgentLoop(opts: {
   revision?: string;
 }): Promise<Transcript> {
   const id = opts.context.requestId;
-  let run = readRecord<Transcript>('transcripts', id);
+  let run = readTranscript(id);
   if (run && ['completed','waiting','failed'].includes(run.status)) return run;
   const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]);
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
   const context = { ...opts.context, signal, saved: current.saved ??= {} };
-  const checkpoint = () => saveRecord('transcripts', id, current);
+  const checkpoint = () => saveRecord('transcripts', id, { ...current, messages: withoutResults(current.messages) });
   return agentContext.run(context, async () => {
     try {
       signal.throwIfAborted();

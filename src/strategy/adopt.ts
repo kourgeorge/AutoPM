@@ -1,8 +1,8 @@
-import crypto from 'crypto';
+import { recordOperatorCommand } from '../features/alertLog';
 import { broker } from '../broker';
 import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
 import { assertExecutionOwner } from '../core/runtime';
-import { appendRecord, transaction } from '../core/storage';
+import { transaction } from '../core/storage';
 import { getState, openPositionSnapshot } from '../state/state';
 
 /**
@@ -40,7 +40,7 @@ export async function adoptHolding(rawSymbol: string, stop: number, target: numb
   assertExecutionOwner();
   transaction(() => {
     openPositionSnapshot({ symbol, entryPrice: held.avgCost, stopLevel: stop, takeProfitLevel: target });
-    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { actorId, action: 'adopt', symbol, stop, target, qty: held.qty });
+    recordOperatorCommand(actorId, 'adopt', { stop, target, qty: held.qty }, symbol);
   });
   return { symbol, qty: held.qty, mark };
 }

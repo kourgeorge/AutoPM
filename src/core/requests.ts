@@ -46,6 +46,13 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     return command;
   });
 }
+const finishedListeners = new Set<(request: AgentRequest) => void>();
+/** Told once, when a request first reaches completed or failed. */
+export function onRequestFinished(listener: (request: AgentRequest) => void): () => void {
+  finishedListeners.add(listener); return () => finishedListeners.delete(listener);
+}
+const FINISHED = ['completed', 'failed'];
+
 export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'status' | 'result' | 'actionIds' | 'replyToChat' | 'eventIds' | 'wokenBy'>>): AgentRequest {
   return transaction(() => {
     const current = getRequest(id);
@@ -53,15 +60,22 @@ export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'sta
     const next = { ...current, ...patch };
     saveRecord('requests', id, next);
     // Only the assistant talks to the operator. A trader result is a log line, not a chat reply;
-    // the assistant reads it back through get_requests when asked. Research asked for in chat
-    // is the exception: its finished result is the answer the operator is waiting for.
+    // the assistant reads it back through get_requests when asked. Work asked for from chat is
+    // the exception below: its finished result is the answer the operator is waiting for.
     if (patch.result && patch.result !== current.result) {
       const at = new Date().toISOString();
       if (current.role === 'assistant') appendActivity({ at, kind: 'reply', source: 'assistant', text: patch.result });
       else appendActivity({ at, kind: 'log', source: current.role, level: 'INFO', text: `[${current.role === 'researcher' ? 'Research' : 'Trader'}] ${patch.result}` });
-      if (current.role === 'researcher' && next.replyToChat && ['completed', 'failed'].includes(next.status)) {
-        appendActivity({ at, kind: 'reply', source: 'researcher', text: `Research on ${current.symbol ?? 'the requested stock'} ${next.status === 'failed' ? 'failed' : 'finished'}: ${patch.result}` });
+    }
+    if (FINISHED.includes(next.status) && !FINISHED.includes(current.status)) {
+      // A finished child is news for its parent. The assistant's channel is the chat; a trader
+      // parent is woken by an event (see `publishRequestFinished`).
+      const parent = current.parentId ? getRequest(current.parentId) : undefined;
+      if (current.role !== 'assistant' && (next.replyToChat || parent?.role === 'assistant')) {
+        const what = current.role === 'researcher' ? `Research on ${current.symbol ?? 'the requested stock'}` : 'The trader request you sent';
+        appendActivity({ at: new Date().toISOString(), kind: 'reply', source: current.role, text: `${what} ${next.status === 'failed' ? 'failed' : 'finished'}: ${next.result ?? 'no result recorded'}` });
       }
+      for (const listener of finishedListeners) listener(next);
     }
     return next;
   });

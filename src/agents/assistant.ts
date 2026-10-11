@@ -1,6 +1,6 @@
 import { runtimeContract } from './runtimeContract';
 import { ToolRegistry, pickTools } from './toolRegistry';
-import { runAgentLoop, compactMessages } from './agentLoop';
+import { runAgentLoop, compactMessages, readTranscript } from './agentLoop';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest, type AgentRequest } from '../core/requests';
 import { getOpenActions } from '../core/actions';
 import { getPolicyHash, getPolicySnapshot } from '../policy/load';
@@ -103,7 +103,7 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
  */
 function previousChat(currentId: string): ChatMessage[] {
   for (const { id } of listRecords<AgentRequest>('requests', { where: c => c.role === 'assistant' && c.id !== currentId, desc: true })) {
-    const turn = readRecord<{ messages: ChatMessage[] }>('transcripts', id);
+    const turn = readTranscript(id);
     if (turn?.messages.length) return turn.messages;
   }
   return [];
@@ -114,7 +114,7 @@ function requestTrace(requestId: string): string {
   if (!command) return JSON.stringify({ ok: false, error: `No request with id ${requestId}. Read get_requests or an action's requestId.` });
   const clip = (s: unknown, n: number) => { const t = typeof s === 'string' ? s : JSON.stringify(s); return t.length > n ? t.slice(0, n) + '…' : t; };
   const steps: Record<string, unknown>[] = [];
-  const turn = readRecord<{ messages: ChatMessage[] }>('transcripts', requestId);
+  const turn = readTranscript(requestId);
   if (turn) {
     const results = new Map<string, string>();
     for (const m of turn.messages) for (const b of m.content) if (b.type === 'tool_result') results.set(b.tool_use_id, b.content);
