@@ -116,8 +116,8 @@ test('command discovery and execution share an explicit registry, preserve alias
   assert.equal(result.res.status,200);assert.equal(result.body.ok,true);
   assert.equal(result.body.output[0].text,'Lessons: 3');
   assert.equal(result.body.output[0].source,'system','slash-command output is not an assistant reply');
-  const audit=storage.readRecords('operator-commands').at(-1);
-  assert.equal(audit.actorId,'operator');assert.equal(audit.action,'lessons');assert.equal(audit.args,'3');
+  const audit=storage.readRecords('alerts').filter(e=>e.kind==='operator_command').at(-1);
+  assert.equal(audit.handledBy,'operator');assert.equal(audit.evidence.command,'lessons');assert.equal(audit.evidence.args,'3');
   const help=await request('/api/commands/%3F',{},operator);
   assert.match(help.body.output[0].text,/\/lessons \[n\]/);
   assert.doesNotMatch(help.body.output[0].text,/quit/);

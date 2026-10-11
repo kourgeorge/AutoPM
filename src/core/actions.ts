@@ -5,7 +5,7 @@ import { updateState, type Action, type ActionKind, type ActionStatus } from '..
 import { getPolicyHash } from '../policy/load';
 import { listRecords, readRecord, saveRecord, transaction } from './storage';
 import { agentContext, assertAgentActive, recordToolResult } from './agentContext';
-import { getRequest, linkRequestAction, updateRequest } from './requests';
+import { linkRequestAction } from './requests';
 import { decision, recordDecision, recordDecisionOutcome, readDecision } from '../journal/journal';
 import { playDing } from './sound';
 
@@ -81,14 +81,6 @@ export function ensureActionDecision(action: Action): void {
     atrAtEntry: signal?.atr ?? null, protectionStatus: action.kind === 'exit' ? undefined : 'pending',
   }), 'action-' + action.id);
 }
-export function refreshRequestOutcome(requestId: string): void {
-  const command = getRequest(requestId);
-  if (!command || !command.actionIds.length) return;
-  const actions = command.actionIds.map(id => getAction(id)).filter((p): p is Action => !!p);
-  const unfinished = actions.some(p => OPEN.includes(p.status));
-  updateRequest(command.id, { ...(command.status !== 'running' ? { status: unfinished ? 'waiting' : actions.some(p => p.status !== 'executed') ? 'failed' : 'completed' } : {}),
-    result: actions.map(p => `${p.kind} ${p.symbol}: ${p.status}${p.result?.filledQty != null ? ` (${p.result.filledQty}/${p.result.qty} filled)` : ''}${p.result?.error ? ' — ' + p.result.error : ''}`).join('; ') });
-}
 export interface TransitionMeta {
   decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
   result?: NonNullable<Action['result']>; decisionId?: string;
@@ -105,7 +97,6 @@ export function transitionAction(id: string, status: ActionStatus, meta: Transit
     ensureActionDecision(p);
     recordDecisionOutcome('action-' + id, { orderStatus: status });
     if (status === 'unknown') { updateState({ paused: true }); notifyAccount('broker_outcome_unknown', `${p.kind} ${p.symbol}: ${meta.result?.error ?? 'Broker outcome needs review'}`, p.id); }
-    for (const row of listRecords<{ actionIds?: string[] }>('requests', { where: c => c.actionIds?.includes(id) ?? false })) refreshRequestOutcome(row.id);
     return next;
   });
   // After the transaction commits, so a rolled-back fill never dings. `executed` is reached once.

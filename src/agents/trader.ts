@@ -18,7 +18,7 @@ import { getState, updateState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { readLessons } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
-import { getOpenActions, refreshRequestOutcome } from '../core/actions';
+import { getOpenActions } from '../core/actions';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
 import { getFundamentalsBatch, type Fundamentals } from '../collect/fundamentals';
 import type { PositionSnapshot } from '../state/state';
@@ -140,9 +140,9 @@ export class Trader {
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
     const actions = getRequest(command.id)?.actionIds ?? [];
-    updateRequest(command.id, { status: turn.status === 'completed' && actions.length ? 'waiting' : turn.status,
-      result: turn.error ?? (actions.length ? `Actions queued: ${actions.join(', ')}. Execution outcomes are reported separately.` : turn.text || 'Review completed; no trade action was queued.') });
-    if (turn.status === 'completed' && actions.length) refreshRequestOutcome(command.id);
+    // The request is the agent's work, so it ends with the turn. Each queued action tracks its own outcome.
+    updateRequest(command.id, { status: turn.status,
+      result: turn.error ?? (actions.length ? `Actions queued: ${actions.join(', ')}. Each action records its own outcome.` : turn.text || 'Review completed; no trade action was queued.') });
     return { inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }

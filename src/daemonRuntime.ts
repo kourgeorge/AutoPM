@@ -9,6 +9,8 @@ import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
 import { recordTick } from './features/lastTick';
 import { getPendingEvents } from './features/eventBus';
+import { publishRequestFinished } from './features/requestFinished';
+import { onRequestFinished } from './core/requests';
 import { readDecisions } from './journal/journal';
 import { isTradeAction, describeDecision, type DecisionRecord } from './journal/types';
 import { reconcileOnStartup } from './review/reconcile';
@@ -89,6 +91,8 @@ if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => {
 });
 
 const trader = new Trader();
+// A finished child request is an event for the trader that asked for it.
+onRequestFinished(request => { if (publishRequestFinished(request)) trader.wake(); });
 const assistant = new AssistantAgent(msg => trader.wake(msg));
 const researcher = new Researcher();
 

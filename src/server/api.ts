@@ -1,4 +1,5 @@
 import { enqueueRequest, listRequests, type AgentRequest } from '../core/requests';
+import { recordOperatorCommand } from '../features/alertLog';
 import { listLessons, reviewLesson } from '../journal/lessons';
 /** Local dashboard and operator API. Listens on this computer only; there is one user, so no login. */
 import crypto from 'crypto';
@@ -8,7 +9,7 @@ import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudg
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
-import { readRecords, readRecordPage, appendRecord, listRecords, readRecord } from '../core/storage';
+import { readRecords, readRecordPage, listRecords, readRecord } from '../core/storage';
 import { broker } from '../broker';
 import { canonicalSymbol } from '../core/symbols';
 import { collectBars } from '../collect/barSource';
@@ -343,7 +344,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     return activityHistory({ type, query: url.searchParams.get('q') ?? '', offset, limit });
   });
   add('GET', '/api/history/:kind', ({ params, url }) => {
-    if (!['journal','fills','operator-commands','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
+    if (!['journal','fills','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
     const after = parseNonNegativeInt(url.searchParams.get('after'), 0, 'after');
     const limit = Math.min(parseNonNegativeInt(url.searchParams.get('limit'), 50, 'limit'), 100);
     return { entries: readRecordPage(params.kind, after, limit) };
@@ -387,7 +388,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     if (!command) throw new HttpError(404, `Unknown or unavailable command /${params.name}. Type /help for the list.`);
     const args = optionalString((await body()).args, 'args') ?? '';
     if (args.length > 4000) throw new HttpError(400, 'Command arguments must be at most 4000 characters');
-    appendRecord('operator-commands', crypto.randomUUID(), new Date().toISOString(), { actorId: OPERATOR, action: command.name, args });
+    recordOperatorCommand(OPERATOR, command.name, { args });
     ui.echoOperator(`/${command.name}${args ? ' ' + args : ''}`);
     return ui.runCommand(command.name, args);
   });

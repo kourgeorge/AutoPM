@@ -4,17 +4,21 @@ import dns from 'dns/promises';
 import https from 'https';
 import { isIP } from 'net';
 import { appendRecord, readRecord, saveRecord, transaction } from '../core/storage';
-import { agentContext, assertAgentActive, recordToolResult } from '../core/agentContext';
+import { agentContext, assertAgentActive } from '../core/agentContext';
+import { listReviews, saveReview } from '../journal/reviews';
 import { executeAlpacaDataTool } from '../tools/alpacaDataTools';
 import { textPage } from '../agents/savedResults';
 import { latestPositionReview } from '../journal/thesis';
 import { dailyHistory } from './marketContext';
 
 export interface ResearchItem { id: string; symbol: string | null; title: string; url: string | null; publisher: string | null; publishedAt: string | null; eventAt: string | null; firstSeenAt: string; source: string }
-export interface ResearchReview { reviewId: string; assessment: string; affectedPremise: string; reason: string; at: string }
-/** One record per news item or filing: what it is, its text once read, and its latest assessment. */
-export interface Source extends ResearchItem { text?: string; fetchedAt?: string; resolvedUrl?: string; review?: ResearchReview }
-export const itemOf = ({ text, fetchedAt, resolvedUrl, review, ...item }: Source): ResearchItem => item;
+/** Saved as the result of the record_research_review tool call (see `journal/reviews.ts`). */
+export interface ResearchReview { id: string; sourceId: string; assessment: string; affectedPremise: string; reason: string; at: string }
+/** One record per news item or filing: what it is, and its text once read. */
+export interface Source extends ResearchItem { text?: string; fetchedAt?: string; resolvedUrl?: string }
+export const itemOf = ({ text, fetchedAt, resolvedUrl, ...item }: Source): ResearchItem => item;
+export const latestSourceReview = (sourceId: string): ResearchReview | null =>
+  listReviews<ResearchReview>('record_research_review', r => r.sourceId === sourceId, 1)[0] ?? null;
 
 export function registerResearchItem(value: Omit<ResearchItem, 'id' | 'firstSeenAt'>): ResearchItem {
   const id = 'source-' + crypto.createHash('sha256').update((value.url ?? value.title) + ':' + (value.symbol ?? '')).digest('hex').slice(0, 24);
@@ -163,7 +167,7 @@ export async function researchUpdates(symbol: string, since?: string) {
   const items = candidates.filter(n => typeof n.title === 'string').map(n => {
     const item = registerResearchItem({ symbol, title: n.title, url: n.url ?? null, publisher: n.publisher ?? null, publishedAt: n.publishedAt ?? null, eventAt: null, source: n.source });
     const normalized = item.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), duplicateTitle = seenTitles.has(normalized); seenTitles.add(normalized);
-    const assessment = readRecord<Source>('sources', item.id)?.review ?? null;
+    const assessment = latestSourceReview(item.id);
     const bars = historyResult.status === 'fulfilled' ? historyResult.value?.value : null;
     const date = item.publishedAt?.slice(0, 10), before = date && bars ? bars.filter(b => b.t.slice(0, 10) < date).at(-1) : null;
     const after = date && bars ? bars.find(b => b.t.slice(0, 10) > date) : null;
@@ -187,8 +191,7 @@ export function recordResearchReview(sourceId: string, assessment: string, affec
   if (['supports', 'contradicts'].includes(assessment) && source.text === undefined) throw new Error('Read the original source before recording support or contradiction');
   return transaction(() => {
     const id = agentContext.getStore()?.toolCallId ?? crypto.randomUUID(), at = new Date().toISOString();
-    saveRecord('sources', sourceId, { ...source, review: { reviewId: id, assessment, affectedPremise, reason, at } });
-    const result = { ok: true, reviewId: id, note: 'Assessment is an interpretation of the source, not a verified numeric premise.' };
-    recordToolResult(result); return result;
+    return saveReview('record_research_review', { id, sourceId, assessment, affectedPremise, reason, at },
+      'Assessment is an interpretation of the source, not a verified numeric premise.');
   });
 }
