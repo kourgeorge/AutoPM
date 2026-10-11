@@ -3,7 +3,6 @@ import { notifyAccount } from './notifications';
 import { sameSymbol, canonicalSymbol } from './symbols';
 import { updateState, type Action, type ActionKind, type ActionStatus } from '../state/state';
 import { getPolicyHash } from '../policy/load';
-import { appendActionHistory } from './actionHistory';
 import { listRecords, readRecord, saveRecord, transaction } from './storage';
 import { agentContext, assertAgentActive, recordToolResult } from './agentContext';
 import { getRequest, linkRequestAction, updateRequest } from './requests';
@@ -42,13 +41,15 @@ export function createAction(input: CreateActionInput): Action {
       recordToolResult({ ok: true, pending: OPEN.includes(p.status), actionId: p.id, status: p.status, params: p.params, automatic: p.automatic });
       return p;
     };
-    const previousId = key ? readRecord<string>('action-dedup', key) : undefined;
-    if (previousId) return receipt(getAction(previousId)!);
+    const previous = key ? getAllActions().find(p => p.dedupKeys?.includes(key)) : undefined;
+    if (previous) return receipt(previous);
     const duplicate = getOpenActions().find(p => p.kind === input.kind && sameSymbol(p.symbol, input.symbol));
     if (duplicate) {
       if (intent(duplicate) !== intent(input)) throw new Error(`Conflicting open action ${duplicate.id}: ${JSON.stringify(duplicate.params)}. Review it before requesting different parameters.`);
-      if (key) saveRecord('action-dedup', key, duplicate.id);
-      return receipt(duplicate);
+      if (!key) return receipt(duplicate);
+      const shared = { ...duplicate, dedupKeys: [...(duplicate.dedupKeys ?? []), key] };
+      saveRecord('actions', shared.id, shared);
+      return receipt(shared);
     }
     const now = Date.now();
     const id = crypto.randomBytes(12).toString('hex');
@@ -60,11 +61,10 @@ export function createAction(input: CreateActionInput): Action {
       eventId: input.eventId ?? null, createdAt: now, expiresAt: now + input.timeoutMs,
       status: input.automatic ? 'approved' : 'pending', decidedBy: null, decidedAt: input.automatic ? now : null,
       rejectReason: null, result: null,
+      ...(key ? { dedupKeys: [key] } : {}), history: [{ at: new Date(now).toISOString(), transition: 'created' }],
     };
     saveRecord('actions', id, action);
     ensureActionDecision(action);
-    if (key) saveRecord('action-dedup', key, id);
-    appendActionHistory(action, 'created');
     if (!action.automatic) notifyAccount('approval_required', `${action.kind} ${action.symbol}: ${action.reason}`, action.id);
     return receipt(action);
   });
@@ -99,12 +99,12 @@ export function transitionAction(id: string, status: ActionStatus, meta: Transit
     if (!p) throw new Error('no such action: ' + id);
     if (!NEXT[p.status].includes(status)) throw new Error(`Action ${id} is already ${p.status}; cannot change to ${status}`);
     const next: Action = { ...p, ...meta, status,
-      decidedAt: ['approved','rejected','expired'].includes(status) ? Date.now() : p.decidedAt };
+      decidedAt: ['approved','rejected','expired'].includes(status) ? Date.now() : p.decidedAt,
+      history: [...(p.history ?? []), { at: new Date().toISOString(), transition: status, ...meta }] };
     saveRecord('actions', id, next);
     ensureActionDecision(p);
     recordDecisionOutcome('action-' + id, { orderStatus: status });
     if (status === 'unknown') { updateState({ paused: true }); notifyAccount('broker_outcome_unknown', `${p.kind} ${p.symbol}: ${meta.result?.error ?? 'Broker outcome needs review'}`, p.id); }
-    appendActionHistory(next, status);
     for (const row of listRecords<{ actionIds?: string[] }>('requests', { where: c => c.actionIds?.includes(id) ?? false })) refreshRequestOutcome(row.id);
     return next;
   });

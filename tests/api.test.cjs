@@ -84,6 +84,8 @@ test('structured strategy saves are atomic, validate ceilings, and reject stale 
   assert.equal((await request('/api/strategy',{policy:changed,expectedHash:saved.body.hash},headers)).res.status,400);
   policy.loadPolicy();assert.equal(policy.getPolicy().risk.maxPositions,2);
   assert.equal(storage.readRecords('strategy-changes').length,1);
+  const change=storage.readRecords('strategy-changes')[0];
+  assert.equal(change.before,undefined,'only the saved revision is kept');assert.equal(change.version,policy.getPolicy().version);assert.ok(change.text&&change.playbook);
 });
 test('missing holdings and orders are unavailable rather than an empty portfolio',async()=>{
   const headers={};

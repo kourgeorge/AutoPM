@@ -343,7 +343,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     return activityHistory({ type, query: url.searchParams.get('q') ?? '', offset, limit });
   });
   add('GET', '/api/history/:kind', ({ params, url }) => {
-    if (!['journal','fills','action-history','operator-commands','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
+    if (!['journal','fills','operator-commands','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
     const after = parseNonNegativeInt(url.searchParams.get('after'), 0, 'after');
     const limit = Math.min(parseNonNegativeInt(url.searchParams.get('limit'), 50, 'limit'), 100);
     return { entries: readRecordPage(params.kind, after, limit) };

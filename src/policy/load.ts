@@ -499,7 +499,8 @@ export function saveStrategy(settings: unknown, expectedHash: string, actorId: s
     const active = persisted ? parsePolicy(persisted.text) : null;
     const actualHash = active?.ok ? crypto.createHash('sha256').update(JSON.stringify(active.policy)).update(persisted!.playbook).digest('hex') : getPolicyHash();
     if (!expectedHash || expectedHash !== actualHash) throw new Error('Strategy changed; reload before saving');
-    appendRecord('strategy-changes', crypto.randomUUID(), new Date().toISOString(), { actorId, before: persisted, after: { text, playbook } });
+    // The saved revision only: the one before it is the previous record (or the shipped defaults).
+    appendRecord('strategy-changes', crypto.randomUUID(), new Date().toISOString(), { actorId, version: next.version, text, playbook });
     // Last, so a failed write rolls the history record back with it.
     writeTradeSettings({ text, playbook });
   });

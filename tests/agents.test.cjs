@@ -239,6 +239,19 @@ test('critical observation remains open and acting requires a linked action', as
   assert.equal(storage.readRecords('alerts').find(e => e.id === event.id).handling, 'observed', 'event.jsonl records the handling');
 });
 
+test('a repeated request reuses its action, and each status change adds a step to the action history', () => {
+  const context = { role: 'trader', requestId: 'dedup-request', actorId: 'alice' };
+  const make = () => agentContext.run(context, () => actions.createAction({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
+  const first = make();
+  actions.decideAction(first.id, 'reject', 'human', 'Not now', 'alice');
+  const again = make();
+  assert.equal(again.id, first.id, 'the same request and intent resolve to the same action, even once it is closed');
+  const saved = actions.getAction(first.id);
+  assert.equal(saved.dedupKeys.length, 1);
+  assert.deepEqual(saved.history.map(s => s.transition), ['created', 'rejected']);
+  assert.equal(saved.history[1].rejectReason, 'Not now');
+});
+
 test('an answered event is journalled as hold for a stock you hold and skip for one you do not', async () => {
   const p = policy.getPolicy(), tick = { cooldowns: {}, armed: new Set(), dirty: false };
   const hit = symbol => ({ symbol, cooldownKey: 'kind:' + symbol, severity: 'urgent', headline: 'Review ' + symbol, evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } });

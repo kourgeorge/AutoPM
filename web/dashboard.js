@@ -828,8 +828,9 @@ function historyDetail(entry) {
     for (const event of entry.transitions) {
       const item = text('li','');
       item.append(text('time',historyDate(event.at)),text('strong',event.transition));
-      const snapshot = document.createElement('details');
-      snapshot.append(text('summary','Recorded action at this step'),recordedFields(event.action));item.append(snapshot);timeline.append(item);
+      const { at, transition, actionId, symbol, ...changed } = event;
+      if (Object.keys(changed).length) { const step = document.createElement('details'); step.append(text('summary','What changed at this step'),recordedFields(changed)); item.append(step); }
+      timeline.append(item);
     }
     details.append(timeline);
   }
@@ -1456,7 +1457,7 @@ async function openAgentTask(id) {
     const actions=reviewSection(parent,`Trading actions (${data.actions.length})`);
     if(!data.actions.length)actions.append(text('p','No trading actions linked to this request.'));
     for(const a of data.actions){const card=text('article','','review-card');card.append(text('h4',`${a.symbol} · ${a.kind} · ${a.status}`));actionDetails(card,a,true);card.append(decisionLink(a.id));actions.append(card);}
-    if(data.transitions?.length){const history=document.createElement('details');history.append(text('summary',`Action progress history (${data.totals.transitions})`));if(data.totals.transitions>data.transitions.length)history.append(text('p',`Showing the latest ${data.transitions.length} transitions.`));for(const event of data.transitions)history.append(text('p',`${savedTime(event.at)} · ${event.action.symbol} · ${event.transition} · ${event.action.id}`));actions.append(history);}
+    if(data.transitions?.length){const history=document.createElement('details');history.append(text('summary',`Action progress history (${data.totals.transitions})`));if(data.totals.transitions>data.transitions.length)history.append(text('p',`Showing the latest ${data.transitions.length} transitions.`));for(const event of data.transitions)history.append(text('p',`${savedTime(event.at)} · ${event.symbol} · ${event.transition} · ${event.actionId}`));actions.append(history);}
     const fills=reviewSection(parent,`Confirmed broker fills (${data.totals.fills})`);
     if(data.totals.fills>data.fills.length)fills.append(text('p',`Showing the latest ${data.fills.length} fills.`));
     if(!data.fills.length)fills.append(text('p','No confirmed fills linked to this request’s orders.'));
