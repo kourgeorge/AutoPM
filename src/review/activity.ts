@@ -154,14 +154,14 @@ export function savedRequestDetails(id: string) {
   const fills = readFills().filter(f => orders.has(`${f.brokerOrderId}:${canonicalSymbol(f.symbol)}:${f.side}`));
   const calls = listRecords<any>('tool-calls', { where: c => c.requestId === id });
   const transitions = actions.flatMap(stepsOf).sort((a, b) => a.at.localeCompare(b.at));
-  const transcript = readRecord<any>('transcripts', id);
+  const trajectory = readRecord<any>('trajectories', id);
   return { request, orders: actions, transitions: transitions.slice(-100), decisions: decisions.slice(-100), fills: fills.slice(-100),
     tools: calls.slice(-100).map(r => ({ id: r.id, name: r.value.name, input: r.value.input,
       startedAt: r.value.startedAt ?? r.at, finishedAt: r.value.finishedAt ?? null, resultSaved: r.value.result !== undefined })),
-    transcript: transcript ? { status: transcript.status, rounds: transcript.rounds,
-      inTokens: transcript.inTokens, outTokens: transcript.outTokens, error: transcript.error ?? null,
+    trajectory: trajectory ? { status: trajectory.status, rounds: trajectory.rounds,
+      inTokens: trajectory.inTokens, outTokens: trajectory.outTokens, error: trajectory.error ?? null,
       // Tool results are already receipt marks here; the full output stays in tool-calls.
-      messages: transcript.messages ?? [] } : null,
+      messages: trajectory.messages ?? [] } : null,
     children: listRecords<any>('requests', { where: r => r.parentId === id, desc: true, limit: 50 }).map(r => r.value),
     totals: { tools: calls.length, decisions: decisions.length, fills: fills.length, transitions: transitions.length } };
 }

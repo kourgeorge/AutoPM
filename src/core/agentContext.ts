@@ -8,7 +8,7 @@ export interface AgentContext {
   actorId: string;
   toolCallId?: string;
   signal?: AbortSignal;
-  /** The running transcript's saved texts (see `saveContext`), persisted with the transcript. */
+  /** The running trajectory's saved texts (see `saveContext`), persisted with the trajectory. */
   saved?: Record<string, string>;
 }
 export const agentContext = new AsyncLocalStorage<AgentContext>();

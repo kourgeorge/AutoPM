@@ -48,7 +48,7 @@ broker.getPositions = async () => [];
 broker.getOpenOrders = async () => [];
 const commands = from('core/requests');
 const { agentContext } = from('core/agentContext');
-const { runAgentLoop, compactMessages, readTranscript } = from('agents/agentLoop');
+const { runAgentLoop, compactMessages, readTrajectory } = from('agents/agentLoop');
 const { ToolRegistry } = from('agents/toolRegistry');
 const textResponse = () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'Done' }], usage: { inputTokens: 1, outputTokens: 1 } });
 const toolResponse = calls => ({ stopReason: 'tool_use', content: calls.map(([name, input], index) => ({ type: 'tool_use', id: 'audit-' + index, name, input })), usage: { inputTokens: 1, outputTokens: 1 } });
@@ -168,7 +168,7 @@ test('a failed chart returns a paired error and the assistant can answer the nex
     await assistant.active;
     assert.equal(commands.getRequest(second.id).status, 'completed');
     // The second chat continues from the first chat's saved turn.
-    const firstTurn = storage.readRecord('transcripts', first.id).messages, secondTurn = storage.readRecord('transcripts', second.id).messages;
+    const firstTurn = storage.readRecord('trajectories', first.id).messages, secondTurn = storage.readRecord('trajectories', second.id).messages;
     assert.deepEqual(secondTurn.slice(0, firstTurn.length), compactMessages(firstTurn, 24000));
     assert.match(JSON.stringify(secondTurn.at(-2) ?? secondTurn.at(-1)), /What happened\?/);
   } finally { chartTools.executeChartTool = realChart; }
@@ -183,7 +183,7 @@ test('failed trader requests remain durable with their instruction and explicit 
   assert.equal(command.text, 'Review AAPL now');
   assert.equal(command.status, 'failed');
   assert.match(command.result, /Model unavailable/);
-  assert.equal(storage.readRecord('transcripts', command.id).status, 'failed');
+  assert.equal(storage.readRecord('trajectories', command.id).status, 'failed');
 });
 
 test('sleep rejects later calls and truncated model output executes no tools', async () => {
@@ -196,9 +196,9 @@ test('sleep rejects later calls and truncated model output executes no tools', a
   assert.deepEqual(request.wokenBy, ['startup', 'message'], 'the cycle records what woke it');
   assert.ok(Array.isArray(request.eventIds), 'and which events it was shown');
   assert.equal(storage.readRecord('tool-calls', `${receipt.requestId}:1:0`).kind, 'housekeeping', 'each tool call records its kind');
-  const stored = storage.readRecord('transcripts', receipt.requestId);
-  assert.match(stored.messages.at(-1).content[1].content, /^\[Saved as receipt /, 'the saved transcript keeps the receipt id, not a copy of the result');
-  const turn = readTranscript(receipt.requestId);
+  const stored = storage.readRecord('trajectories', receipt.requestId);
+  assert.match(stored.messages.at(-1).content[1].content, /^\[Saved as receipt /, 'the saved trajectory keeps the receipt id, not a copy of the result');
+  const turn = readTrajectory(receipt.requestId);
   assert.match(turn.messages.at(-1).content[1].content, /not executed/);
   let executed = 0;
   const registry = new ToolRegistry([{ name: 'write', description: 'test', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { executed++; return '{}'; });
@@ -326,7 +326,7 @@ test('restart recovers an action receipt saved before its tool result without re
   const command = commands.enqueueRequest('trader', 'Exit AAPL', 'alice');
   const context = { role: 'trader', requestId: command.id, actorId: 'alice', toolCallId: command.id + ':1:0' };
   agentContext.run(context, () => actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));
-  storage.saveRecord('transcripts', command.id, { id: command.id, messages: [{ role: 'user', content: [{ type: 'text', text: 'Exit AAPL' }] }, { role: 'assistant', content: toolResponse([['write', {}]]).content }], rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '' });
+  storage.saveRecord('trajectories', command.id, { id: command.id, messages: [{ role: 'user', content: [{ type: 'text', text: 'Exit AAPL' }] }, { role: 'assistant', content: toolResponse([['write', {}]]).content }], rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '' });
   let invoked = 0;
   const registry = new ToolRegistry([{ name: 'write', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { invoked++; return '{}'; });
   const turn = await runAgentLoop({ context, registry, provider: { chat: async request => {
@@ -523,7 +523,7 @@ test('restart honors saved truncation and terminal model responses', async () =>
   for (const reason of ['max_tokens','end_turn']) {
     const id = 'saved-' + reason;
     const content = reason === 'max_tokens' ? toolResponse([['write', {}]]).content : textResponse().content;
-    storage.saveRecord('transcripts', id, { id, messages: [{ role: 'assistant', content }], rounds: 1, status: 'running', responseStopReason: reason, inTokens: 0, outTokens: 0, text: '' });
+    storage.saveRecord('trajectories', id, { id, messages: [{ role: 'assistant', content }], rounds: 1, status: 'running', responseStopReason: reason, inTokens: 0, outTokens: 0, text: '' });
     const registry = new ToolRegistry([{ name: 'write', description: '', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { throw new Error('Must not invoke a tool'); });
     const result = await runAgentLoop({ context: { role: 'trader', requestId: id, actorId: 'test' }, registry, provider: { chat: async () => { throw new Error('Must not call the model again'); } }, messages: async () => [], systemPrompt: '', maxRounds: 3, maxTokens: 100 });
     assert.equal(result.status, reason === 'max_tokens' ? 'failed' : 'completed');

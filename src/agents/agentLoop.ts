@@ -9,7 +9,7 @@ import type { ToolRegistry } from './toolRegistry';
 import { logger } from '../core/logger';
 
 export type TurnStatus = 'completed' | 'waiting' | 'interrupted' | 'failed';
-export interface Transcript {
+export interface Trajectory {
   id: string; messages: ChatMessage[]; rounds: number; status: TurnStatus | 'running';
   inTokens: number; outTokens: number; text: string; error?: string;
   revision?: string;
@@ -42,8 +42,8 @@ function boundedResult(raw: string, receiptId?: string): string {
 }
 
 /**
- * A saved transcript keeps each tool result as its receipt id, because the text already lives
- * in tool-calls. `readTranscript` puts the text back exactly as the model saw it.
+ * A saved trajectory keeps each tool result as its receipt id, because the text already lives
+ * in tool-calls. `readTrajectory` puts the text back exactly as the model saw it.
  */
 const receiptMark = (receiptId: string) => `[Saved as receipt ${receiptId}; read it with get_tool_result.]`;
 function withoutResults(messages: ChatMessage[]): ChatMessage[] {
@@ -56,8 +56,8 @@ function withResults(messages: ChatMessage[]): ChatMessage[] {
     return { ...b, content: saved === undefined ? errorResult('Saved tool receipt is unavailable') : boundedResult(saved, b.receiptId) };
   }) }));
 }
-export function readTranscript(id: string): Transcript | undefined {
-  const run = readRecord<Transcript>('transcripts', id);
+export function readTrajectory(id: string): Trajectory | undefined {
+  const run = readRecord<Trajectory>('trajectories', id);
   return run && { ...run, messages: withResults(run.messages) };
 }
 
@@ -101,15 +101,15 @@ export async function runAgentLoop(opts: {
   messages: () => Promise<ChatMessage[]>; maxRounds: number; maxTokens: number;
   signal?: AbortSignal; beforeTool?: () => void;
   revision?: string;
-}): Promise<Transcript> {
+}): Promise<Trajectory> {
   const id = opts.context.requestId;
-  let run = readTranscript(id);
+  let run = readTrajectory(id);
   if (run && ['completed','waiting','failed'].includes(run.status)) return run;
   const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]);
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
   const context = { ...opts.context, signal, saved: current.saved ??= {} };
-  const checkpoint = () => saveRecord('transcripts', id, { ...current, messages: withoutResults(current.messages) });
+  const checkpoint = () => saveRecord('trajectories', id, { ...current, messages: withoutResults(current.messages) });
   return agentContext.run(context, async () => {
     try {
       signal.throwIfAborted();

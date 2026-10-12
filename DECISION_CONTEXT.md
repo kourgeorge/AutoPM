@@ -58,6 +58,6 @@ For evaluating a new context source, freeze historical observations available at
 Research and review data lives in four files under `data/db/`:
 
 - `tool-calls.jsonl` — every tool result, once. An `evidenceId` is the tool call's receipt ID; a paged tool (watchlist scan, market context, filings, research updates) keeps its full snapshot on the same receipt, and its `snapshotId` is that receipt ID.
-- `transcripts.jsonl` — each agent conversation, plus the text left out of the model's context (`saved`), which `get_saved_context` reads.
+- `trajectories.jsonl` — each agent conversation, plus the text left out of the model's context (`saved`), which `get_saved_context` reads.
 - `sources.jsonl` — one row per news item or filing: what it is, its text once read, and its latest assessment.
 - `reviews.jsonl` — position and candidate reviews, told apart by `type`.

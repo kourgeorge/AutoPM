@@ -92,9 +92,9 @@ test('a request trail includes the agent conversation, with tool results left as
   const messages=[{role:'user',content:[{type:'text',text:'briefing'}]},
     {role:'assistant',content:[{type:'text',text:'I will look at the chart because the stop is close.'},{type:'tool_use',id:'tu1',name:'get_bars',input:{symbol:'AAPL'}}]},
     {role:'user',content:[{type:'tool_result',tool_use_id:'tu1',receiptId:id+':1:0',content:'[Saved as receipt]'}]}];
-  storage.saveRecord('transcripts',id,{id,messages,rounds:2,status:'completed',inTokens:10,outTokens:5,text:'done'});
+  storage.saveRecord('trajectories',id,{id,messages,rounds:2,status:'completed',inTokens:10,outTokens:5,text:'done'});
   const body=(await request('/api/agent-requests/'+id)).body;
-  assert.deepEqual(body.transcript.messages,messages);
+  assert.deepEqual(body.trajectory.messages,messages);
 });
 test('missing holdings and orders are unavailable rather than an empty portfolio',async()=>{
   const headers={};
