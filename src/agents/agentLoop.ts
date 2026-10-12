@@ -19,11 +19,13 @@ export interface Trajectory {
 }
 type ToolCall = Extract<ContentBlock, { type: 'tool_use' }>;
 interface ToolCallRecord { name: string; input: unknown; result?: string }
-/** Room for a few full-length model requests plus tools — must stay well above MODEL_CALL_TIMEOUT_MS. */
-const TURN_TIMEOUT_MS = 300_000;
 /** What the operator reads instead of the platform's "The operation was aborted due to timeout". */
 export const SLOW_MODEL_MESSAGE = 'The AI service is responding slowly right now and this request timed out. Please try again in a minute.';
-/** Both the fetch/turn deadline (DOMException TimeoutError) and the Anthropic SDK's own timeout error. */
+/**
+ * A turn has no overall deadline: a review that needs many rounds runs to the end (maxRounds still
+ * bounds it). Only a single hung model request times out — the fetch deadline (DOMException
+ * TimeoutError) or the Anthropic SDK's own timeout error.
+ */
 function isTimeout(err: any): boolean {
   return err?.name === 'TimeoutError' || err instanceof Anthropic.APIConnectionTimeoutError;
 }
@@ -105,7 +107,7 @@ export async function runAgentLoop(opts: {
   const id = opts.context.requestId;
   let run = readTrajectory(id);
   if (run && ['completed','waiting','failed'].includes(run.status)) return run;
-  const signal = AbortSignal.any([opts.signal ?? new AbortController().signal, AbortSignal.timeout(TURN_TIMEOUT_MS)]);
+  const signal = opts.signal ?? new AbortController().signal;
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
   const context = { ...opts.context, signal, saved: current.saved ??= {} };

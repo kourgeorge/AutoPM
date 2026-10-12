@@ -5,11 +5,11 @@ import { AiConfig, ChatMessage, ContentBlock, ModelResponse, ToolDefinition } fr
 // ── Provider interface ────────────────────────────────────────────────────────
 
 /**
- * How long one model request may take. 60s was too tight for the LiteLLM proxy on a slow day:
- * a two-word prompt took 12–14s there (2026-10-07), so a full chat request with history and tools
- * ran past 60s and the operator got a bare timeout instead of an answer.
+ * Only a guard against a request that hangs forever, not a speed limit. 60s and then 120s both
+ * failed real reviews on slow days (2026-10-07 LiteLLM proxy; 2026-10-12 azure/gpt-5.6-luna took
+ * 40–75s a round and sometimes longer), so a slow answer is waited for; a dead connection is not.
  */
-export const MODEL_CALL_TIMEOUT_MS = 120_000;
+export const MODEL_CALL_TIMEOUT_MS = 600_000;
 
 export interface ModelProvider {
   chat(params: {
