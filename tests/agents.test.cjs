@@ -273,14 +273,15 @@ test('a repeated request reuses its action, and each status change adds a step t
   assert.equal(saved.history[1].rejectReason, 'Not now');
 });
 
-test('an answered event is journalled as hold for a stock you hold and skip for one you do not', async () => {
+test('an answered event is journalled as skip for a stock you do not hold; for a held stock the note stays on the alert', async () => {
   const p = policy.getPolicy(), tick = { cooldowns: {}, armed: new Set(), dirty: false };
   const hit = symbol => ({ symbol, cooldownKey: 'kind:' + symbol, severity: 'urgent', headline: 'Review ' + symbol, evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } });
   const [held, notHeld] = events.processHits('ema_cross_down', [hit('AAPL'), hit('LLY')], p, tick);
   state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-1' } } });
   for (const e of [held, notHeld]) assert.equal(JSON.parse(await traderTools.executeTraderTool('ack_event', { id: e.id, disposition: 'acknowledged', note: 'Reviewed; no action needed' })).ok, true);
   const kindFor = id => journal.readDecisions().find(d => d.triggerEventId === id)?.kind;
-  assert.equal(kindFor(held.id), 'hold');
+  assert.equal(kindFor(held.id), undefined);
+  assert.equal(eventLog.readAlertLog().find(e => e.id === held.id)?.ackNote, 'Reviewed; no action needed');
   assert.equal(kindFor(notHeld.id), 'skip');
 });
 

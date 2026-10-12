@@ -238,23 +238,33 @@ function toolCallEntry(entry) {
   summary.append(agentBadge,signature);
   const resultLabel = text('span', 'Tool result', 'tool-call-type');
   if (tool) {
-    try {
+    let failed = tool.failed === true;
+    if (tool.output !== undefined) try {
       const result = JSON.parse(tool.output);
-      if (result?.ok === false || result?.error || result?.isError === true) { resultLabel.textContent = 'Error';resultLabel.classList.add('tool-call-error'); }
+      failed = result?.ok === false || !!result?.error || result?.isError === true;
     } catch { /* Plain-text results are shown verbatim when expanded. */ }
+    if (failed) { resultLabel.textContent = 'Error';resultLabel.classList.add('tool-call-error'); }
   }
   summary.append(resultLabel);
   const time = text('time', clock(entry.at));time.dateTime = entry.at;time.title = new Date(entry.at).toLocaleString();
   summary.append(time);
   const body = text('div', '', 'tool-call-body');
   // Keep full payloads in memory; build the potentially large detail DOM only on opening.
-  details.addEventListener('toggle', () => {
-    if (!details.open || body.hasChildNodes()) return;
+  details.addEventListener('toggle', async () => {
+    if (!details.open || body.hasChildNodes() || details.dataset.loading) return;
     if (!tool) {
       body.append(text('p', 'Full input and output were not saved for this older call.'), text('pre', entry.text));
       return;
     }
+    // The feed keeps only the receipt id; the output lives on the saved tool call.
     let output = tool.output;
+    if (output === undefined) {
+      details.dataset.loading = '1';
+      try { output = (await api(`tool-output/${encodeURIComponent(tool.id)}`)).output ?? 'No result was recorded.'; }
+      catch (error) { output = `Saved output unavailable: ${error.message}`; }
+      finally { delete details.dataset.loading; }
+      if (body.hasChildNodes()) return;
+    }
     try { output = JSON.stringify(JSON.parse(output), null, 2); } catch { /* Preserve non-JSON output. */ }
     for (const [label, value] of [['Input', JSON.stringify(tool.input, null, 2) ?? 'null'], ['Output', output]]) {
       const section = text('section', '', 'tool-call-payload'), pre = text('pre', value);

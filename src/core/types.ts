@@ -43,7 +43,9 @@ export interface ToolCallDetails {
   agent: string;
   name: string;
   input: unknown;
-  output: string;
+  /** Kept on the feed line only when there is no receipt (`id`); otherwise read from tool-calls. */
+  output?: string;
+  failed?: boolean;
 }
 
 export type ContentBlock =

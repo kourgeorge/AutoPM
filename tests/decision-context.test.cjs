@@ -203,7 +203,7 @@ test('material reviews are durable, atomic, idempotent and scoped to the entry l
     evidenceIds: [e.id], snapshotId: e.id, unknowns: ['Demand'], nextReviewAt: new Date(Date.now() + 3600000).toISOString(), price: 100,
     policyHash: policy.getPolicyHash(), contextVariant: 'decision-context-v1', holdingHorizonDays: 20 };
   const result = agentContext.run({ ...context, toolCallId: 'review-call' }, () => thesis.savePositionReview(input));
-  assert.equal(reviews.listReviews('record_position_review').length, 1); assert.equal(journal.readDecision(result.reviewId).kind, 'hold');
+  assert.equal(reviews.listReviews('record_position_review').length, 1); assert.equal(journal.readDecision(result.reviewId), undefined);
   assert.equal(JSON.parse(storage.readRecord('tool-calls', 'review-call').result).reviewId, result.reviewId);
   assert.equal(thesis.savePositionReview(input).unchanged, true);
   state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-new' } } });

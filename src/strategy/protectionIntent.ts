@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { recordOperatorCommand } from '../features/alertLog';
 import { notifyAccount } from '../core/notifications';
-import { readValue, saveValue, transaction, appendRecord } from '../core/storage';
+import { readValue, saveValue, transaction } from '../core/storage';
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { getState, patchPositionSnapshot, updateState } from '../state/state';
 import { broker } from '../broker';
@@ -16,10 +16,7 @@ export function protectionIntents(): Record<string, ProtectionIntent> {
   return readValue('protectionIntents') ?? {};
 }
 function save(intent: ProtectionIntent): void {
-  transaction(() => {
-    saveValue('protectionIntents', { ...protectionIntents(), [canonicalSymbol(intent.symbol)]: intent });
-    appendRecord('stop-requests', crypto.randomUUID(), new Date().toISOString(), intent);
-  });
+  saveValue('protectionIntents', { ...protectionIntents(), [canonicalSymbol(intent.symbol)]: intent });
 }
 
 /** A request is durable before transmission. Uncertain protection is never blindly retried. */
@@ -79,7 +76,6 @@ export async function clearUnplacedProtection(symbol: string, actorId: string): 
     const { [key]: _dropped, ...rest } = protectionIntents();
     saveValue('protectionIntents', rest);
     if (getState().positionSnapshots[key]) patchPositionSnapshot(key, { stopOrderId: undefined, takeProfitOrderId: undefined });
-    appendRecord('stop-requests', crypto.randomUUID(), new Date().toISOString(), { ...intent, status: 'cleared', clearedBy: actorId });
     recordOperatorCommand(actorId, 'rearm', { intentId: intent.id }, key);
   });
 }

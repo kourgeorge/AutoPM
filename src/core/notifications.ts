@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { readValue, saveValue, appendRecord, transaction } from './storage';
+import { readValue, saveValue, appendActivity, transaction } from './storage';
 
 interface Notification {
   id: string; at: string; type: string; message: string; orderId?: string;
@@ -9,8 +9,9 @@ export function pendingNotifications(): Notification[] { return readValue('notif
 export function notifyAccount(type: string, message: string, orderId?: string): void {
   const item: Notification = { id: crypto.randomUUID(), at: new Date().toISOString(), type, message, orderId, attempts: 0, nextAttempt: 0 };
   transaction(() => {
-    appendRecord('notifications', item.id, item.at, item);
-    // Delivery is opt-in. The durable activity record exists even without a destination.
+    // A UI alert is already in the activity feed (the UI pushes it); anything else lands there here.
+    if (type !== 'alert') appendActivity({ at: item.at, kind: 'alert', source: 'system', level: 'WARN', text: message });
+    // Delivery is opt-in.
     if (process.env.ALERT_WEBHOOK_URL) saveValue('notificationOutbox', [...pendingNotifications(), item]);
   });
 }
@@ -39,10 +40,7 @@ export class NotificationDelivery {
       delivered = response.ok;
       await response.body?.cancel();
     } catch { /* Retry with the same identity. Do not log credentials or response bodies. */ }
-    transaction(() => {
-      saveValue('notificationOutbox', pendingNotifications().flatMap(n => n.id !== item.id ? [n] : delivered ? [] : [{ ...n, attempts: n.attempts + 1, nextAttempt: Date.now() + Math.min(3600_000, 10_000 * 2 ** Math.min(n.attempts, 9)) }]));
-      if (delivered) appendRecord('notifications-sent', item.id, new Date().toISOString(), { id: item.id, delivered: true });
-    });
+    saveValue('notificationOutbox', pendingNotifications().flatMap(n => n.id !== item.id ? [n] : delivered ? [] : [{ ...n, attempts: n.attempts + 1, nextAttempt: Date.now() + Math.min(3600_000, 10_000 * 2 ** Math.min(n.attempts, 9)) }]));
   }
   async stop(): Promise<void> { clearInterval(this.timer); await this.active; }
 }

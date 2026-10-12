@@ -295,7 +295,7 @@ export class HeadlessUI implements OperatorUI {
 
   private push(kind: FeedKind, text: string, level?: LogLevel, chart?: ChartData, tool?: ToolCallDetails): FeedEntry {
     const source = kind === 'operator' ? 'operator' : tool?.agent ?? agentContext.getStore()?.role ?? 'system';
-    const payload = { at: new Date().toISOString(), kind, source, text, ...(level ? { level } : {}), ...(chart ? { chart } : {}), ...(tool ? { tool } : {}) };
+    const payload = { at: new Date().toISOString(), kind, source, text, ...(level ? { level } : {}), ...(chart ? { chart } : {}), ...(tool ? { tool: feedTool(tool) } : {}) };
     const entry: FeedEntry = { ...payload, seq: appendActivity(payload) };
     if (level) entry.level = level;
     this.feed.push(entry);
@@ -310,4 +310,16 @@ export class HeadlessUI implements OperatorUI {
     }
     return entry;
   }
+}
+
+/**
+ * The full output already lives on the tool-call receipt, so the feed keeps only what the
+ * collapsed row shows; the dashboard loads the output from `/api/tool-output/:id` on expand.
+ */
+function feedTool(tool: ToolCallDetails): ToolCallDetails {
+  if (!tool.id || tool.output === undefined) return tool;
+  let failed = false;
+  try { const r = JSON.parse(tool.output); failed = r?.ok === false || !!r?.error || r?.isError === true; } catch { /* plain text */ }
+  const { output: _saved, ...rest } = tool;
+  return { ...rest, failed };
 }
