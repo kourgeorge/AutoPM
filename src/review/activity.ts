@@ -159,7 +159,9 @@ export function savedRequestDetails(id: string) {
     tools: calls.slice(-100).map(r => ({ id: r.id, name: r.value.name, input: r.value.input,
       startedAt: r.value.startedAt ?? r.at, finishedAt: r.value.finishedAt ?? null, resultSaved: r.value.result !== undefined })),
     transcript: transcript ? { status: transcript.status, rounds: transcript.rounds,
-      inTokens: transcript.inTokens, outTokens: transcript.outTokens, error: transcript.error ?? null } : null,
+      inTokens: transcript.inTokens, outTokens: transcript.outTokens, error: transcript.error ?? null,
+      // Tool results are already receipt marks here; the full output stays in tool-calls.
+      messages: transcript.messages ?? [] } : null,
     children: listRecords<any>('requests', { where: r => r.parentId === id, desc: true, limit: 50 }).map(r => r.value),
     totals: { tools: calls.length, decisions: decisions.length, fills: fills.length, transitions: transitions.length } };
 }

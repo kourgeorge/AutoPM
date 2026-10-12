@@ -40,7 +40,7 @@ export type UpdateTradingSettingsResult =
   | { ok: true;  applied: string[]; version: number }
   | { ok: false; errors: string[] };
 
-export function updateTradingSettings(changes: TradingSettingsUpdate, actorId = 'host-admin'): UpdateTradingSettingsResult {
+export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTradingSettingsResult {
   let text: string;
   try {
     text = readPolicyText();
@@ -133,6 +133,6 @@ export function updateTradingSettings(changes: TradingSettingsUpdate, actorId = 
   }
 
   // saveStrategy assigns the real next version and re-checks nothing changed underneath us.
-  try { return { ok: true, applied, version: saveStrategy(doc, getPolicyHash(), actorId).policy.version }; }
+  try { return { ok: true, applied, version: saveStrategy(doc, getPolicyHash()).policy.version }; }
   catch (err: any) { return { ok: false, errors: [err.message] }; }
 }

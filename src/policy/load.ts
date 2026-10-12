@@ -16,7 +16,7 @@
  */
 
 import crypto from 'crypto';
-import { transaction, appendRecord, isEphemeralStorage } from '../core/storage';
+import { transaction, isEphemeralStorage } from '../core/storage';
 import { writeFileAtomic } from '../core/fsAtomic';
 import { dump as dumpYaml } from 'js-yaml';
 import fs from 'fs';
@@ -481,8 +481,8 @@ export function readPlaybook(): string {
   return readTradeSettings()?.playbook ?? fs.readFileSync(playbookFile(), 'utf8');
 }
 
-/** Atomically activate settings, pinned prose, and audit history as one revision. */
-export function saveStrategy(settings: unknown, expectedHash: string, actorId: string, playbook = readPlaybook()) {
+/** Atomically activate settings and pinned prose as one revision. */
+export function saveStrategy(settings: unknown, expectedHash: string, playbook = readPlaybook()) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Strategy must be an object');
   const doc = settings as Record<string, unknown>;
   const allowed = ['version', 'risk', 'strategy', 'triggers', 'regime', 'automation', 'immutable'];
@@ -499,9 +499,6 @@ export function saveStrategy(settings: unknown, expectedHash: string, actorId: s
     const active = persisted ? parsePolicy(persisted.text) : null;
     const actualHash = active?.ok ? crypto.createHash('sha256').update(JSON.stringify(active.policy)).update(persisted!.playbook).digest('hex') : getPolicyHash();
     if (!expectedHash || expectedHash !== actualHash) throw new Error('Strategy changed; reload before saving');
-    // The saved revision only: the one before it is the previous record (or the shipped defaults).
-    appendRecord('strategy-changes', crypto.randomUUID(), new Date().toISOString(), { actorId, version: next.version, text, playbook });
-    // Last, so a failed write rolls the history record back with it.
     writeTradeSettings({ text, playbook });
   });
   _policy = parsed.policy; _meta = parsed.meta;

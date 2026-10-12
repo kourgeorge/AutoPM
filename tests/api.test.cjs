@@ -85,9 +85,16 @@ test('structured strategy saves are atomic, validate ceilings, and reject stale 
   changed.risk.positionSizePct=1;
   assert.equal((await request('/api/strategy',{policy:changed,expectedHash:saved.body.hash},headers)).res.status,400);
   policy.loadPolicy();assert.equal(policy.getPolicy().risk.maxPositions,2);
-  assert.equal(storage.readRecords('strategy-changes').length,1);
-  const change=storage.readRecords('strategy-changes')[0];
-  assert.equal(change.before,undefined,'only the saved revision is kept');assert.equal(change.version,policy.getPolicy().version);assert.ok(change.text&&change.playbook);
+});
+test('a request trail includes the agent conversation, with tool results left as receipt marks',async()=>{
+  const id='trail-request';
+  storage.saveRecord('requests',id,{id,role:'trader',actorId:'operator',text:'Check AAPL',status:'completed',createdAt:new Date().toISOString()});
+  const messages=[{role:'user',content:[{type:'text',text:'briefing'}]},
+    {role:'assistant',content:[{type:'text',text:'I will look at the chart because the stop is close.'},{type:'tool_use',id:'tu1',name:'get_bars',input:{symbol:'AAPL'}}]},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'tu1',receiptId:id+':1:0',content:'[Saved as receipt]'}]}];
+  storage.saveRecord('transcripts',id,{id,messages,rounds:2,status:'completed',inTokens:10,outTokens:5,text:'done'});
+  const body=(await request('/api/agent-requests/'+id)).body;
+  assert.deepEqual(body.transcript.messages,messages);
 });
 test('missing holdings and orders are unavailable rather than an empty portfolio',async()=>{
   const headers={};
