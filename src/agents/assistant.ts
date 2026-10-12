@@ -5,7 +5,6 @@ import { enqueueRequest, pendingRequests, updateRequest, getRequest, type AgentR
 import { pendingOrders } from '../core/orders';
 import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
-import { agentContext } from '../core/agentContext';
 import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
 /**
  * Assistant Agent — the user-facing conversational layer.
@@ -271,7 +270,7 @@ export class AssistantAgent {
     }
 
     if (name === 'update_trading_settings') {
-      const result = updateTradingSettings(input as TradingSettingsUpdate, `assistant:${agentContext.getStore()?.actorId ?? 'operator'}`);
+      const result = updateTradingSettings(input as TradingSettingsUpdate);
       if (!result.ok) return JSON.stringify(result);
       const snapshot = getPolicySnapshot();
       return JSON.stringify({ ...result, saved: summarizeStrategy(snapshot.policy, snapshot.hash) });

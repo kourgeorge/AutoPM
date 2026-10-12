@@ -55,16 +55,16 @@ test('legacy policy keeps the new preferences unconfigured; invalid values fail 
 test('presets are explicit policy values and saved revisions retain their risk constraints', () => {
   for (const [name, values] of Object.entries(RISK_PROFILES)) {
     const before = loader.getPolicySnapshot();
-    const saved = loader.saveStrategy({ ...before.policy, risk: { ...before.policy.risk, ...values } }, before.hash, 'test-admin');
+    const saved = loader.saveStrategy({ ...before.policy, risk: { ...before.policy.risk, ...values } }, before.hash);
     assert.equal(saved.riskProfile, name);
     assert.notEqual(saved.hash, before.hash);
     assert.equal(loader.reloadPolicy().ok, true);
     assert.equal(riskProfileName(loader.getPolicy().risk), name);
   }
   const before = loader.getPolicySnapshot();
-  const saved = loader.saveStrategy({ ...before.policy, risk: { ...before.policy.risk, riskPerTradePct: 0.7 } }, before.hash, 'test-admin');
+  const saved = loader.saveStrategy({ ...before.policy, risk: { ...before.policy.risk, riskPerTradePct: 0.7 } }, before.hash);
   assert.equal(saved.riskProfile, 'custom');
-  assert.throws(() => loader.saveStrategy(before.policy, before.hash, 'test-admin'), /changed/);
+  assert.throws(() => loader.saveStrategy(before.policy, before.hash), /changed/);
   loader.useEphemeralPolicy(base);
 });
 

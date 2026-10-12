@@ -1445,6 +1445,25 @@ async function openSavedRecord(kind,id,offset=0,previous=[],taskId=null) {
     navigation.append(back,text('span',`${row.totalCharacters ? row.offset+1 : 0}–${row.offset+row.text.length} of ${row.totalCharacters} characters`),next);parent.append(navigation);
   }catch(error){if(token===inspectorLoad){parent.replaceChildren(text('p',`Saved record unavailable: ${error.message}`));if(taskId)parent.append(uiButton('← Back to request',()=>openAgentTask(taskId)));}}
 }
+// The agent's saved conversation, one collapsible block per message. The first message is the
+// engine's full briefing, so every block starts closed; tool results open their saved receipt.
+function transcriptView(messages,taskId) {
+  const section=document.createElement('details');section.className='transcript';
+  section.append(text('summary',`Conversation (${messages.length} messages)`));
+  messages.forEach((m,i)=>{
+    const block=document.createElement('details'),blocks=m.content || [];
+    const said=blocks.filter(b=>b.type==='text').map(b=>b.text).join('\n\n');
+    const calls=blocks.filter(b=>b.type==='tool_use'),results=blocks.filter(b=>b.type==='tool_result');
+    const who=m.role==='assistant' ? 'Agent' : i===0 ? 'Briefing' : results.length ? 'Tool results' : 'Engine';
+    const hint=said ? said.replace(/\s+/g,' ').slice(0,90) : calls.length ? `called ${calls.map(c=>c.name).join(', ')}` : `${results.length} result${results.length===1?'':'s'}`;
+    block.append(text('summary',`${i+1}. ${who} · ${hint}`));
+    if(said)block.append(text('pre',said));
+    for(const c of calls){const d=document.createElement('details');d.append(text('summary',`Called ${c.name}`),text('pre',JSON.stringify(c.input,null,2)));block.append(d);}
+    for(const r of results)block.append(r.receiptId ? uiButton(`Open saved result ${r.receiptId}`,()=>openSavedRecord('tool',r.receiptId,0,[],taskId)) : text('pre',r.content));
+    section.append(block);
+  });
+  return section;
+}
 async function openAgentTask(id) {
   const token=beginInspector('Agent request trail'),parent=$('record-inspector-content');
   try {
@@ -1456,6 +1475,7 @@ async function openAgentTask(id) {
     parent.append(text('h3','Instruction'),text('p',r.text),text('h3','Outcome'),text('p',r.result || 'No outcome recorded yet.'));
     if(data.transcript)parent.append(historyFacts([['Agent run',data.transcript.status],['Model rounds',data.transcript.rounds],['Input / output tokens',`${data.transcript.inTokens} / ${data.transcript.outTokens}`]]));
     if(data.transcript?.error)parent.append(text('p',data.transcript.error,'review-warning'));
+    if(data.transcript?.messages?.length)parent.append(transcriptView(data.transcript.messages,id));
     const tools=reviewSection(parent,`Tool activity (${data.totals.tools})`);
     if(!data.tools.length)tools.append(text('p','No tool attempts recorded.'));
     if(data.totals.tools>data.tools.length)tools.append(text('p',`Showing the latest ${data.tools.length} attempts.`));

@@ -424,7 +424,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('GET', '/api/strategy', () => getPolicySnapshot());
   add('POST', '/api/strategy', async ({ body }) => {
     const input = await body();
-    try { return saveStrategy(input.policy, String(input.expectedHash ?? ''), OPERATOR, input.playbook as string | undefined); }
+    try { return saveStrategy(input.policy, String(input.expectedHash ?? ''), input.playbook as string | undefined); }
     catch (err: any) { throw new HttpError(/changed/.test(err.message) ? 409 : 400, err.message); }
   });
   add('GET', '/api/broker-orders', () => {

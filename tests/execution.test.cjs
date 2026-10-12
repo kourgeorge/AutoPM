@@ -152,7 +152,7 @@ test('a policy change while validation awaits invalidates the approval', async (
   const p=entry(true);
   orders.validateEntry=async(s,q)=>{
     const previous=policy.getPolicySnapshot();
-    policy.saveStrategy({...previous.policy,risk:{...previous.policy.risk,maxPositions:2}},previous.hash,'alice');
+    policy.saveStrategy({...previous.policy,risk:{...previous.policy.risk,maxPositions:2}},previous.hash);
     return {...s,regimeQty:q};
   };
   await executor.sweepOrders();

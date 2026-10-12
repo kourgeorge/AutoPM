@@ -84,7 +84,7 @@ test('assistant settings reads are fresh, local and unaffected by conflicting pl
   const next = structuredClone(before.policy);
   next.risk.riskPerTradePct = 0.35;
   next.automation.level.entry = 'auto';
-  const changed = policy.saveStrategy(next, before.hash, 'alice', before.playbook + '\nLegacy note: risk per trade is 9%.');
+  const changed = policy.saveStrategy(next, before.hash, before.playbook + '\nLegacy note: risk per trade is 9%.');
   const fresh = JSON.parse(await assistant.executeTool('get_strategy_settings', {}));
   assert.equal(fresh.profile, 'Custom');
   assert.equal(fresh.risk.riskPerTradePctOfEquity, 0.35);
@@ -113,7 +113,7 @@ test('assistant saves requested settings changes and refuses invalid ones', asyn
   assert.equal(JSON.parse(await assistant.executeTool('update_trading_settings', { riskPerTradePct: 50 })).ok, false);
   assert.equal(policy.getPolicyHash(), hash);
   assert.equal(commands.pendingRequests('trader').length, 0);
-  policy.saveStrategy(before.policy, hash, 'test', before.playbook);
+  policy.saveStrategy(before.policy, hash, before.playbook);
 });
 
 test('a settings explanation reaches the account conversation without a trader handoff', async () => {
