@@ -124,7 +124,7 @@ Lessons require source decision IDs when written by an agent. Administrators can
 | `action-dedup.jsonl` | Stops the same request from sending the same order twice |
 | `alerts.jsonl` | Every alert and how it was handled |
 | `requests.jsonl` | Each request to the AI, from you or the scheduler, and its answer |
-| `transcripts.jsonl` | The full AI exchange for each request; chat history is read from here |
+| `trajectories.jsonl` | The full AI exchange for each request; chat history is read from here |
 | `tool-calls.jsonl` | Each tool the AI called and its result, so nothing runs twice |
 | `activity.jsonl` | The dashboard's activity feed |
 | `lessons.jsonl` | Lessons the trader keeps across cycles |

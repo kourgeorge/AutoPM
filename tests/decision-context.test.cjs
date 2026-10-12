@@ -99,7 +99,7 @@ test('saved contexts and receipts preserve every character and pages preserve fu
   assert.ok(bounded.length <= 2000); assert.match(bounded, /Whole section omitted/); assert.match(bounded, /UNKNOWN/);
   const [id] = Object.keys(saved);
   assert.equal(saved[id], brief);
-  storage.saveRecord('transcripts', context.requestId, { id: context.requestId, saved });
+  storage.saveRecord('trajectories', context.requestId, { id: context.requestId, saved });
   assert.equal(JSON.parse(readSavedResult('get_saved_context', { snapshotId: id, limit: 4000 })).totalCharacters, brief.length);
   assert.equal(boundedCycleContext(brief, 2000), brief);   // outside a turn nothing is saved or omitted
   const rows = Array.from({ length: 30 }, (_, i) => ({ symbol: 'ROW' + i, rationale: 'x'.repeat(800) }));

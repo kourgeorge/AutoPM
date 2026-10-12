@@ -28,12 +28,12 @@ export function readSavedResult(name: string, input: Record<string, unknown>): s
     return JSON.stringify({ receiptId: input.receiptId, ...textPage(row.result, offset, limit) });
   }
   const id = String(input.snapshotId), cut = id.lastIndexOf(':context-');
-  const text = cut > 0 ? readRecord<{ saved?: Record<string, string> }>('transcripts', id.slice(0, cut))?.saved?.[id] : undefined;
+  const text = cut > 0 ? readRecord<{ saved?: Record<string, string> }>('trajectories', id.slice(0, cut))?.saved?.[id] : undefined;
   if (text === undefined) throw new Error('Saved cycle context is unavailable');
   return JSON.stringify({ snapshotId: id, ...textPage(text, offset, limit) });
 }
 
-/** Keep text left out of the model's context on the running transcript. Null outside an agent turn. */
+/** Keep text left out of the model's context on the running trajectory. Null outside an agent turn. */
 export function saveContext(text: string): string | null {
   const store = agentContext.getStore();
   if (!store?.saved) return null;

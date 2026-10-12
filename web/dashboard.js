@@ -1447,8 +1447,8 @@ async function openSavedRecord(kind,id,offset=0,previous=[],taskId=null) {
 }
 // The agent's saved conversation, one collapsible block per message. The first message is the
 // engine's full briefing, so every block starts closed; tool results open their saved receipt.
-function transcriptView(messages,taskId) {
-  const section=document.createElement('details');section.className='transcript';
+function trajectoryView(messages,taskId) {
+  const section=document.createElement('details');section.className='trajectory';
   section.append(text('summary',`Conversation (${messages.length} messages)`));
   messages.forEach((m,i)=>{
     const block=document.createElement('details'),blocks=m.content || [];
@@ -1473,9 +1473,9 @@ async function openAgentTask(id) {
     parent.append(historyFacts([['Request ID',r.id],['Agent',roleLabel(r.role)],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',taskMode(r)]]));
     if(r.parentId)parent.append(uiButton(`Parent request: ${r.parentId}`,()=>openAgentTask(r.parentId)));
     parent.append(text('h3','Instruction'),text('p',r.text),text('h3','Outcome'),text('p',r.result || 'No outcome recorded yet.'));
-    if(data.transcript)parent.append(historyFacts([['Agent run',data.transcript.status],['Model rounds',data.transcript.rounds],['Input / output tokens',`${data.transcript.inTokens} / ${data.transcript.outTokens}`]]));
-    if(data.transcript?.error)parent.append(text('p',data.transcript.error,'review-warning'));
-    if(data.transcript?.messages?.length)parent.append(transcriptView(data.transcript.messages,id));
+    if(data.trajectory)parent.append(historyFacts([['Agent run',data.trajectory.status],['Model rounds',data.trajectory.rounds],['Input / output tokens',`${data.trajectory.inTokens} / ${data.trajectory.outTokens}`]]));
+    if(data.trajectory?.error)parent.append(text('p',data.trajectory.error,'review-warning'));
+    if(data.trajectory?.messages?.length)parent.append(trajectoryView(data.trajectory.messages,id));
     const tools=reviewSection(parent,`Tool activity (${data.totals.tools})`);
     if(!data.tools.length)tools.append(text('p','No tool attempts recorded.'));
     if(data.totals.tools>data.tools.length)tools.append(text('p',`Showing the latest ${data.tools.length} attempts.`));
