@@ -24,6 +24,10 @@ test('conversation tool calls expand complete inputs and outputs without losing 
   const input = { symbol: 'IBM', query: '<img src=x onerror=alert(1)>', nested: { flags: [true, false] } };
   const output = JSON.stringify({ points: Array.from({ length: 800 }, (_, i) => ({ value: i, note: 'complete observation' })), end: 'last output value' });
   const tool = { id: 'chat-tool-1', requestId: 'chat-request', agent: 'assistant', name: 'get_bars', input, output };
+  // The feed keeps only the receipt id; the dashboard loads the output from the saved tool call.
+  const storage = require('../src/core/storage');
+  storage.saveRecord('tool-calls', 'chat-tool-1', { name: 'get_bars', input, result: output });
+  storage.saveRecord('tool-calls', 'chat-tool-2', { name: 'inspect_order', input: {}, result: '{"ok":false,"error":"Order unavailable"}' });
   ui.echoOperator('How is my portfolio doing?');
   ui.log('TOOL', '[assistant] get_bars(symbol=IBM) → 800 bars', tool);
   require('../src/core/agentContext').agentContext.run({ role: 'assistant', requestId: 'chat-request', actorId: 'operator' }, () => ui.reply('Your portfolio is **lightly invested**, with two open positions.\n\nI can walk you through the current exposure and the trader’s latest decision.'));
@@ -247,7 +251,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
   require('../src/features/alertLog').appendAlertLog(event);require('../src/features/alertLog').appendAlertLog(resolved);
   require('../src/core/storage').saveValue('eventRegistry',{pending:[event],live:[event]});
   const usageDay=new Date().toISOString().slice(0,10);
-  require('../src/core/storage').saveValue('modelUsage:'+usageDay,{day:usageDay,requests:3,inputTokens:1400,outputTokens:100,missingUsage:0,byAgent:{trader:{requests:2,inputTokens:1200,outputTokens:80,missingUsage:0},assistant:{requests:1,inputTokens:200,outputTokens:20,missingUsage:0}}});
+  require('../src/core/storage').saveValue('modelUsage',{day:usageDay,requests:3,inputTokens:1400,outputTokens:100,missingUsage:0,byAgent:{trader:{requests:2,inputTokens:1200,outputTokens:80,missingUsage:0},assistant:{requests:1,inputTokens:200,outputTokens:20,missingUsage:0}}});
   const tick=(equity,price)=>recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,positions:{MSFT:{symbol:'MSFT',qty:3,entryPrice:410,price,stopLevel:null}},orders:[],watchlist:{AAPL:{symbol:'AAPL',price:100}},account:{equity,cash:98000},portfolio:{},session:'open'});
   tick(100000,415);
 

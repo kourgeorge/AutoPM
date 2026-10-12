@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { readDecision, decision, recordDecision } from './journal';
+import { readDecision } from './journal';
 import { validateEvidenceIds } from './evidence';
 import { transaction } from '../core/storage';
 import { listReviews, saveReview } from './reviews';
@@ -88,8 +88,6 @@ export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'en
     const id = 'review-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
     if (listReviews<PositionReview>('record_position_review', r => r.id === id, 1).length) return { ok: true, reviewId: id };
     const row: PositionReview = { ...input, entryDecisionId, id, at: new Date().toISOString() };
-    recordDecision(decision('hold', 'trader', { symbol: row.symbol, rationale: `Review ${row.decision}: ${row.changedEvidence}. Unknown: ${row.unknowns.join('; ') || 'none stated'}. Review by ${row.nextReviewAt}.`,
-      observationIds: row.evidenceIds, reviewId: id, price: row.price }), id);
     return saveReview('record_position_review', row, 'Review saved. This receipt does not place an order; send any chosen reduction or exit separately.');
   });
 }

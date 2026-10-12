@@ -1172,7 +1172,8 @@ function toolAckEvent(input: Record<string, unknown>): string {
   // `ignoring` always writes — skipping a signal or overriding a stop is a consequential
   // non-action and must survive cycle boundaries.
   //
-  // `acknowledged` only writes when the trader supplied a note AND the event has a symbol.
+  // `acknowledged` only writes when the trader supplied a note, the event has a symbol, and the
+  // symbol is not held (a "skip"; for a held stock see below).
   // Two classes are always silent even with a note:
   //  - heartbeat events (symbol: null) — portfolio state summaries repeat the cycle
   //    context verbatim and are derived fresh every cycle; nothing to preserve.
@@ -1184,10 +1185,12 @@ function toolAckEvent(input: Record<string, unknown>): string {
     disposition === 'ignoring' ||
     (disposition === 'acknowledged' && !isHeartbeat && symbol != null && note != null && note.trim() !== '');
 
-  if (shouldJournal) {
-    // Hold or skip is a fact, not the model's wording: held when answered means it kept the position.
-    const held = symbol != null && (!!getPositionSnapshot(symbol)
-      || Object.values(getLastTick()?.positions ?? {}).some(p => sameSymbol(p.symbol, symbol)));
+  // Hold or skip is a fact, not the model's wording: held when answered means it kept the position.
+  const held = symbol != null && (!!getPositionSnapshot(symbol)
+    || Object.values(getLastTick()?.positions ?? {}).some(p => sameSymbol(p.symbol, symbol)));
+  // A routine "kept it" on a held stock is not journalled: the note stays on the alert and the
+  // position review is the record of the hold. Declining an alert on a held stock still is.
+  if (shouldJournal && !(held && disposition === 'acknowledged')) {
     recordDecision(decision(held ? 'hold' : 'skip', 'trader', {
       symbol,
       triggerEventId: id,

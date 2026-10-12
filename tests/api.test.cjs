@@ -36,12 +36,14 @@ test('the dashboard opens without a login',async()=>{
   assert.equal(icon.status,200);assert.equal(icon.headers.get('content-type'),'image/svg+xml');
   assert.equal((await request('/api/status')).res.status,200);
 });
-test('tool exchanges retain complete input and output in history, polling and live events', async () => {
+test('feed tool lines point at the saved receipt instead of copying its output; the output loads in full from it', async () => {
   const { logger, attachUI } = require('../src/core/logger');
   const input = { symbol: 'FULLPAYLOAD', nested: { text: 'input'.repeat(300) } };
   const output = JSON.stringify({ bars: Array.from({ length: 700 }, (_, i) => ({ close: i, note: 'complete observation' })), end: 'last observation' });
   assert.ok(output.length > 10000);
   const tool = { id: 'full-tool-call', requestId: 'full-tool-request', agent: 'assistant', name: 'get_bars', input, output };
+  const feedTool = { id: tool.id, requestId: tool.requestId, agent: tool.agent, name: tool.name, input, failed: false };
+  storage.saveRecord('tool-calls', tool.id, { name: tool.name, input, result: output });
   const controller = new AbortController();
   const stream = await fetch(base + '/api/stream', { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) });
   const reader = stream.body.getReader();
@@ -53,15 +55,15 @@ test('tool exchanges retain complete input and output in history, polling and li
     while (!received.includes('event: feed\n')) { const chunk = await reader.read();assert.equal(chunk.done, false);received += decoder.decode(chunk.value, { stream: true }); }
     while (!received.includes('\n\n', received.indexOf('event: feed\n'))) { const chunk = await reader.read();assert.equal(chunk.done, false);received += decoder.decode(chunk.value, { stream: true }); }
     const live = JSON.parse(received.split('\n').find(line => line.startsWith('data: ')).slice(6));
-    assert.deepEqual(live.tool, tool);
+    assert.deepEqual(live.tool, feedTool);
     assert.equal(live.source, 'assistant');
     storage.closeStorage();
     const tail = (await request('/api/feed?tail=1')).body.entries[0];
-    assert.deepEqual(tail.tool, tool);
+    assert.deepEqual(tail.tool, feedTool);
     assert.equal(tail.source, 'assistant');
     const polled = (await request('/api/feed?after=' + (tail.seq - 1))).body.entries[0];
-    assert.deepEqual(polled.tool, tool);
-    assert.ok(tail.text.length < output.length, 'compact log text does not replace the full payload');
+    assert.deepEqual(polled.tool, feedTool);
+    assert.deepEqual((await request('/api/tool-output/' + tool.id)).body, { input, output });
   } finally { attachUI(null);controller.abort();await reader.cancel().catch(() => {}); }
 });
 test('only this computer can use the API: other host names and other sites are refused',async()=>{

@@ -27,8 +27,10 @@ export function saveAiSettings(settings: AiSettings): AiSettings {
 /** Chat and research each get a share of the daily cap so neither can starve the trader. */
 const SHARES = { assistant: 0.4, researcher: 0.3 } as const;
 const shareLimit = (limit: number | null, share: number) => limit === null ? null : Math.max(1, Math.floor(limit * share));
+/** One saved key holding today's counts; a new day starts from zero and overwrites it. */
 export function modelUsage(day = new Date().toISOString().slice(0, 10)): Usage {
-  return readValue<Usage>('modelUsage:' + day) ?? { day, requests: 0, inputTokens: 0, outputTokens: 0, missingUsage: 0 };
+  const saved = readValue<Usage>('modelUsage');
+  return saved?.day === day ? saved : { day, requests: 0, inputTokens: 0, outputTokens: 0, missingUsage: 0 };
 }
 export function modelBudgetStatus() {
   const settings = aiSettings(), usage = modelUsage(), limit = settings.maxRequestsPerDay;
@@ -52,7 +54,7 @@ export function withModelBudget(provider: ModelProvider): ModelProvider {
       const chatLimit = shareLimit(limit, SHARES.assistant), researchLimit = shareLimit(limit, SHARES.researcher);
       if (assistant && chatLimit !== null && (usage.assistantRequests ?? 0) >= chatLimit) throw new Error('Chat budget reached; remaining model capacity is reserved for the trader');
       if (role === 'researcher' && researchLimit !== null && (usage.byAgent?.researcher?.requests ?? 0) >= researchLimit) throw new Error('Research budget reached; remaining model capacity is reserved for the trader');
-      saveValue('modelUsage:' + day, { ...usage, requests: usage.requests + 1,
+      saveValue('modelUsage', { ...usage, requests: usage.requests + 1,
         byAgent: { ...usage.byAgent, [role]: { ...(usage.byAgent?.[role] ?? emptyUsage()), requests: (usage.byAgent?.[role]?.requests ?? 0) + 1 } },
         assistantRequests: (usage.assistantRequests ?? 0) + (assistant ? 1 : 0) });
     });
@@ -61,7 +63,7 @@ export function withModelBudget(provider: ModelProvider): ModelProvider {
     transaction(() => {
       const usage = modelUsage(day);
       const agent = usage.byAgent?.[role] ?? emptyUsage();
-      saveValue('modelUsage:' + day, { ...usage,
+      saveValue('modelUsage', { ...usage,
         byAgent: { ...usage.byAgent, [role]: { ...agent,
           inputTokens: agent.inputTokens + response.usage.inputTokens,
           outputTokens: agent.outputTokens + response.usage.outputTokens,

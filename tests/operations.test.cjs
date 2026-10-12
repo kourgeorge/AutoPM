@@ -24,7 +24,7 @@ test('daily per-agent token counts persist without assigning legacy usage to an 
   const {agentContext}=require('../src/core/agentContext');
   const previous=process.env.AI_MAX_REQUESTS_PER_DAY;process.env.AI_MAX_REQUESTS_PER_DAY='20';
   const day=new Date().toISOString().slice(0,10);
-  storage.saveValue('modelUsage:'+day,{day,requests:2,inputTokens:100,outputTokens:20,missingUsage:0});
+  storage.saveValue('modelUsage',{day,requests:2,inputTokens:100,outputTokens:20,missingUsage:0});
   try {
     const provider=withModelBudget({chat:async params=>({content:[],stopReason:'end_turn',usage:{inputTokens:params.maxTokens,outputTokens:5}})});
     await Promise.all(['trader','assistant'].map((role,i)=>agentContext.run({role,actorId:'test',requestId:role},()=>provider.chat({systemPrompt:'test',messages:[],tools:[],maxTokens:10+i}))));

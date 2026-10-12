@@ -9,7 +9,7 @@ import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudg
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
-import { readRecords, readRecordPage, listRecords, readRecord } from '../core/storage';
+import { listRecords, readRecord } from '../core/storage';
 import { broker } from '../broker';
 import { canonicalSymbol } from '../core/symbols';
 import { collectBars } from '../collect/barSource';
@@ -265,6 +265,12 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       startedAt: row.startedAt, finishedAt: row.finishedAt, resultSaved: row.result !== undefined,
       ...savedPage(row.result ?? 'No result was recorded. Inspect linked action outcomes before retrying.', url) };
   });
+  // Unpaged, for expanding a feed line; the feed keeps only the receipt id.
+  add('GET', '/api/tool-output/:id', ({ params }) => {
+    const row = readRecord<{ input?: unknown; result?: string }>('tool-calls', params.id);
+    if (!row) throw new HttpError(404, 'This tool receipt was not found');
+    return { input: row.input ?? null, output: row.result ?? null };
+  });
   add('GET', '/api/source-text/:id', ({ params, url }) => {
     const row = readRecord<Source>('sources', params.id);
     if (row?.text === undefined) throw new HttpError(404, 'Original source text has not been saved');
@@ -335,19 +341,12 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('POST', '/api/orders/:id/approve', decide('approve'));
   add('POST', '/api/orders/:id/reject', decide('reject'));
 
-  add('GET', '/api/notifications', () => ({ notifications: readRecords('notifications', 100) }));
   add('GET', '/api/activity-history', ({ url }) => {
     const type = url.searchParams.get('type') ?? 'all';
     if (!['all', 'decision', 'fill', 'event'].includes(type)) throw new HttpError(400, 'type must be all, decision, fill or event');
     const offset = parseNonNegativeInt(url.searchParams.get('offset'), 0, 'offset');
     const limit = Math.max(1, Math.min(parseNonNegativeInt(url.searchParams.get('limit'), 50, 'limit'), 100));
     return activityHistory({ type, query: url.searchParams.get('q') ?? '', offset, limit });
-  });
-  add('GET', '/api/history/:kind', ({ params, url }) => {
-    if (!['journal','fills','strategy-changes','notifications'].includes(params.kind)) throw new HttpError(400, 'Unknown history type');
-    const after = parseNonNegativeInt(url.searchParams.get('after'), 0, 'after');
-    const limit = Math.min(parseNonNegativeInt(url.searchParams.get('limit'), 50, 'limit'), 100);
-    return { entries: readRecordPage(params.kind, after, limit) };
   });
 
   add('GET', '/api/events', () => {
