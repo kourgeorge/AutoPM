@@ -285,6 +285,20 @@ test('an answered event is journalled as skip for a stock you do not hold; for a
   assert.equal(kindFor(notHeld.id), 'skip');
 });
 
+test('get_pending_events groups all-clears to their ids and still serves them in full by kind', async () => {
+  events.resetEventRegistry();
+  const p = policy.getPolicy();
+  const clear = symbol => events.publishDiscrete('condition_resolved', { symbol, cooldownKey: 'resolved:data_stale:' + symbol, severity: 'info', headline: symbol + ' data_stale cleared', evidence: { resolvedKind: 'data_stale' } }, p);
+  const cleared = [clear('AAPL'), clear('MSFT')];
+  const incident = events.publishDiscrete('review_ready', { symbol: 'LLY', cooldownKey: 'audit:review', severity: 'warn', headline: 'Review LLY', evidence: {} }, p);
+  const grouped = JSON.parse(await traderTools.executeTraderTool('get_pending_events', {}));
+  assert.deepEqual(grouped.events.map(e => e.id), [incident.id]);
+  assert.deepEqual(grouped.allClears.data_stale, cleared.map(e => e.id));
+  const full = JSON.parse(await traderTools.executeTraderTool('get_pending_events', { kind: 'condition_resolved' }));
+  assert.deepEqual(full.events.map(e => e.headline), ['AAPL data_stale cleared', 'MSFT data_stale cleared']);
+  events.resetEventRegistry();
+});
+
 test('pending urgent incidents and handling survive registry restart', () => {
   const p = policy.getPolicy(), tick = { cooldowns: {}, armed: new Set(), dirty: false };
   const hit = { symbol: 'AAPL', cooldownKey: 'audit:urgent', severity: 'urgent', headline: 'Review', evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } };

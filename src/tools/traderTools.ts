@@ -175,8 +175,14 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_pending_events',
-    description: 'Read the full evidence for every machine event that has fired and not been acked. The MACHINE EVENTS block in the cycle context is a summary of these; call this for the numbers behind a headline.',
-    input_schema: { type: 'object', properties: {}, required: [] },
+    description: 'Read the full evidence for every machine event that has fired and not been acked. The MACHINE EVENTS block in the cycle context is a summary of these; call this for the numbers behind a headline. All-clears (condition_resolved) come grouped as allClears — just their ids, by what cleared — so ack them by id; pass kind: "condition_resolved" for their full evidence.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', description: 'Optional — only events of this kind, all in full (e.g. "condition_resolved").' },
+      },
+      required: [],
+    },
   },
   {
     name: 'get_orders',
@@ -394,7 +400,7 @@ async function dispatchTraderTool(
       case 'execute_entry':       return await toolExecuteEntry(input);
       case 'annotate_position':   return await toolAnnotatePosition(input);
       case 'execute_exit':        return await toolExecuteExit(input);
-      case 'get_pending_events':  return toolGetPendingEvents();
+      case 'get_pending_events':  return toolGetPendingEvents(input);
       case 'get_orders':       return toolGetOrders(input);
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
@@ -1106,8 +1112,24 @@ function toolGetOrders(input: Record<string, unknown>): string {
   });
 }
 
-function toolGetPendingEvents(): string {
-  return JSON.stringify({ events: getPendingEvents() });
+/**
+ * All-clears are grouped to their ids: after a feed outage there can be dozens (50 on
+ * 2026-10-12, 34k of a 41k-character result), and a result over the context bound made the
+ * model page through it 4000 characters a round — rounds that ran reviews out of time. The id
+ * is all an ack needs; `kind` brings back the full evidence when it matters.
+ */
+function toolGetPendingEvents(input: Record<string, unknown>): string {
+  const events = getPendingEvents();
+  if (typeof input.kind === 'string' && input.kind) return JSON.stringify({ events: events.filter(e => e.kind === input.kind) });
+  const allClears: Record<string, string[]> = {};
+  for (const e of events) {
+    if (e.kind !== 'condition_resolved') continue;
+    (allClears[String(e.evidence.resolvedKind ?? 'unknown')] ??= []).push(e.id);
+  }
+  return JSON.stringify({
+    events: events.filter(e => e.kind !== 'condition_resolved'),
+    ...(Object.keys(allClears).length ? { allClears: { note: 'condition_resolved event ids, grouped by the condition that cleared. Ack each id; get_pending_events({ kind: "condition_resolved" }) has their full evidence.', ...allClears } } : {}),
+  });
 }
 
 /**
