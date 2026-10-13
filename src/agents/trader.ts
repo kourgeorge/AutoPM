@@ -34,7 +34,6 @@ import {
 import type { ChatMessage, ContentBlock } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
 
-const MAX_ROUNDS = 30;
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
 const PAUSED_RECHECK_MS = 60 * 60_000;
 
@@ -136,7 +135,7 @@ export class Trader {
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
       messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
-      maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
+      maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
     const actions = getRequest(command.id)?.orderIds ?? [];

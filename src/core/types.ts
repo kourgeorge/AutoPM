@@ -65,5 +65,4 @@ export interface AiConfig {
   apiKey: string;
   baseUrl?: string;           // LiteLLM or any custom endpoint; undefined = use provider default
   maxTokensPerTurn: number;
-  maxToolRounds: number;
 }

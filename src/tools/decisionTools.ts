@@ -35,12 +35,12 @@ export const DECISION_TOOL_DEFINITIONS: ToolDefinition[] = [
   definition('get_thesis_status', 'Check each recorded entry premise against current measured metrics, or assess a proposed entry thesis. Returns supported/contradicted/unknown with sources and dates. A qualitative premise remains unverified; missing data cannot establish an intact thesis. With snapshotId, use the exact previously observed dossier instead of refetching.', { symbol: symbolSchema, snapshotId: { type: 'string' }, thesis: THESIS_SCHEMA }, ['symbol']),
   definition('record_position_review', 'Save a MATERIAL change to a managed holding assessment independently of machine events and stop adjustments. This is a review receipt, not an order. Reductions/exits must be sent separately. Keep the original entry thesis immutable; unknown conditions remain stated.', {
     symbol: symbolSchema, decision: { type: 'string', enum: ['keep', 'reduce', 'exit', 'wait'] }, changedEvidence: { type: 'string', minLength: 20, maxLength: 2000 },
-    evidenceIds: idsSchema, snapshotId: { type: 'string' }, unknowns: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 300 } }, nextReviewAt: { type: 'string' },
-  }, ['symbol', 'decision', 'changedEvidence', 'evidenceIds', 'snapshotId', 'unknowns', 'nextReviewAt']),
+    evidenceIds: idsSchema, snapshotId: { type: 'string' }, unknowns: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 300 } },
+  }, ['symbol', 'decision', 'changedEvidence', 'evidenceIds', 'snapshotId', 'unknowns']),
   definition('record_candidate_review', 'Save a researched buy/wait/skip recommendation for a new opportunity. snapshotId must be the evidenceId from a fresh get_position_review for this symbol with positionKnown:true and holding:null; include that ID in evidenceIds. Signals, calendar and fundamentals evidence cannot serve as snapshotId. Numeric thesis premises must cite evidence containing metrics[metric].value; the get_position_review dossier provides these measured metrics. Buy requires an evidence-linked proposed thesis and fresh allowed get_entry_plan evidence; include its ID in evidenceIds and entryPlanId. This is not an order or execution approval. Wait can preserve a promising conditional setup and the condition needed before entry. A missing historical thesis is normal for a candidate. Do not write every unselected scan row.', {
     symbol: symbolSchema, decision: { type: 'string', enum: ['buy', 'wait', 'skip'] }, reason: { type: 'string', minLength: 20, maxLength: 2000 }, evidenceIds: idsSchema, snapshotId: { type: 'string' },
-    thesis: THESIS_SCHEMA, entryPlanId: { type: 'string' }, unknowns: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 300 } }, nextReviewAt: { type: 'string' },
-  }, ['symbol', 'decision', 'reason', 'evidenceIds', 'snapshotId', 'unknowns', 'nextReviewAt']),
+    thesis: THESIS_SCHEMA, entryPlanId: { type: 'string' }, unknowns: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 300 } },
+  }, ['symbol', 'decision', 'reason', 'evidenceIds', 'snapshotId', 'unknowns']),
   definition('get_market_context', 'Measure completed-session benchmark/sector-proxy returns and breadth across the approved watchlist plus holdings. This is explicitly not exchange-wide breadth. Paginated stable rows and null missing inputs; no forecast score.', pages),
   definition('get_intraday_volume', 'Compare completed five-minute regular-session volume with identical ET time bins on prior sessions. Delayed tape and coverage are reported. Do not compare partial-day volume to a full-day average.', { symbol: symbolSchema }, ['symbol']),
   definition('compare_position_actions', 'Compare keep/reduce/exit and optionally replacement from current prices, actual protection, measured spread costs and projected risk budgets. A replacement preview assumes an exit fills first and does not approve or send either order. Supply supported candidate levels.', {
@@ -123,12 +123,12 @@ export async function executeDecisionTool(name: string, input: Record<string, un
       if (e?.data.positionKnown !== true || !e.data.holding) throw new Error('Review snapshot must confirm a current holding');
       if (e.data.policyHash !== getPolicyHash()) throw new Error('Strategy changed since this review snapshot');
       result = savePositionReview({ symbol, decision: input.decision as any, changedEvidence: String(input.changedEvidence), evidenceIds: input.evidenceIds as string[],
-        snapshotId: String(input.snapshotId), unknowns: input.unknowns as string[], nextReviewAt: String(input.nextReviewAt), price: e.data.forward?.price ?? null,
+        snapshotId: String(input.snapshotId), unknowns: input.unknowns as string[], price: e.data.forward?.price ?? null,
         contextVariant: e.data.contextVariant ?? 'decision-context-v1', policyHash: getPolicyHash(), holdingHorizonDays: e.data.intendedHorizonDays ?? null }); break;
     }
     case 'record_candidate_review': result = saveCandidateReview(symbol, input.decision as CandidateReview['decision'], String(input.reason), input.evidenceIds as string[], String(input.snapshotId), {
       thesis: input.thesis as CandidateReviewDetails['thesis'], entryPlanId: input.entryPlanId as string | undefined,
-      unknowns: input.unknowns as string[] | undefined, nextReviewAt: input.nextReviewAt as string | undefined,
+      unknowns: input.unknowns as string[] | undefined,
     }); break;
     case 'get_market_context': result = recordPage(name, input.snapshotId ? { rows: [] } : await marketContext(), 'rows', input); break;
     case 'get_intraday_volume': result = await getIntradayVolume(ticker); break;

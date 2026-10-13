@@ -12,7 +12,7 @@ import type { Bar } from '../core/types';
 import type { DecisionRecord } from '../journal/types';
 import { sameSymbol } from '../core/symbols';
 
-export interface CandidateReviewDetails { thesis?: EntryThesis; entryPlanId?: string; unknowns?: string[]; nextReviewAt?: string }
+export interface CandidateReviewDetails { thesis?: EntryThesis; entryPlanId?: string; unknowns?: string[] }
 /** Saved as the result of the record_candidate_review tool call (see `journal/reviews.ts`). */
 export interface CandidateReview extends CandidateReviewDetails { id: string; at: string; symbol: string; decision: 'buy' | 'wait' | 'skip'; reason: string; evidenceIds: string[];
   snapshotId: string; price: number | null; contextVariant: string; policyHash: string }
@@ -31,10 +31,6 @@ export function saveCandidateReview(symbol: string, decision: CandidateReview['d
   if (typeof reason !== 'string' || reason.trim().length < 20 || reason.length > 2000) throw new Error('State the material reason for the candidate assessment in 20–2000 characters');
   const thesis = details.thesis ? validateThesis(details.thesis, symbol) : undefined;
   if (details.unknowns !== undefined && (!Array.isArray(details.unknowns) || details.unknowns.length > 8 || details.unknowns.some(s => typeof s !== 'string' || !s.trim() || s.length > 300))) throw new Error('Provide up to 8 explicit unknowns');
-  if (details.nextReviewAt !== undefined) {
-    const nextAt = Date.parse(details.nextReviewAt);
-    if (!Number.isFinite(nextAt) || nextAt <= Date.now() || nextAt > Date.now() + 30 * 86400000) throw new Error('Next review must be within the next 30 days');
-  }
   const plan = details.entryPlanId ? evidence.find(e => e.id === details.entryPlanId) : undefined;
   if (details.entryPlanId && (plan?.tool !== 'get_entry_plan' || !fresh(plan.recordedAt) || plan.data.policyHash !== getPolicyHash() || !sameSymbol(plan.data.symbol ?? '', symbol))) throw new Error('Entry plan must reference a fresh get_entry_plan observation for this symbol and strategy');
   if (decision === 'buy') {
@@ -45,10 +41,10 @@ export function saveCandidateReview(symbol: string, decision: CandidateReview['d
       || !levels || !Number.isFinite(levels.stopLoss) || !Number.isFinite(levels.takeProfit) || !(levels.stopLoss > 0 && levels.stopLoss < plan.data.entryPrice && levels.takeProfit > plan.data.entryPrice)) throw new Error('A buy candidate requires a fresh allowed entry plan with a feasible size and supported stop/target levels. Record a conditional wait if execution inputs are unavailable');
   }
   const savedDetails = { ...(thesis ? { thesis } : {}), ...(details.entryPlanId ? { entryPlanId: details.entryPlanId } : {}),
-    ...(details.unknowns !== undefined ? { unknowns: [...details.unknowns] } : {}), ...(details.nextReviewAt ? { nextReviewAt: details.nextReviewAt } : {}) };
+    ...(details.unknowns !== undefined ? { unknowns: [...details.unknowns] } : {}) };
   const old = listReviews<CandidateReview>('record_candidate_review', r => sameSymbol(r.symbol, symbol), 1)[0];
   if (old?.decision === decision && old.reason === reason && old.policyHash === getPolicyHash()
-    && JSON.stringify([old.thesis, old.entryPlanId, old.unknowns, old.nextReviewAt]) === JSON.stringify([thesis, details.entryPlanId, details.unknowns, details.nextReviewAt])) return { ok: true, unchanged: true, reviewId: old.id };
+    && JSON.stringify([old.thesis, old.entryPlanId, old.unknowns]) === JSON.stringify([thesis, details.entryPlanId, details.unknowns])) return { ok: true, unchanged: true, reviewId: old.id };
   const id = 'candidate-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
   const row: CandidateReview = { id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
     price: snapshot.data.forward?.price ?? null, contextVariant: snapshot.data.contextVariant ?? 'decision-context-v1', policyHash: getPolicyHash() };

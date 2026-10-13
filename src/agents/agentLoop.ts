@@ -22,9 +22,9 @@ interface ToolCallRecord { name: string; input: unknown; result?: string }
 /** What the operator reads instead of the platform's "The operation was aborted due to timeout". */
 export const SLOW_MODEL_MESSAGE = 'The AI service is responding slowly right now and this request timed out. Please try again in a minute.';
 /**
- * A turn has no overall deadline: a review that needs many rounds runs to the end (maxRounds still
- * bounds it). Only a single hung model request times out — the fetch deadline (DOMException
- * TimeoutError) or the Anthropic SDK's own timeout error.
+ * A turn has no overall deadline and no round cap: the agent takes as many rounds as it needs and
+ * ends when it stops calling tools (or the operator stops it). Only a single hung model request
+ * times out — the fetch deadline (DOMException TimeoutError) or the Anthropic SDK's own timeout error.
  */
 function isTimeout(err: any): boolean {
   return err?.name === 'TimeoutError' || err instanceof Anthropic.APIConnectionTimeoutError;
@@ -100,7 +100,7 @@ export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessag
 
 export async function runAgentLoop(opts: {
   context: AgentContext; provider: ModelProvider; registry: ToolRegistry; systemPrompt: string;
-  messages: () => Promise<ChatMessage[]>; maxRounds: number; maxTokens: number;
+  messages: () => Promise<ChatMessage[]>; maxTokens: number;
   signal?: AbortSignal; beforeTool?: () => void;
   revision?: string;
 }): Promise<Trajectory> {
@@ -159,7 +159,6 @@ export async function runAgentLoop(opts: {
           current.messages.push({ role: 'user', content: results }); checkpoint();
           if (finish) { current.status = 'completed'; break; }
         }
-        if (current.rounds >= opts.maxRounds) { current.status = 'failed'; current.error = 'Turn reached its tool-round limit; review saved actions before retrying'; break; }
         current.messages = compactMessages(current.messages);
         const response = await abortable(opts.provider.chat({ systemPrompt: opts.systemPrompt, messages: current.messages,
           tools: opts.registry.definitions, maxTokens: opts.maxTokens, signal }), signal);

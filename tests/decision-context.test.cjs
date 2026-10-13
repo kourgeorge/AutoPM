@@ -189,7 +189,7 @@ test('a share-class ticker reaches data sources as written; records stay keyed b
         reason: 'Wait for the trend composite to reach the entry threshold.', evidenceIds: [dossier.evidenceId], snapshotId: dossier.evidenceId,
         thesis: { setup: 'Conditional momentum entry after trend repair', horizonDays: 30, catalystRiskAccepted: false,
           premises: [{ label: 'Price holds above 100', metric: 'lastClose', operator: 'gt', threshold: 100, evidenceIds: [dossier.evidenceId] }] },
-        unknowns: ['Fundamentals unavailable.'], nextReviewAt: new Date(Date.now() + 86400000).toISOString() })));
+        unknowns: ['Fundamentals unavailable.'] })));
     assert.equal(result.ok, true, result.error);
   } finally { market.dailyHistory = saved.daily; market.relativeContext = saved.relative; prices.collectPrices = saved.prices; fundamentals.getFundamentals = saved.fundamentals; }
   const { yahooSymbol } = from('collect/yahoo');
@@ -200,7 +200,7 @@ test('material reviews are durable, atomic, idempotent and scoped to the entry l
   state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-old' } } });
   const e = evidence.recordEvidence('get_position_review', { symbol: 'AAPL', positionKnown: true, managed: true, holding: { qty: 10 }, entryDecisionId: 'entry-old' });
   const input = { symbol: 'AAPL', decision: 'keep', changedEvidence: 'Price recovered but missing demand evidence remains unresolved.',
-    evidenceIds: [e.id], snapshotId: e.id, unknowns: ['Demand'], nextReviewAt: new Date(Date.now() + 3600000).toISOString(), price: 100,
+    evidenceIds: [e.id], snapshotId: e.id, unknowns: ['Demand'], price: 100,
     policyHash: policy.getPolicyHash(), contextVariant: 'decision-context-v1', holdingHorizonDays: 20 };
   const result = agentContext.run({ ...context, toolCallId: 'review-call' }, () => thesis.savePositionReview(input));
   assert.equal(reviews.listReviews('record_position_review').length, 1); assert.equal(journal.readDecision(result.reviewId), undefined);
@@ -236,7 +236,7 @@ test('candidate review rejects signal snapshots and raw metric citations, then s
         { label: 'Trend recovers before entry', metric: 'trendComposite', operator: 'gte', threshold: .2, evidenceIds: [signals.id] },
         { label: 'Revenue growth remains positive', metric: 'revenueGrowthPct', operator: 'gt', threshold: 0, evidenceIds: [fundamentals.id] },
         { label: 'Earnings outside blackout', metric: 'earningsDaysUntil', operator: 'gt', threshold: 5, evidenceIds: [calendar.id] },
-      ] }, unknowns: ['Fresh bid/ask unavailable.'], nextReviewAt: new Date(Date.now() + 7 * 86400000).toISOString() };
+      ] }, unknowns: ['Fresh bid/ask unavailable.'] };
   const rejected = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', input));
   assert.equal(rejected.ok, false);
   assert.match(rejected.error, /snapshotId references get_signals/);
@@ -257,7 +257,6 @@ test('candidate review rejects signal snapshots and raw metric citations, then s
   assert.equal(row.snapshotId, dossier.id);
   assert.deepEqual(row.thesis, input.thesis);
   assert.deepEqual(row.unknowns, input.unknowns);
-  assert.equal(row.nextReviewAt, input.nextReviewAt);
   assert.equal(thesis.evaluatePremises(row.thesis, dossier.data.metrics).status, 'contradicted');
   assert.equal(JSON.parse(storage.readRecord('tool-calls', 'lly-candidate').result).reviewId, saved.reviewId);
   assert.equal(storage.listRecords('orders').length, 0);
@@ -267,7 +266,7 @@ test('candidate snapshot errors distinguish missing citations, unknown positions
   const candidate = evidence.recordEvidence('get_position_review', { symbol: 'LLY', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null });
   const other = evidence.recordEvidence('get_signals', { symbol: 'LLY', tally: { composite: .024 } });
   const input = { symbol: 'LLY', decision: 'wait', reason: 'Wait for the measured trend to repair before entering.',
-    evidenceIds: [other.id], snapshotId: candidate.id, unknowns: [], nextReviewAt: new Date(Date.now() + 86400000).toISOString() };
+    evidenceIds: [other.id], snapshotId: candidate.id, unknowns: [] };
   const missing = JSON.parse(await traderTools.executeTraderTool('record_candidate_review', input));
   assert.equal(missing.ok, false);
   assert.match(missing.error, /snapshotId must be included in evidenceIds/);

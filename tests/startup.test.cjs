@@ -21,7 +21,7 @@ async function launch({ state = legacy, env = {}, invalidPolicy = false } = {}) 
     cwd: root,
     env: { ...process.env, DATA_DIR: dir, HEADLESS: '0', TERM: 'xterm-256color',
       BROKER: 'alpaca', AI_PROVIDER: 'ollama', AI_API_KEY: 'test',
-      AI_MODEL: 'test', AI_BASE_URL: '', AI_MAX_TOKENS: '4096', AI_MAX_TOOL_ROUNDS: '10',
+      AI_MODEL: 'test', AI_BASE_URL: '', AI_MAX_TOKENS: '4096',
       ALPACA_KEY_ID: 'test', ALPACA_SECRET_KEY: 'test', ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
       IBKR_PORT: '7497', ENGINE_PORT: '18787', ALERT_WEBHOOK_URL: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -72,9 +72,9 @@ test('data saved for another account prevents startup', async () => {
 });
 
 test('configuration and policy errors before boot remain visible', async () => {
-  const config = await launch({ env: { AI_MAX_TOOL_ROUNDS: '999' } });
+  const config = await launch({ env: { AI_MAX_TOKENS: '99999' } });
   assert.equal(config.code, 1);
-  assert.match(config.stderr, /AutoTrade startup failed: AI_MAX_TOOL_ROUNDS/);
+  assert.match(config.stderr, /AutoTrade startup failed: AI_MAX_TOKENS/);
   const policy = await launch({ invalidPolicy: true });
   assert.equal(policy.code, 1);
   assert.match(policy.stderr, /AutoTrade startup failed:/);

@@ -1338,7 +1338,6 @@ function renderPositionReview(data) {
   const flags=text('div','','position-flags');
   flags.append(text('span',data.managed?'Managed by AutoTrade':data.held===true?'Unmanaged holding':data.held===false?'Candidate':'Holdings unknown','badge'));
   if(assessment)flags.append(text('span',`Saved assessment: ${assessment.decision==='buy'?'BUY CANDIDATE':assessment.decision.toUpperCase()}`,'badge'));
-  if(reviewDue(assessment?.nextReviewAt))flags.append(text('span','Review due','badge pending'));
   if(assessment?.policyHash && assessment.policyHash!==data.policyHash)flags.append(text('span','Strategy changed','badge pending'));
   const controls=text('div','','position-controls');
   controls.append(uiButton('Discuss with agent',()=>{
@@ -1352,7 +1351,7 @@ function renderPositionReview(data) {
   const latest=reviewSection(panels.assessment,'Latest assessment');
   if (assessment) {
     latest.append(text('p',assessment.decision==='buy'?'BUY CANDIDATE':assessment.decision.toUpperCase(),'review-verdict'));
-    latest.append(historyFacts([['Recorded',savedTime(assessment.at)],['Next review',assessment.nextReviewAt ? `${savedTime(assessment.nextReviewAt)}${reviewDue(assessment.nextReviewAt) ? ' · DUE' : ''}` : 'No date recorded']]));
+    latest.append(historyFacts([['Recorded',savedTime(assessment.at)]]));
     const assessmentGrid=text('div','','position-assessment-grid'),reason=text('div','','review-card'),unknowns=text('div','','review-card');
     reason.append(text('h4',data.managed?'What changed':'Investment assessment'),text('p',assessment.changedEvidence || assessment.reason));
     unknowns.append(text('h4','Unknowns'));
