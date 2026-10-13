@@ -40,7 +40,7 @@ function attempt(fn) { return async event => { event?.preventDefault(); try { aw
 // ── Start-up and live updates ──────────────────────────────────────────────
 async function start() {
   started = true;
-  showView(['activity','strategy','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
+  showView(['activity','strategy','performance','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
   $('suggestions').replaceChildren(...suggestions.map(([label, question]) => {
     const chip = text('button', label, 'chip'); chip.type = 'button'; chip.title = question;
     chip.onclick = attempt(() => sendMessage(question));
@@ -85,7 +85,7 @@ async function loadCommands() {
 // ── Views ──────────────────────────────────────────────────────────────────
 function showView(name, load = true) {
   view = name;
-  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Settings', review:'Performance & review'}[name];
+  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Settings', performance:'Performance', review:'Review'}[name];
   for (const tab of document.querySelectorAll('[role=tab]')) {
     const selected = tab.dataset.view === name;
     tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
@@ -94,7 +94,7 @@ function showView(name, load = true) {
   history.replaceState(null, '', name === 'live' ? location.pathname : '#' + name);
   if (name === 'live') $('live-feed').scrollTop = $('live-feed').scrollHeight;
   if (name === 'live') { renderWelcome(); $('feed').scrollTop = $('welcome').hidden ? $('feed').scrollHeight : 0; }
-  if (load && name === 'review') refresh().catch(e => notice(e.message));
+  if (load && (name === 'review' || name === 'performance')) refresh().catch(e => notice(e.message));
   if (load && name === 'activity') loadHistory();
 }
 for (const tab of document.querySelectorAll('[role=tab]')) {
@@ -416,9 +416,9 @@ async function refresh() {
   if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
   try {
-    const review = view === 'review';
+    const review = view === 'review', performance = view === 'performance';
     const [s,p,o,a,e,f,c,l,sc,w] = await Promise.all([api('status'),api('positions'),api('broker-orders'),api('orders?status=all'),api('equity-history'),api(`feed?after=${cursor}&limit=200`),
-      review ? api('agent-commands') : null, review ? api('lessons') : null, review ? api('scorecard' + ($('score-days').value ? '?days=' + $('score-days').value : '')) : null,
+      review ? api('agent-commands') : null, review ? api('lessons') : null, performance ? api('scorecard' + ($('score-days').value ? '?days=' + $('score-days').value : '')) : null,
       api('watchlist').catch(()=>({watchlist:[],lastTickAt:null,error:'Watchlist unavailable'}))]);
     status = s;
     configureConversationClear(s);
@@ -437,7 +437,8 @@ async function refresh() {
     rows('orders',o.orders||[],v=>[v.symbol,`${v.side} / ${v.type}`,v.qty,v.filled,v.stopPrice||v.limitPrice||'Market',v.status,v.id]);
     $('orders-status').textContent=o.available?(o.orders.length?'Orders reported by the broker.':'No open broker orders.'):'Broker orders are unavailable.';
     renderOrders(a.orders);
-    if (review) { renderRequests(c.commands); renderLessons(l.lessons); renderScorecard(sc); }
+    if (review) { renderRequests(c.commands); renderLessons(l.lessons); }
+    if (performance) renderScorecard(sc);
     if (view === 'activity') await loadHistory();
   } finally {
     refreshing = false;

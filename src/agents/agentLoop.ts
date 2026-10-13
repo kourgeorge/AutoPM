@@ -21,6 +21,8 @@ type ToolCall = Extract<ContentBlock, { type: 'tool_use' }>;
 interface ToolCallRecord { name: string; input: unknown; result?: string }
 /** What the operator reads instead of the platform's "The operation was aborted due to timeout". */
 export const SLOW_MODEL_MESSAGE = 'The AI service is responding slowly right now and this request timed out. Please try again in a minute.';
+/** What the operator reads instead of Node's bare "fetch failed" once every retry has dropped. */
+export const UNREACHABLE_MODEL_MESSAGE = 'Could not reach the AI service — the connection kept dropping, even after retries. Please try again in a minute.';
 /**
  * A turn has no overall deadline and no round cap: the agent takes as many rounds as it needs and
  * ends when it stops calling tools (or the operator stops it). Only a single hung model request
@@ -184,7 +186,9 @@ export async function runAgentLoop(opts: {
       // and halts the assistant's queue, so a timeout marked that way would stall the chat and
       // later re-run a question the operator has already given up on.
       current.status = opts.signal?.aborted ? 'interrupted' : 'failed';
-      current.error = isTimeout(err) ? SLOW_MODEL_MESSAGE : err?.message ?? String(err);
+      current.error = isTimeout(err) ? SLOW_MODEL_MESSAGE
+        : err instanceof TypeError && err.message === 'fetch failed' ? UNREACHABLE_MODEL_MESSAGE
+        : err?.message ?? String(err);
     }
     checkpoint();
     return current;
