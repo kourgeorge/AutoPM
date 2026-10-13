@@ -1306,12 +1306,12 @@ function renderReviewThesis(parent,thesis,checks,checkedAt,proposed=false) {
 async function openPositionReview(symbol, retainTask=false) {
   const changed=reviewSymbol!==symbol,token=++reviewLoad;reviewSymbol=symbol;reviewLoading=true;
   const dialog=$('position-review-dialog');if(!dialog.open)dialog.showModal();
-  $('position-review-title').textContent=`${symbol} · details`;
+  $('position-review-title').textContent=symbol;
   $('position-review-status').textContent='Loading saved records…';
-  $('position-review-overview').replaceChildren();
+  $('position-review-overview').replaceChildren();$('position-review-flags').replaceChildren();$('position-review-controls').replaceChildren();
   $('position-review-content').replaceChildren();
   if(changed || !retainTask){
-    positionTab='assessment';tickerChart.symbol=symbol;$('ticker-chart-title').textContent=`${symbol} price history`;
+    positionTab='assessment';tickerChart.symbol=symbol;$('ticker-chart-title').textContent='Price history';
     void loadTickerChart();dialog.querySelector('.position-window-body').scrollTop=0;
   }
   if(changed || !retainTask)$('position-review-task').replaceChildren();
@@ -1319,35 +1319,33 @@ async function openPositionReview(symbol, retainTask=false) {
   try {
     const data=await api(`positions/${encodeURIComponent(symbol)}/review`);
     if(token!==reviewLoad || !dialog.open)return;
-    $('position-review-title').textContent=`${symbol} · ${data.held === false ? 'candidate' : 'position'} details`;
-    $('position-review-status').textContent=`${data.held === true ? 'Held' : data.held === false ? 'Not held' : 'Current holdings unknown'} · saved view loaded ${savedTime(data.savedAt)}`;
+    $('position-review-status').textContent=`${data.held === true ? 'Held position' : data.held === false ? 'Candidate · not held' : 'Current holdings unknown'} · saved view loaded ${savedTime(data.savedAt)}`;
     renderPositionReview(data);
   } catch(error) { if(token===reviewLoad)$('position-review-status').textContent=`Could not load saved review: ${error.message}`; }
   finally { if(token===reviewLoad){reviewLoading=false;$('ask-position-review').disabled=reviewSubmitting;} }
 }
 function renderPositionReview(data) {
   const panels=positionTabs(data);
-  const summary=reviewSection($('position-review-overview'),'Position overview'),holding=data.holding;
+  const summary=$('position-review-overview'),holding=data.holding;
   if(holding) {
     const pnl=holding.price==null ? null : (holding.price-holding.entryPrice)*holding.qty;
     const pct=holding.price==null || !holding.entryPrice ? null : (holding.price/holding.entryPrice-1)*100;
     const metrics=historyFacts([['Shares',historyNumber(holding.qty)],['Average cost',historyPrice(holding.entryPrice)],['Latest price',holding.price==null ? 'Unavailable' : historyPrice(holding.price)],['Open P&L',pnl==null ? 'Unavailable' : `${signedMoney(pnl)} ${signedPct(pct)}`]]);
     metrics.classList.add('position-metrics');metrics.lastElementChild.querySelector('dd').className=direction(pnl);summary.append(metrics);
     if(holding.stale)summary.append(text('p','The price in the latest engine tick is stale.','review-warning'));
-  } else summary.append(text('p',data.held===false ? 'This symbol is not currently held.' : 'Current shares and prices could not be confirmed from a recent engine tick.'));
+  } else summary.append(text('p',data.held===false ? 'This symbol is not currently held.' : 'Current shares and prices could not be confirmed from a recent engine tick.','review-meta'));
   const assessment=data.managed ? data.review : data.held === false ? data.candidateReview : null;
-  const flags=text('div','','position-flags');
+  const flags=$('position-review-flags');
   flags.append(text('span',data.managed?'Managed by AutoTrade':data.held===true?'Unmanaged holding':data.held===false?'Candidate':'Holdings unknown','badge'));
   if(assessment)flags.append(text('span',`Saved assessment: ${assessment.decision==='buy'?'BUY CANDIDATE':assessment.decision.toUpperCase()}`,'badge'));
   if(assessment?.policyHash && assessment.policyHash!==data.policyHash)flags.append(text('span','Strategy changed','badge pending'));
-  const controls=text('div','','position-controls');
+  const controls=$('position-review-controls');
   controls.append(uiButton('Discuss with agent',()=>{
     $('position-review-dialog').close();askAbout(`What is your current assessment and plan for ${data.symbol}?`);
   },''));
   if(data.held===true && !data.managed)controls.append(uiButton('Adopt holding',()=>{
     $('position-review-dialog').close();$('adopt-form').elements.symbol.value=data.symbol;$('adopt').showModal();
   },''));
-  const overviewOrders=text('div','','position-overview-actions');overviewOrders.append(flags,controls);summary.append(overviewOrders);
   if(data.managed && !holding)summary.append(text('p','A saved AutoTrade management record exists; current holdings remain unverified.','review-meta'));
   const latest=reviewSection(panels.assessment,'Latest assessment');
   if (assessment) {
