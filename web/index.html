@@ -179,19 +179,24 @@
 <dialog id="review"><form method="dialog"><h2>Review strategy changes</h2><pre id="review-text"></pre><p>Automatic orders may be sent to the broker when this is a live account. Unanswered manual approvals expire.</p><div class="actions"><button value="cancel">Keep editing</button><button class="primary" value="save">Save this revision</button></div></form></dialog>
 <dialog id="adopt"><form id="adopt-form"><h2>Manage an existing holding</h2><p>AutoTrade will place protection for this holding and may propose exits under your strategy.</p><label>Symbol<input name="symbol" readonly required></label><label>Stop price<input name="stop" type="number" step="0.01" min="0.01" required></label><label>Target price (optional)<input name="target" type="number" step="0.01" min="0.01"></label><div class="actions"><button type="button" id="cancel-adopt">Cancel</button><button class="primary">Adopt holding</button></div></form></dialog>
 <dialog id="position-review-dialog" class="decision-drawer" aria-labelledby="position-review-title">
-  <div class="pane-title drawer-heading"><div><span class="eyebrow">POSITION / CANDIDATE DETAILS</span><h2 id="position-review-title">Position details</h2></div><button id="close-position-review" aria-label="Close position details">✕</button></div>
+  <div class="pane-title drawer-heading position-heading">
+    <div class="position-heading-main"><h2 id="position-review-title">Position details</h2><div id="position-review-flags" class="position-flags"></div></div>
+    <div class="position-heading-actions"><div id="position-review-controls" class="position-controls"></div><button id="close-position-review" aria-label="Close position details">✕</button></div>
+    <p id="position-review-status" role="status"></p>
+  </div>
   <div class="position-window-body">
-  <p id="position-review-status" role="status"></p><div id="position-review-overview"></div>
+  <div id="position-review-overview"></div>
+  <div class="position-layout">
   <section id="ticker-chart-panel" class="position-chart" aria-labelledby="ticker-chart-title">
-  <div class="pane-title"><h3 id="ticker-chart-title">Price history</h3><span class="review-meta">Price and volume</span></div>
-  <div class="ticker-chart-controls"><label>Interval<select id="ticker-interval"><option value="1Day">Daily</option><option value="1Hour">Hourly</option><option value="15Min">15 minutes</option><option value="5Min">5 minutes</option></select></label><div class="chart-modes" role="group" aria-label="Chart style"><button id="chart-candles" aria-pressed="true">Candles</button><button id="chart-trend" aria-pressed="false">Trend</button></div><button id="refresh-ticker-chart">Refresh</button></div>
+  <div class="position-chart-head"><h3 id="ticker-chart-title">Price history</h3>
+  <div class="ticker-chart-controls"><label><span class="sr-only">Interval</span><select id="ticker-interval"><option value="1Day">Daily</option><option value="1Hour">Hourly</option><option value="15Min">15 minutes</option><option value="5Min">5 minutes</option></select></label><div class="chart-modes" role="group" aria-label="Chart style"><button id="chart-candles" aria-pressed="true">Candles</button><button id="chart-trend" aria-pressed="false">Trend</button></div><button id="refresh-ticker-chart" aria-label="Refresh price history" title="Refresh price history">↻</button></div></div>
   <p id="ticker-chart-status" role="status">Select a ticker to view its price history.</p>
   <svg id="ticker-chart" viewBox="0 0 900 350" role="img" aria-label="Ticker price history" tabindex="0" aria-describedby="ticker-chart-help" hidden></svg>
-  <p id="ticker-chart-help" class="chart-help">Hover, tap, or use ← → on the chart to inspect a bar.</p>
   <div id="ticker-ohlc" class="ticker-ohlc" aria-live="polite"></div>
-  <div class="ticker-chart-footer"><span>Historical market data may be delayed. The latest bar may be incomplete.</span></div>
+  <p class="ticker-chart-footer"><span id="ticker-chart-help">Hover, tap, or use ← → on the chart to inspect a bar.</span> Market data may be delayed; the latest bar may be incomplete.</p>
   </section>
   <div id="position-review-content" class="position-detail-tabs"></div>
+  </div>
   </div>
   <div class="drawer-footer"><span>Assessments and research use saved records. Dates show when they were recorded.</span><button id="refresh-position-review">Refresh saved view</button><button id="ask-position-review" class="primary">Research this stock</button><p id="position-review-task" role="status"></p></div>
 </dialog>
