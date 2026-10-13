@@ -533,6 +533,31 @@ test('a model timeout fails the turn with a plain message instead of interruptin
   assert.equal(result.status, 'failed'); assert.equal(result.error, SLOW_MODEL_MESSAGE);
 });
 
+test('a dropped model connection is retried within the same request; a bad request is not', async () => {
+  const provider = new model.OpenAICompatibleProvider({ provider: 'openai', apiKey: 'k', model: 'gpt-4o', baseUrl: 'https://model.invalid' });
+  const answer = { choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+  const prior = global.fetch;
+  try {
+    let calls = 0;
+    global.fetch = async () => { if (++calls === 1) throw new TypeError('fetch failed'); return { ok: true, json: async () => answer }; };
+    const reply = await provider.chat({ systemPrompt: '', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [], maxTokens: 10 });
+    assert.equal(calls, 2); assert.equal(reply.content[0].text, 'ok');
+    calls = 0;
+    global.fetch = async () => { calls++; return { ok: false, status: 400, text: async () => 'bad request' }; };
+    await assert.rejects(provider.chat({ systemPrompt: '', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }], tools: [], maxTokens: 10 }), /400/);
+    assert.equal(calls, 1);
+  } finally { global.fetch = prior; }
+});
+
+test('a connection that drops on every retry fails with a plain message', async () => {
+  const { UNREACHABLE_MODEL_MESSAGE } = from('agents/agentLoop');
+  const registry = new ToolRegistry([], async () => '{}');
+  const result = await runAgentLoop({ context: { role: 'assistant', requestId: 'unreachable-model', actorId: 'alice' }, registry,
+    provider: { chat: async () => { throw new TypeError('fetch failed'); } }, messages: async () => [], systemPrompt: '', maxTokens: 100,
+    signal: new AbortController().signal });
+  assert.equal(result.status, 'failed'); assert.equal(result.error, UNREACHABLE_MODEL_MESSAGE);
+});
+
 test('restart honors saved truncation and terminal model responses', async () => {
   for (const reason of ['max_tokens','end_turn']) {
     const id = 'saved-' + reason;

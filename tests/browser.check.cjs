@@ -433,8 +433,11 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.getByRole('button',{name:'Remove TAGTEST',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:`Remove ${originalSymbols[0]}`,exact:true})).toHaveCount(0);
     await page.locator('.risk-profile').screenshot({path:'/tmp/autotrade-risk-profile-desktop.png'});
-    await page.getByRole('tab',{name:'Review'}).click();
+    await page.getByRole('tab',{name:'Performance'}).click();
     await expect(page.locator('#scorecard')).toContainText('Completed trades');
+    await expect(page.locator('#lessons')).toBeHidden();
+    await page.getByRole('tab',{name:'Review'}).click();
+    await expect(page.locator('#performance')).toBeHidden();
     await expect(page.locator('#lesson-list .history-expanded')).toBeHidden();
     await page.locator('#lesson-list .history-row-toggle').click();
     await expect(page.locator('#lesson-list .history-expanded')).toBeVisible();

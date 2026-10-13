@@ -183,7 +183,7 @@ button.link { border: 0; background: none; padding: 0; color: var(--accent); fon
 @keyframes tick-down { from { background: var(--down-soft); color: var(--down); } }
 
 /* ── Strategy and review views ─────────────────────────────────────────── */
-#view-strategy, #view-review { min-width: 0; margin: 0; display: grid; gap: var(--view-gap); }
+#view-strategy, #view-performance, #view-review { min-width: 0; margin: 0; display: grid; gap: var(--view-gap); }
 #strategy > p, #requests > p, #lessons > p { margin-top: 4px; }
 #requests h2, #lessons h2 { margin-bottom: 4px; }
 .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: 8px; overflow: hidden; }
@@ -228,7 +228,7 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
 
 /* Dense detail surfaces share the same quiet visual hierarchy. */
 .card { background: var(--surface-2); padding: 15px; }.card.attention { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); box-shadow: none; background: color-mix(in srgb, var(--warn-soft) 30%, var(--surface)); }.card h3 { font-size: 18px; text-transform: capitalize; }.card p { font-size: 13px; }.card pre, .timeline pre { font-size: 11px; line-height: 1.9; }.card button { font-size: 12px; }.badge { font-size: 10px; letter-spacing: .3px; }.timeline summary { grid-template-columns: 36px auto 1fr; gap: 8px; font-size: 12px; }.timeline .reason { grid-column: 1 / -1; padding-left: 44px; font-size: 11px; }.timeline summary time { font-size: 10px; }.timeline details > :not(summary) { margin-left: 0; }.timeline { max-height: 290px; overflow-y: auto; }.table-wrap { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }th { font-size: 10px; }td { font-size: 13px; padding-top: 16px; padding-bottom: 16px; }td button { font-size: 11px; }.table-wrap button.link { font-size: 13px; text-decoration: none; }#holdings details { color: var(--ink-3); }#holdings details summary { font-size: 12px; }#holdings details p { font-size: 13px; }.table-empty { text-align: center; white-space: normal; color: var(--ink-3); padding: 24px; }
-#strategy, #requests, #lessons { padding: 28px; }#strategy h2, #performance h2, #requests h2, #lessons h2 { font-size: 24px; font-weight: 500; letter-spacing: -.6px; }#strategy > p, #requests > p, #lessons > p { font-size: 13px; color: var(--ink-3); margin-top: 8px; margin-bottom: 26px; }.risk-profile { border-color: var(--line); padding: 22px; }.risk-profile legend { font-size: 15px; }.risk-profile p { font-size: 13px; }#view-review { gap: 22px; }.score-grid div { padding: 20px; }.score-grid strong { display: block; margin-top: 7px; font-size: 24px; font-weight: 500; }.score-grid span { font-size: 12px; }.score-grid { margin-top: 22px; }.form-grid { gap: 22px; }.form-grid label { color: var(--ink-2); font-size: 13px; }dialog { box-shadow: 0 24px 100px #0008; }dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
+#strategy, #requests, #lessons { padding: 28px; }#strategy h2, #performance h2, #requests h2, #lessons h2 { font-size: 24px; font-weight: 500; letter-spacing: -.6px; }#strategy > p, #requests > p, #lessons > p { font-size: 13px; color: var(--ink-3); margin-top: 8px; margin-bottom: 26px; }.risk-profile { border-color: var(--line); padding: 22px; }.risk-profile legend { font-size: 15px; }.risk-profile p { font-size: 13px; }#view-performance, #view-review { gap: 22px; }.score-grid div { padding: 20px; }.score-grid strong { display: block; margin-top: 7px; font-size: 24px; font-weight: 500; }.score-grid span { font-size: 12px; }.score-grid { margin-top: 22px; }.form-grid { gap: 22px; }.form-grid label { color: var(--ink-2); font-size: 13px; }dialog { box-shadow: 0 24px 100px #0008; }dialog::backdrop { background: #0009; backdrop-filter: blur(4px); }
 @media (min-width: 1700px) { .live-view { grid-template-columns: minmax(0, 1.7fr) minmax(380px, 1fr); }.chat { height: 780px; } }
 @media (max-width: 1200px) { :root { --sidebar-width: 176px; }.sidebar { padding-left: 10px; padding-right: 10px; }.brand { font-size: 22px; }.topbar { padding: 0 22px; }main { padding: 24px 22px; }.live-view { gap: 16px; grid-template-columns: minmax(0, 1.3fr) minmax(300px, 1fr); }.workspace-intro h1 { font-size: 30px; }.workspace-intro { align-items: flex-start; }.session-pill { margin-top: 4px; }.metrics > div { padding: 0 17px; }.metrics strong { font-size: 24px; }#trading { font-size: 19px; }.panel { padding: 17px; }.chat-heading { padding: 16px; }.toggle { font-size: 10px; }#feed { padding: 22px 16px; }.composer { margin-left: 12px; margin-right: 12px; }.starter-grid { gap: 8px; }.starter-grid button { padding: 12px; }.welcome h2 { font-size: 27px; }.composer-footer { font-size: 9px; } }
 @media (max-width: 1000px) { :root { --sidebar-width: 72px; }.sidebar { align-items: center; padding: 24px 10px; }.brand { font-size: 0; margin: 0 0 32px; }.brand-mark { margin: 0; }.brand > span:not(.brand-mark) { display: none; }.sidebar > .workspace-label, .sidebar-agents, .sidebar .workspace-note, .account, .theme-toggle span { display: none; }.views { width: 100%; }.views button { padding: 12px 0; flex-direction: column; gap: 5px; font-size: 9px; }.nav-dot { display: none !important; }.theme-toggle { justify-content: center; }.workspace-intro h1 { font-size: 28px; }.workspace-intro p { font-size: 12px; }.session-pill { font-size: 10px; }.risk-grid { grid-template-columns: 1fr; }.score-grid { grid-template-columns: 1fr 1fr; } }
@@ -336,7 +336,9 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
 @media (max-width: 600px) {
   .sidebar { gap: 8px; padding: 12px 10px; }
   .views { justify-content: center; gap: 2px; }
-  .views button { padding: 8px; }
+  /* Five tabs do not fit a 320px row; the strip scrolls on its own instead of the page. */
+  .views { min-width: 0; overflow-x: auto; scrollbar-width: none; justify-content: flex-start; }
+  .views button { padding: 8px; flex: none; }
   .views button svg { display: none; }
   .workspace-intro { gap: 10px; }
   .workspace-intro h1 { font-size: 24px; }
@@ -845,7 +847,7 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 #strategy h2, #performance h2, #requests h2, #lessons h2 { font-size: var(--heading-size); font-weight: 650; letter-spacing: 0; margin: 0; }
 #strategy > p, #requests > p, #lessons > p { font-size: 12px; margin: 0 0 8px; }
 .history-section { margin-top: 12px; }
-#view-review { gap: var(--view-gap); }
+#view-performance, #view-review { gap: var(--view-gap); }
 .score-grid { margin-top: 10px; border-radius: 4px; }
 .score-grid div { padding: 10px 12px; }
 .score-grid strong { font-size: 21px; margin-top: 3px; }

@@ -5,11 +5,44 @@ import { AiConfig, ChatMessage, ContentBlock, ModelResponse, ToolDefinition } fr
 // ── Provider interface ────────────────────────────────────────────────────────
 
 /**
- * Only a guard against a request that hangs forever, not a speed limit. 60s and then 120s both
- * failed real reviews on slow days (2026-10-07 LiteLLM proxy; 2026-10-12 azure/gpt-5.6-luna took
- * 40–75s a round and sometimes longer), so a slow answer is waited for; a dead connection is not.
+ * How long one model request may take before it counts as stuck. Measured on 2026-10-12
+ * (azure/gpt-5.6-luna via the LiteLLM proxy): of 139 requests that answered, all did within
+ * 132s and 99% within 75s; the rest never answered and were cut by Node's own 5-minute limit
+ * as "fetch failed". So a request past this is not slow but stuck — retry it, don't wait.
  */
-export const MODEL_CALL_TIMEOUT_MS = 600_000;
+export const MODEL_CALL_TIMEOUT_MS = 150_000;
+/** A stuck or dropped request is sent again this many times before the turn fails. */
+const MODEL_CALL_RETRIES = 2;
+const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+
+/**
+ * POST a chat request and parse its JSON, retrying a stuck request, a dropped connection
+ * ("fetch failed") or a busy/overloaded proxy. Safe to repeat: no tool runs until a response
+ * arrives. The caller's own stop is never retried.
+ */
+async function postWithRetry(url: string, apiKey: string, body: string, signal?: AbortSignal): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    let retryable: Error;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS)]),
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body,
+      });
+      if (response.ok) return await response.json();
+      const error = new Error(`OpenAI API error: ${response.status} ${await response.text()}`);
+      if (!RETRY_STATUSES.has(response.status)) throw error;
+      retryable = error;
+    } catch (err: any) {
+      if (signal?.aborted || !(err?.name === 'TimeoutError' || err instanceof TypeError)) throw err;
+      retryable = err;
+    }
+    if (attempt >= MODEL_CALL_RETRIES) throw retryable;
+    await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+    signal?.throwIfAborted();
+  }
+}
 
 export interface ModelProvider {
   chat(params: {
@@ -31,7 +64,7 @@ export class AnthropicProvider implements ModelProvider {
 
   constructor(cfg: AiConfig) {
     this.client = new Anthropic({
-      timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: 1,
+      timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: MODEL_CALL_RETRIES,
       apiKey: cfg.apiKey,
       ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
     });
@@ -273,14 +306,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       : {};
 
     // Make the API request
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      signal: AbortSignal.any([params.signal ?? new AbortController().signal, AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS)]),
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    const data = await postWithRetry(`${this.baseUrl}/chat/completions`, this.apiKey, JSON.stringify({
         model: this.model,
         messages: openaiMessages,
         tools: openaiTools,
@@ -291,15 +317,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         // entirely for those so the API uses its default. Legacy models get 0 for
         // deterministic output.
         ...(usesCompletionTokens ? {} : { temperature: 0 }),
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} ${error}`);
-    }
-
-    const data = await response.json() as any;
+      }), params.signal);
 
     const choice = data?.choices?.[0];
     if (!choice) {
