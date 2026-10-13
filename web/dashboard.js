@@ -1443,12 +1443,48 @@ async function openSavedRecord(kind,id,offset=0,previous=[],taskId=null) {
     parent.append(historyFacts([['Record',id],['Tool / source',row.tool || row.name || names[kind]],['Recorded / started',savedTime(row.recordedAt || row.startedAt || row.fetchedAt)],['Data as of / finished',savedTime(row.asOf || row.finishedAt)]]));
     if(row.input!=null){const inputs=document.createElement('details');inputs.append(text('summary','Tool input'),recordedFields(row.input));parent.append(inputs);}
     if(kind==='tool')parent.append(text('p',row.resultSaved ? 'Saved output below. Check its contents for errors; a saved result alone does not establish success.' : 'No tool output was saved.','review-meta'));
+    // JSON output reads as a tree, which needs the whole document rather than one character page.
+    if(kind==='tool' && row.resultSaved && !offset){
+      const {output}=await api(`tool-output/${encodeURIComponent(id)}`);
+      if(token!==inspectorLoad || !$('record-inspector').open)return;
+      let parsed;try{parsed=JSON.parse(output);}catch{}
+      if(parsed && typeof parsed==='object'){
+        const tools=text('div','','json-tools');
+        tools.append(uiButton('Expand all',()=>tree.querySelectorAll('details').forEach(d=>d.open=true)),uiButton('Collapse all',()=>tree.querySelectorAll('details').forEach(d=>d.open=false)),
+          uiButton('Copy JSON',()=>navigator.clipboard.writeText(JSON.stringify(parsed,null,2)).then(()=>notice('JSON copied',true),()=>notice('Copy failed'))));
+        const tree=text('div','','json-tree');tree.append(jsonNode(parsed,null,0));
+        parent.append(tools,tree);return;
+      }
+    }
     parent.append(text('pre',row.text,'saved-record-text'));
     const navigation=text('div','','record-pagination');
     const back=uiButton('Previous',()=>openSavedRecord(kind,id,previous.at(-1),previous.slice(0,-1),taskId),'');back.disabled=!previous.length;
     const next=uiButton('Next',()=>openSavedRecord(kind,id,row.nextOffset,[...previous,row.offset],taskId),'');next.disabled=row.nextOffset==null;
     navigation.append(back,text('span',`${row.totalCharacters ? row.offset+1 : 0}–${row.offset+row.text.length} of ${row.totalCharacters} characters`),next);parent.append(navigation);
   }catch(error){if(token===inspectorLoad){parent.replaceChildren(text('p',`Saved record unavailable: ${error.message}`));if(taskId)parent.append(uiButton('← Back to request',()=>openAgentTask(taskId)));}}
+}
+// One JSON value as a tree row. Objects and arrays fold; the top two levels start open, and a
+// folded object previews its most identifying field so a list of events can be scanned closed.
+function jsonNode(value,key,depth) {
+  const label=()=>{const k=text('span',typeof key==='number' ? `${key}` : `"${key}"`,typeof key==='number' ? 'json-index' : 'json-key');return [k,text('span',': ','json-punct')];};
+  if(value===null || typeof value!=='object'){
+    const row=text('div','','json-row');if(key!=null)row.append(...label());
+    const kind=value===null ? 'null' : typeof value;
+    const shown=text('span',kind==='string' ? JSON.stringify(value) : String(value),`json-${kind}`);
+    if(kind==='string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(value) && Number.isFinite(Date.parse(value)))shown.title=historyDate(value);
+    row.append(shown);return row;
+  }
+  const array=Array.isArray(value),entries=array ? value.map((v,i)=>[i,v]) : Object.entries(value);
+  const node=document.createElement('details');node.className='json-node';node.open=depth<2;
+  const summary=document.createElement('summary');if(key!=null)summary.append(...label());
+  summary.append(text('span',array ? `[${entries.length} ${entries.length===1 ? 'item' : 'items'}]` : `{${entries.length} ${entries.length===1 ? 'field' : 'fields'}}`,'json-count'));
+  const hint=!array && ['headline','title','name','symbol','kind','id'].map(f=>value[f]).find(v=>typeof v==='string' && v);
+  if(hint)summary.append(text('span',hint,'json-hint'));
+  node.append(summary);
+  const body=text('div','','json-children');
+  if(!entries.length)body.append(text('div',array ? 'empty list' : 'no fields','json-empty'));
+  for(const [k,v] of entries)body.append(jsonNode(v,k,depth+1));
+  node.append(body);return node;
 }
 // The agent's saved conversation, one collapsible block per message. The first message is the
 // engine's full briefing, so every block starts closed; tool results open their saved receipt.
