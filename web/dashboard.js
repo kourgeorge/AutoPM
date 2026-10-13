@@ -968,11 +968,16 @@ function historyReference(id) {
   button.onclick = () => { $('history-search').value = id;for (const type of historyTypes) historyOffsets[type] = 0;showView('activity'); };
   return button;
 }
+// Agents write their outcome in Markdown; render it like a chat reply instead of one flat paragraph.
+function requestOutcome(result) {
+  if(!result)return text('p','No outcome recorded yet.','review-meta');
+  const body=replyBody(result);body.classList.add('request-outcome');return body;
+}
 function renderRequests(list) {
   renderReviewTable('agent-commands',list,7,command=>expandableRows(`request:${command.id}`,`Details for ${roleLabel(command.role)} request: ${command.text}`,
     [recordTime(command.createdAt),roleLabel(command.role),command.actorId,text('span',taskProgress(command.status),'badge '+command.status),rowSummary(command.text),rowSummary(command.result || 'Awaiting outcome')],()=>{
       const detail = text('div','','history-detail request-detail');
-      detail.append(historyFacts([['Request',command.text],['Mode',taskMode(command)],['Outcome',command.result || 'No outcome recorded yet.']]));
+      detail.append(historyFacts([['Request',command.text],['Mode',taskMode(command)]]),requestOutcome(command.result));
       detail.append(uiButton('Open request trail: tools, decisions, orders and fills',()=>openAgentTask(command.id)));
       if (command.orderIds?.length) { const links = text('div','','record-links');links.append(text('span','Orders'),...command.orderIds.map(historyReference));detail.append(links); }
       const references = text('div','','request-references');
@@ -1472,7 +1477,10 @@ async function openAgentTask(id) {
     parent.replaceChildren();const r=data.request;
     parent.append(historyFacts([['Request ID',r.id],['Agent',roleLabel(r.role)],['Started by',r.actorId],['Progress',taskProgress(r.status)],['Created',savedTime(r.createdAt)],['Mode',taskMode(r)]]));
     if(r.parentId)parent.append(uiButton(`Parent request: ${r.parentId}`,()=>openAgentTask(r.parentId)));
-    parent.append(text('h3','Instruction'),text('p',r.text),text('h3','Outcome'),text('p',r.result || 'No outcome recorded yet.'));
+    // The outcome is what the operator came for, so it leads; the standing instruction folds away.
+    const instruction=document.createElement('details');instruction.className='request-instruction';
+    instruction.append(text('summary','Instruction'),text('p',r.text));
+    parent.append(text('h3','Outcome'),requestOutcome(r.result),instruction);
     if(data.trajectory)parent.append(historyFacts([['Agent run',data.trajectory.status],['Model rounds',data.trajectory.rounds],['Input / output tokens',`${data.trajectory.inTokens} / ${data.trajectory.outTokens}`]]));
     if(data.trajectory?.error)parent.append(text('p',data.trajectory.error,'review-warning'));
     if(data.trajectory?.messages?.length)parent.append(trajectoryView(data.trajectory.messages,id));
