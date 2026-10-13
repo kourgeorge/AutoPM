@@ -1048,6 +1048,23 @@ dialog.record-inspector { width: min(860px,calc(100vw - 32px)); max-width: none;
 .drawer-footer { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 16px; }
 .drawer-footer > span { flex-basis: 100%; color: var(--ink-3); font-size: 11px; }
 .saved-record-text { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.7 var(--font-mono); padding: 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.json-tools { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0; font-size: 12px; }
+.json-tree { font: 12px/1.7 var(--font-mono); padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
+.json-tree details { margin: 0; padding: 0; border: 0; background: none; }
+.json-tree summary { cursor: pointer; display: block; list-style: none; padding: 0; margin: 0; font: inherit; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.json-tree summary::-webkit-details-marker { display: none; }
+.json-tree summary::before { content: '▸'; display: inline-block; width: 14px; color: var(--ink-3); }
+.json-tree details[open] > summary::before { content: '▾'; }
+.json-tree summary:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.json-row { padding-left: 14px; overflow-wrap: anywhere; }
+.json-children { margin-left: 6px; padding-left: 10px; border-left: 1px solid var(--line-soft); }
+.json-key { color: var(--accent); }
+.json-index, .json-punct, .json-count, .json-empty, .json-null { color: var(--ink-3); }
+.json-string { color: var(--ink); }
+.json-number { color: var(--warn); }
+.json-boolean { color: var(--down); }
+.json-hint { margin-left: 10px; color: var(--ink-2); font: 400 12px var(--font-ui); }
+details[open] > summary > .json-hint { display: none; }
 .record-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 11px; color: var(--ink-3); }
 .record-inspector .review-section > button { display: block; text-align: left; margin: 8px 0; }
 @media (max-width: 600px) {
