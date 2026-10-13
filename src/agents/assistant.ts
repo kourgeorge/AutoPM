@@ -220,7 +220,7 @@ export class AssistantAgent {
           provider: this.provider, registry: this.registry, systemPrompt: runtimeContract() + "\n\n" + SYSTEM_PROMPT,
           messages: async () => [...compactMessages(previousChat(command.id), 24000),
             { role: 'user', content: [{ type: 'text', text: command.text }] }],
-          maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
+          maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
         });
         const result = turn.error ?? (turn.text || 'Request processed. Check linked orders for execution status.');
         updateRequest(command.id, { status: turn.status, result });

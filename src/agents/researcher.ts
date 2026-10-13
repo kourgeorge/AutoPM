@@ -121,7 +121,7 @@ export class Researcher {
           provider: this.provider, registry: this.tools(), revision: hash,
           systemPrompt: runtimeContract() + '\n\nACCOUNT STRATEGY\n' + renderPolicy() + '\n\n' + RESEARCH_CONTRACT,
           messages: async () => [{ role: 'user', content: [{ type: 'text', text: request.text }] }],
-          maxRounds: config.ai.maxToolRounds, maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
+          maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
           // Research cannot trade, so a trading pause does not stop it. A strategy change does:
           // the verdict would be judged against rules that no longer apply.
           beforeTool: () => { if (getPolicyHash() !== hash) throw new Error('Strategy changed; start the research again under the current strategy'); },

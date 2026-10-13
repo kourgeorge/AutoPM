@@ -204,7 +204,7 @@ test('sleep rejects later calls and truncated model output executes no tools', a
   const registry = new ToolRegistry([{ name: 'write', description: 'test', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { executed++; return '{}'; });
   const result = await runAgentLoop({ context: { requestId: 'truncated', actorId: 'test', role: 'trader' }, registry,
     provider: { chat: async () => ({ ...toolResponse([['write', {}]]), stopReason: 'max_tokens' }) },
-    systemPrompt: '', messages: async () => [], maxRounds: 2, maxTokens: 100 });
+    systemPrompt: '', messages: async () => [], maxTokens: 100 });
   assert.equal(result.status, 'failed'); assert.equal(executed, 0);
 });
 test('full tool receipts survive reload while model context stays bounded', async () => {
@@ -217,7 +217,7 @@ test('full tool receipts survive reload while model context stays bounded', asyn
       const receipt = request.messages.flatMap(m => m.content).find(b => b.type === 'tool_result');
       assert.equal(JSON.parse(receipt.content).truncated, true);
       return textResponse();
-    } }, messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100 });
+    } }, messages: async () => [], systemPrompt: '', maxTokens: 100 });
   assert.equal(run.status, 'completed');assert.equal(executions, 1);
   storage.closeStorage();
   const receipt = storage.readRecord('tool-calls', 'full-receipt:1:0');
@@ -345,7 +345,7 @@ test('restart recovers an action receipt saved before its tool result without re
   const registry = new ToolRegistry([{ name: 'write', description: 'audit', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { invoked++; return '{}'; });
   const turn = await runAgentLoop({ context, registry, provider: { chat: async request => {
     assert.match(request.messages.at(-1).content[0].content, /orderId/); return textResponse();
-  } }, messages: async () => { throw new Error('Should resume'); }, systemPrompt: '', maxRounds: 3, maxTokens: 100 });
+  } }, messages: async () => { throw new Error('Should resume'); }, systemPrompt: '', maxTokens: 100 });
   assert.equal(invoked, 0); assert.equal(turn.status, 'completed');
 });
 
@@ -517,7 +517,7 @@ test('stopping a turn during an awaited tool prevents a later local mutation', a
     return '{}';
   });
   const work = runAgentLoop({ context: { role: 'trader', requestId: 'cancelled', actorId: 'alice' }, registry, provider: { chat: async () => toolResponse([['write', {}]]) },
-    messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100, signal: abort.signal });
+    messages: async () => [], systemPrompt: '', maxTokens: 100, signal: abort.signal });
   await began; abort.abort(); release();
   const result = await work;
   assert.equal(result.status, 'interrupted'); assert.equal(actions.listOrders().length, 0);
@@ -528,7 +528,7 @@ test('a model timeout fails the turn with a plain message instead of interruptin
   const registry = new ToolRegistry([], async () => '{}');
   const timeout = () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); };
   const result = await runAgentLoop({ context: { role: 'assistant', requestId: 'slow-model', actorId: 'alice' }, registry,
-    provider: { chat: async () => timeout() }, messages: async () => [], systemPrompt: '', maxRounds: 2, maxTokens: 100,
+    provider: { chat: async () => timeout() }, messages: async () => [], systemPrompt: '', maxTokens: 100,
     signal: new AbortController().signal });
   assert.equal(result.status, 'failed'); assert.equal(result.error, SLOW_MODEL_MESSAGE);
 });
@@ -539,7 +539,7 @@ test('restart honors saved truncation and terminal model responses', async () =>
     const content = reason === 'max_tokens' ? toolResponse([['write', {}]]).content : textResponse().content;
     storage.saveRecord('trajectories', id, { id, messages: [{ role: 'assistant', content }], rounds: 1, status: 'running', responseStopReason: reason, inTokens: 0, outTokens: 0, text: '' });
     const registry = new ToolRegistry([{ name: 'write', description: '', input_schema: { type: 'object', properties: {}, required: [] } }], async () => { throw new Error('Must not invoke a tool'); });
-    const result = await runAgentLoop({ context: { role: 'trader', requestId: id, actorId: 'test' }, registry, provider: { chat: async () => { throw new Error('Must not call the model again'); } }, messages: async () => [], systemPrompt: '', maxRounds: 3, maxTokens: 100 });
+    const result = await runAgentLoop({ context: { role: 'trader', requestId: id, actorId: 'test' }, registry, provider: { chat: async () => { throw new Error('Must not call the model again'); } }, messages: async () => [], systemPrompt: '', maxTokens: 100 });
     assert.equal(result.status, reason === 'max_tokens' ? 'failed' : 'completed');
     if (reason === 'end_turn') assert.equal(result.text, 'Done');
   }

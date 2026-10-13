@@ -33,7 +33,7 @@ export async function buildDecisionBrief(): Promise<string> {
       protectionKnown: orders !== null, fullyStopped: orders ? !!stop && stop.qty - stop.filled >= p.qty : null,
       thesis: evaluatePremises(entry.thesis, facts), originalHorizonDays: entry.thesis?.horizonDays ?? null,
       calendarAvailability: cal ? 'available' : 'unknown', earningsDate: cal?.calendar.nextEarningsAt ?? null,
-      previousReview: previous ? { id: previous.id, at: previous.at, decision: previous.decision, changedEvidence: previous.changedEvidence, unknowns: previous.unknowns, nextReviewAt: previous.nextReviewAt, due: Date.now() >= Date.parse(previous.nextReviewAt) } : null,
+      previousReview: previous ? { id: previous.id, at: previous.at, decision: previous.decision, changedEvidence: previous.changedEvidence, unknowns: previous.unknowns } : null,
       sharedDrivers: entry.thesis?.sharedDrivers ?? [] };
   });
   const regime = getCachedRegime(), calendar = cachedEconomicCalendar();

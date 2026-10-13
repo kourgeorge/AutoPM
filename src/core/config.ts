@@ -92,7 +92,6 @@ export const config = {
     // - LiteLLM proxy: http://localhost:8000/v1
     baseUrl: process.env.AI_BASE_URL,
     maxTokensPerTurn: parseInt(process.env.AI_MAX_TOKENS ?? '4096'),
-    maxToolRounds: parseInt(process.env.AI_MAX_TOOL_ROUNDS ?? '10'),
   },
 
   /** The local dashboard (`server/api.ts`), started under `HEADLESS=1` on 127.0.0.1 only. */
@@ -102,6 +101,6 @@ export const config = {
 } as const;
 
 if (!['alpaca', 'ibkr'].includes(config.broker)) throw new Error('BROKER must be alpaca or ibkr');
-for (const [key, value, maximum] of [['API_PORT', config.api.port, 65535], ['IBKR_PORT', config.ibkr.port, 65535], ['AI_MAX_TOKENS', config.ai.maxTokensPerTurn, 16384], ['AI_MAX_TOOL_ROUNDS', config.ai.maxToolRounds, 20]] as const) {
+for (const [key, value, maximum] of [['API_PORT', config.api.port, 65535], ['IBKR_PORT', config.ibkr.port, 65535], ['AI_MAX_TOKENS', config.ai.maxTokensPerTurn, 16384]] as const) {
   if (!Number.isInteger(value) || value < 1 || value > maximum) throw new Error(`${key} is outside its supported range`);
 }

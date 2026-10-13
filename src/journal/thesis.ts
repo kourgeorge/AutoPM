@@ -23,7 +23,7 @@ export type Facts = Partial<Record<ThesisMetric, Fact>>;
 /** Saved as the result of the record_position_review tool call (see `reviews.ts`). */
 export interface PositionReview {
   id: string; symbol: string; entryDecisionId: string | null; at: string; decision: 'keep' | 'reduce' | 'exit' | 'wait';
-  changedEvidence: string; evidenceIds: string[]; unknowns: string[]; nextReviewAt: string; price: number | null;
+  changedEvidence: string; evidenceIds: string[]; unknowns: string[]; price: number | null;
   contextVariant: string; snapshotId: string; policyHash: string; holdingHorizonDays: number | null;
 }
 
@@ -74,8 +74,6 @@ export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'en
   assertAgentActive();
   const evidence = validateEvidenceIds(input.evidenceIds, input.symbol);
   if (input.changedEvidence.trim().length < 20) throw new Error('State the material evidence change in at least 20 characters');
-  const nextAt = Date.parse(input.nextReviewAt);
-  if (!Number.isFinite(nextAt) || nextAt <= Date.now() || nextAt > Date.now() + 30 * 86400000) throw new Error('Next review must be within the next 30 days');
   if (!evidence.some(e => e.id === input.snapshotId && e.tool === 'get_position_review')) throw new Error('Use the get_position_review evidence ID as snapshotId');
   const snapshot = evidence.find(e => e.id === input.snapshotId)!;
   if (Date.now() - Date.parse(snapshot.recordedAt) > 15 * 60000) throw new Error('Position review snapshot is older than 15 minutes; refresh it');
@@ -83,7 +81,7 @@ export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'en
   const entryDecisionId = getPositionSnapshot(input.symbol)?.entryDecisionId ?? null;
   if (!getPositionSnapshot(input.symbol)) throw new Error('No managed position snapshot exists');
   if (snapshot.data.entryDecisionId !== entryDecisionId || snapshot.data.managed !== true || !snapshot.data.holding) throw new Error('Snapshot belongs to a different or unmanaged position lifecycle');
-  if (old && old.decision === input.decision && old.changedEvidence === input.changedEvidence && old.nextReviewAt === input.nextReviewAt && JSON.stringify(old.unknowns) === JSON.stringify(input.unknowns)) return { ok: true, unchanged: true, reviewId: old.id };
+  if (old && old.decision === input.decision && old.changedEvidence === input.changedEvidence && JSON.stringify(old.unknowns) === JSON.stringify(input.unknowns)) return { ok: true, unchanged: true, reviewId: old.id };
   return transaction(() => {
     const id = 'review-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
     if (listReviews<PositionReview>('record_position_review', r => r.id === id, 1).length) return { ok: true, reviewId: id };
