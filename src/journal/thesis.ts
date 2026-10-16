@@ -1,3 +1,4 @@
+import { journalReview } from './reviewDecisions';
 import crypto from 'crypto';
 import { readDecision } from './journal';
 import { validateEvidenceIds } from './evidence';
@@ -86,6 +87,7 @@ export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'en
     const id = 'review-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
     if (listReviews<PositionReview>('record_position_review', r => r.id === id, 1).length) return { ok: true, reviewId: id };
     const row: PositionReview = { ...input, entryDecisionId, id, at: new Date().toISOString() };
+    journalReview({ symbol: input.symbol, held: true, decision: input.decision, reason: input.changedEvidence, reviewId: id, evidenceIds: input.evidenceIds });
     return saveReview('record_position_review', row, 'Review saved. This receipt does not place an order; send any chosen reduction or exit separately.');
   });
 }

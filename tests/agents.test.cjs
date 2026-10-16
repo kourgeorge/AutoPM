@@ -285,6 +285,109 @@ test('an answered event is journalled as skip for a stock you do not hold; for a
   assert.equal(kindFor(notHeld.id), 'skip');
 });
 
+test('an observed urgent event closes for a stock you do not hold, stays open for one you do, and journals once', async () => {
+  const p = policy.getPolicy(), tick = { cooldowns: {}, armed: new Set(), dirty: false };
+  const hit = (symbol, severity = 'urgent') => ({ symbol, cooldownKey: 'kind:' + symbol, severity, headline: 'Review ' + symbol, evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } });
+  const [held, notHeld, critical] = events.processHits('ema_cross_down', [hit('AAPL'), hit('KO'), hit('LLY', 'critical')], p, tick);
+  state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-1' } } });
+  const ack = id => traderTools.executeTraderTool('ack_event', { id, disposition: 'acknowledged', note: 'Reviewed; no entry' }).then(JSON.parse);
+  for (const e of [held, notHeld, critical]) assert.equal((await ack(e.id)).ok, true);
+  const open = () => events.getPendingEvents().map(e => e.id);
+  assert.ok(open().includes(held.id), 'a held position keeps re-waking until it is dealt with');
+  assert.ok(!open().includes(notHeld.id), 'nothing left to do on a stock you do not hold');
+  assert.ok(open().includes(critical.id), 'critical events keep escalating');
+  // Answering the still-open critical event again is not a new decision.
+  assert.equal((await ack(critical.id)).ok, true);
+  assert.equal(journal.readDecisions().filter(d => d.triggerEventId === critical.id).length, 1);
+});
+
+// Runs `fn` the way the agent loop runs a tool: inside its context, then merging the receipt fields.
+function asTool(role, requestId, toolCallId, name, input, fn) {
+  const save = result => {
+    storage.saveRecord('tool-calls', toolCallId, { ...storage.readRecord('tool-calls', toolCallId), role, requestId, name, input,
+      result: typeof result === 'string' ? result : JSON.stringify(result), startedAt: new Date().toISOString() });
+    return result;
+  };
+  const result = agentContext.run({ role, requestId, actorId: 'system', toolCallId }, fn);
+  return result instanceof Promise ? result.then(save) : save(result);
+}
+const savePlan = (id, requestId, symbol, allowed, rewardRisk, violations = [], role = 'trader') => storage.saveRecord('tool-calls', id, {
+  name: 'get_entry_plan', role, requestId, kind: 'read', input: { symbol }, startedAt: new Date().toISOString(),
+  result: JSON.stringify({ symbol, policyHash: policy.getPolicyHash(), allowed, maxQty: allowed ? 18 : 0, rewardRisk, violations, evidenceId: id,
+    proposedLevels: { referencePrice: 541.15, stopLoss: 516, takeProfit: 600 } }) });
+
+test('sleep is refused once while a plan or comparison has no decision; the cycle end journals what is still open', async () => {
+  const rd = from('journal/reviewDecisions'), req = 'req-open';
+  savePlan('plan-msft-1', req, 'MSFT', false, 1.91, [{ rule: 'reward_risk_too_low' }]);
+  savePlan('plan-msft-2', req, 'MSFT', true, 2.21);
+  savePlan('plan-crm', req, 'CRM', false, 1.92, [{ rule: 'reward_risk_too_low' }]);
+  savePlan('plan-v', req, 'V', true, 2.05);
+  savePlan('plan-pg', req, 'PG', true, 2.1, [], 'researcher');
+  storage.saveRecord('tool-calls', 'cmp-aapl', { name: 'compare_position_actions', role: 'trader', requestId: req, input: { symbol: 'AAPL' }, result: '{}' });
+  agentContext.run({ role: 'trader', requestId: req, actorId: 'system' }, () =>
+    journal.recordDecision(journal.decision('entry', 'trader', { symbol: 'V', rationale: 'Entered' })));
+  const sleep = () => asTool('trader', req, 'sleep-' + Math.random(), 'sleep', { reason: 'done' }, () => traderTools.executeTraderTool('sleep', { reason: 'done' }));
+  const first = JSON.parse(await sleep());
+  assert.equal(first.ok, false);
+  assert.deepEqual(first.open.map(o => o.symbol).sort(), ['AAPL', 'CRM', 'MSFT'], 'entered V and researcher-only PG are not open');
+  assert.equal(JSON.parse(await sleep()).ok, true, 'a second sleep always ends the cycle');
+  assert.equal(rd.journalUnresolved(req), 3);
+  const rows = journal.readDecisions({ filter: d => d.requestId === req && d.kind !== 'entry' });
+  const msft = rows.find(d => d.symbol === 'MSFT');
+  assert.equal(msft.kind, 'skip');
+  assert.deepEqual(msft.entryPlan, { evidenceId: 'plan-msft-2', allowed: true, maxQty: 18, rewardRisk: 2.21, refusals: [] }, 'the last plan wins');
+  assert.match(msft.rationale, /no reason recorded: you ran an entry plan.*allowed, up to 18 shares, reward:risk 2\.21/);
+  assert.deepEqual(rows.find(d => d.symbol === 'CRM').entryPlan.refusals, ['reward_risk_too_low']);
+  assert.equal(rows.find(d => d.symbol === 'AAPL').kind, 'hold');
+  assert.equal(rd.journalUnresolved(req), 0, 'running it again writes nothing new');
+});
+
+test("a trader's candidate wait is a skip with its plan, written once per change; a researcher's is advice", () => {
+  const { saveCandidateReview } = from('review/decisionFollowup'), rd = from('journal/reviewDecisions');
+  const review = (role, n, reason, decision = 'wait') => {
+    const req = 'req-cand-' + role, at = new Date().toISOString();
+    storage.saveRecord('tool-calls', `snap-${role}-${n}`, { name: 'get_position_review', kind: 'read', input: { symbol: 'MSFT' }, finishedAt: at,
+      result: JSON.stringify({ evidenceId: `snap-${role}-${n}`, symbol: 'MSFT', positionKnown: true, holding: null, policyHash: policy.getPolicyHash(), forward: { price: 541.15 } }) });
+    savePlan(`plan-${role}-${n}`, req, 'MSFT', false, 1.91, [{ rule: 'reward_risk_too_low' }], role);
+    return asTool(role, req, `cand-${role}-${n}`, 'record_candidate_review', { symbol: 'MSFT' }, () =>
+      saveCandidateReview('MSFT', decision, reason, [`snap-${role}-${n}`, `plan-${role}-${n}`], `snap-${role}-${n}`, { entryPlanId: `plan-${role}-${n}` }));
+  };
+  review('researcher', 1, 'Plan is 1.91:1, below the 2:1 minimum; wait.');
+  review('trader', 1, 'Plan is 1.91:1, below the 2:1 minimum; wait for a pullback.');
+  review('trader', 2, 'Still 1.91:1 and still extended; keep waiting for a pullback.');
+  const rows = journal.readDecisions({ symbol: 'MSFT' });
+  assert.equal(rows.length, 1, 'researcher advice and an unchanged restatement write nothing');
+  assert.equal(rows[0].kind, 'skip'); assert.equal(rows[0].reviewDecision, 'wait');
+  assert.match(rows[0].rationale, /^wait: Plan is 1\.91:1/);
+  assert.equal(rows[0].entryPlan.rewardRisk, 1.91); assert.equal(rows[0].intendedTarget, 600);
+  assert.deepEqual(rd.unresolvedDecisions('req-cand-trader'), [], 'a recorded review closes the plan');
+  review('trader', 3, 'Pullback arrived; the setup now supports a buy at these levels.', 'skip');
+  assert.equal(journal.readDecisions({ symbol: 'MSFT' }).length, 2, 'a changed decision is a new row');
+});
+
+test('a kept holding is a hold row when the decision changes; an exit review holds the cycle until the order is sent', () => {
+  const rd = from('journal/reviewDecisions'), { savePositionReview } = from('journal/thesis'), req = 'req-hold';
+  state.updateState({ positionSnapshots: { AAPL: { symbol: 'AAPL', entryDecisionId: 'entry-1' } } });
+  const review = (n, decision, changedEvidence) => {
+    storage.saveRecord('tool-calls', 'psnap-' + n, { name: 'get_position_review', kind: 'read', input: { symbol: 'AAPL' }, finishedAt: new Date().toISOString(),
+      result: JSON.stringify({ evidenceId: 'psnap-' + n, symbol: 'AAPL', positionKnown: true, managed: true, entryDecisionId: 'entry-1', holding: { qty: 5 }, policyHash: policy.getPolicyHash() }) });
+    return asTool('trader', req, 'prev-' + n, 'record_position_review', { symbol: 'AAPL' }, () => savePositionReview({ symbol: 'AAPL', decision, changedEvidence,
+      evidenceIds: ['psnap-' + n], snapshotId: 'psnap-' + n, unknowns: [], price: 100, contextVariant: 'decision-context-v1', policyHash: policy.getPolicyHash(), holdingHorizonDays: null }));
+  };
+  review(1, 'keep', 'Trend intact above the 50-day average; stop unchanged.');
+  review(2, 'keep', 'Trend still intact; nothing material changed since the last review.');
+  const holds = journal.readDecisions({ symbol: 'AAPL' });
+  assert.equal(holds.length, 1); assert.equal(holds[0].kind, 'hold'); assert.equal(holds[0].reviewDecision, 'keep');
+  assert.equal(from('journal/types').isTradeAction(holds[0]), false, 'a review hold is not a stop change');
+  assert.deepEqual(rd.unresolvedDecisions(req), []);
+  review(3, 'exit', 'Close broke below the 50-day average on heavy volume; thesis is done.');
+  assert.equal(journal.readDecisions({ symbol: 'AAPL' }).length, 1, 'the exit order journals itself, not the review');
+  assert.match(rd.unresolvedDecisions(req)[0].problem, /review says exit, but no exit order was sent/);
+  agentContext.run({ role: 'trader', requestId: req, actorId: 'system' }, () =>
+    journal.recordDecision(journal.decision('exit', 'trader', { symbol: 'AAPL', rationale: 'Thesis broken' })));
+  assert.deepEqual(rd.unresolvedDecisions(req), []);
+});
+
 test('get_pending_events groups all-clears to their ids and still serves them in full by kind', async () => {
   events.resetEventRegistry();
   const p = policy.getPolicy();

@@ -271,7 +271,9 @@ export function getPendingEvents(): TriggerEvent[] {
   if (dirty) persistRegistry();
   return [...pending.values()];
 }
-export function ackEvent(id: string, disposition: AckDisposition = 'acknowledged', note?: string, orderId?: string): boolean {
+/** `closeObserved`: an `acknowledged` urgent event closes instead of re-waking (the caller knows it is not held). */
+export function ackEvent(id: string, disposition: AckDisposition = 'acknowledged', note?: string, orderId?: string,
+  opts: { closeObserved?: boolean } = {}): boolean {
   hydrateRegistry(); assertAgentActive();
   if (!['acting','acknowledged','ignoring'].includes(disposition)) throw new Error('Invalid event disposition');
   const event = pending.get(id);
@@ -285,7 +287,7 @@ export function ackEvent(id: string, disposition: AckDisposition = 'acknowledged
     event.ackDisposition = disposition; event.ackNote = note ?? null; event.orderId = orderId;
     event.handledBy = agentContext.getStore()?.actorId ?? 'system'; event.requestId = agentContext.getStore()?.requestId;
     event.handling = disposition === 'acting' ? 'order_pending' : disposition === 'ignoring' ? 'declined' : 'observed';
-    const closed = disposition === 'ignoring' || (disposition === 'acknowledged' && !wakesTrader(event));
+    const closed = disposition === 'ignoring' || (disposition === 'acknowledged' && (!wakesTrader(event) || (opts.closeObserved === true && event.severity !== 'critical')));
     event.ackedAt = closed ? new Date().toISOString() : null;
     if (closed) pending.delete(id);
     persistRegistry();

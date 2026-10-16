@@ -62,6 +62,7 @@ import {
   type OcoArmResult,
 } from '../strategy/stopOrders';
 import { decision, readDecisions, recordDecision } from '../journal/journal';
+import { sleepRefusedBefore, unresolvedDecisions } from '../journal/reviewDecisions';
 import { recordLesson, listLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
@@ -353,7 +354,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: "End this trader cycle. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again.",
+    description: "End this trader cycle. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again. It is refused once if a decision is still open this cycle: an entry plan or exit comparison you ran with no review recorded, or a buy/reduce/exit review with no order sent. The refusal lists them.",
     input_schema: {
       type: 'object',
       properties: {
@@ -377,7 +378,7 @@ async function dispatchTraderTool(
 ): Promise<string> {
   try {
     switch (name) {
-      case 'sleep': return JSON.stringify({ ok: true });
+      case 'sleep': return toolSleep();
       case 'get_lessons': return JSON.stringify(listLessons(20, true));
       case 'get_requests': return JSON.stringify(listRequests());
       case 'get_market_status':   return await toolGetMarketStatus();
@@ -1163,6 +1164,22 @@ function resolveAckId(id: string): { id: string; symbol: string | null; correcte
   return { candidates: sameKey.map((e) => e.id) };
 }
 
+/**
+ * Refused once while the trader has looked at a plan, or decided to buy or sell, without closing
+ * it: the reason should be the trader's, not a placeholder. A second sleep always ends the cycle,
+ * and the cycle end journals whatever is still open in the system's own words.
+ */
+function toolSleep(): string {
+  const requestId = agentContext.getStore()?.requestId;
+  if (requestId && !sleepRefusedBefore(requestId)) {
+    const open = unresolvedDecisions(requestId);
+    if (open.length) return JSON.stringify({ ok: false,
+      error: 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, or send the order. Calling sleep again ends the cycle anyway and journals these as "no reason recorded".',
+      open: open.map(u => ({ symbol: u.symbol, problem: u.problem })) });
+  }
+  return JSON.stringify({ ok: true });
+}
+
 function toolAckEvent(input: Record<string, unknown>): string {
   const { id: givenId, disposition, note, orderId } = input as {
     id: string; disposition: AckDisposition; note?: string; orderId?: string;
@@ -1184,7 +1201,13 @@ function toolAckEvent(input: Record<string, unknown>): string {
   }
   const { id, symbol, corrected } = resolved;
 
-  if (!ackEvent(id, disposition, note, orderId)) {
+  // Hold or skip is a fact, not the model's wording: held when answered means it kept the position.
+  const held = symbol != null && (!!getPositionSnapshot(symbol)
+    || Object.values(getLastTick()?.positions ?? {}).some(p => sameSymbol(p.symbol, symbol)));
+  // An urgent event acked as observed stays open and re-wakes the trader, which is right for a
+  // position it holds. For a stock it does not hold, "acknowledged" is the whole answer: KO's one
+  // entry signal woke the trader 23 times, and LLY's drop alerts 128 times after it was sold.
+  if (!ackEvent(id, disposition, note, orderId, { closeObserved: symbol != null && !held })) {
     return JSON.stringify({ ok: false, error: 'unknown or already-acked event id' });
   }
 
@@ -1207,12 +1230,11 @@ function toolAckEvent(input: Record<string, unknown>): string {
     disposition === 'ignoring' ||
     (disposition === 'acknowledged' && !isHeartbeat && symbol != null && note != null && note.trim() !== '');
 
-  // Hold or skip is a fact, not the model's wording: held when answered means it kept the position.
-  const held = symbol != null && (!!getPositionSnapshot(symbol)
-    || Object.values(getLastTick()?.positions ?? {}).some(p => sameSymbol(p.symbol, symbol)));
   // A routine "kept it" on a held stock is not journalled: the note stays on the alert and the
-  // position review is the record of the hold. Declining an alert on a held stock still is.
-  if (shouldJournal && !(held && disposition === 'acknowledged')) {
+  // position review writes the hold row when its decision changes. Declining an alert on a held stock still is.
+  // One row per event: re-answering the same event is not a new decision.
+  const alreadyJournalled = shouldJournal && readDecisions({ filter: r => r.triggerEventId === id, limit: 1 }).length > 0;
+  if (shouldJournal && !alreadyJournalled && !(held && disposition === 'acknowledged')) {
     recordDecision(decision(held ? 'hold' : 'skip', 'trader', {
       symbol,
       triggerEventId: id,
