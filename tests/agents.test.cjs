@@ -311,10 +311,10 @@ function asTool(role, requestId, toolCallId, name, input, fn) {
   const result = agentContext.run({ role, requestId, actorId: 'system', toolCallId }, fn);
   return result instanceof Promise ? result.then(save) : save(result);
 }
-const savePlan = (id, requestId, symbol, allowed, rewardRisk, violations = [], role = 'trader') => storage.saveRecord('tool-calls', id, {
+const savePlan = (id, requestId, symbol, allowed, rewardRisk, violations = [], role = 'trader', levels = { stopLoss: 516, takeProfit: 600 }) => storage.saveRecord('tool-calls', id, {
   name: 'get_entry_plan', role, requestId, kind: 'read', input: { symbol }, startedAt: new Date().toISOString(),
   result: JSON.stringify({ symbol, policyHash: policy.getPolicyHash(), allowed, maxQty: allowed ? 18 : 0, rewardRisk, violations, evidenceId: id,
-    proposedLevels: { referencePrice: 541.15, stopLoss: 516, takeProfit: 600 } }) });
+    proposedLevels: { referencePrice: 541.15, ...levels } }) });
 
 test('sleep is refused once while a plan or comparison has no decision; the cycle end journals what is still open', async () => {
   const rd = from('journal/reviewDecisions'), req = 'req-open';
@@ -344,11 +344,11 @@ test('sleep is refused once while a plan or comparison has no decision; the cycl
 
 test("a trader's candidate wait is a skip with its plan, written once per change; a researcher's is advice", () => {
   const { saveCandidateReview } = from('review/decisionFollowup'), rd = from('journal/reviewDecisions');
-  const review = (role, n, reason, decision = 'wait') => {
+  const review = (role, n, reason, decision = 'wait', rewardRisk = 1.91, levels) => {
     const req = 'req-cand-' + role, at = new Date().toISOString();
     storage.saveRecord('tool-calls', `snap-${role}-${n}`, { name: 'get_position_review', kind: 'read', input: { symbol: 'MSFT' }, finishedAt: at,
       result: JSON.stringify({ evidenceId: `snap-${role}-${n}`, symbol: 'MSFT', positionKnown: true, holding: null, policyHash: policy.getPolicyHash(), forward: { price: 541.15 } }) });
-    savePlan(`plan-${role}-${n}`, req, 'MSFT', false, 1.91, [{ rule: 'reward_risk_too_low' }], role);
+    savePlan(`plan-${role}-${n}`, req, 'MSFT', false, rewardRisk, [{ rule: 'reward_risk_too_low' }], role, levels);
     return asTool(role, req, `cand-${role}-${n}`, 'record_candidate_review', { symbol: 'MSFT' }, () =>
       saveCandidateReview('MSFT', decision, reason, [`snap-${role}-${n}`, `plan-${role}-${n}`], `snap-${role}-${n}`, { entryPlanId: `plan-${role}-${n}` }));
   };
@@ -361,8 +361,12 @@ test("a trader's candidate wait is a skip with its plan, written once per change
   assert.match(rows[0].rationale, /^wait: Plan is 1\.91:1/);
   assert.equal(rows[0].entryPlan.rewardRisk, 1.91); assert.equal(rows[0].intendedTarget, 600);
   assert.deepEqual(rd.unresolvedDecisions('req-cand-trader'), [], 'a recorded review closes the plan');
+  review('trader', 4, 'Re-ran the plan; same wait.', 'wait', 1.9102, { stopLoss: 516.05, takeProfit: 600.04 });
+  assert.equal(journal.readDecisions({ symbol: 'MSFT' }).length, 1, 'levels a few cents off are the same decision');
+  review('trader', 5, 'Stop is now far lower; still waiting.', 'wait', 1.6, { stopLoss: 500, takeProfit: 600 });
+  assert.equal(journal.readDecisions({ symbol: 'MSFT' }).length, 2, 'a real move in the plan is a new row');
   review('trader', 3, 'Pullback arrived; the setup now supports a buy at these levels.', 'skip');
-  assert.equal(journal.readDecisions({ symbol: 'MSFT' }).length, 2, 'a changed decision is a new row');
+  assert.equal(journal.readDecisions({ symbol: 'MSFT' }).length, 3, 'a changed decision is a new row');
 });
 
 test('a kept holding is a hold row when the decision changes; an exit review holds the cycle until the order is sent', () => {
