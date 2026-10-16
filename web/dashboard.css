@@ -1116,3 +1116,7 @@ details[open] > summary > .json-hint { display: none; }
 .request-instruction { margin: 0 0 14px; }
 .request-instruction > summary { cursor: pointer; color: var(--ink-3); font-size: 12px; }
 .request-instruction > p { white-space: pre-wrap; font-size: 12px; color: var(--ink-2); margin: 8px 0 0; }
+
+.usage-bar-col { width: 22%; }
+.usage-bar { display: block; height: 8px; min-width: 2px; border-radius: 4px; background: var(--accent, var(--ink-2)); opacity: .8; }
+.usage-table button[aria-pressed="true"] { font-weight: 600; text-decoration: underline; }

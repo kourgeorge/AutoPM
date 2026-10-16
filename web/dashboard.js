@@ -40,7 +40,7 @@ function attempt(fn) { return async event => { event?.preventDefault(); try { aw
 // ── Start-up and live updates ──────────────────────────────────────────────
 async function start() {
   started = true;
-  showView(['activity','strategy','performance','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
+  showView(['activity','strategy','performance','usage','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
   $('suggestions').replaceChildren(...suggestions.map(([label, question]) => {
     const chip = text('button', label, 'chip'); chip.type = 'button'; chip.title = question;
     chip.onclick = attempt(() => sendMessage(question));
@@ -85,7 +85,7 @@ async function loadCommands() {
 // ── Views ──────────────────────────────────────────────────────────────────
 function showView(name, load = true) {
   view = name;
-  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Settings', performance:'Performance', review:'Review'}[name];
+  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Settings', performance:'Performance', usage:'AI usage', review:'Review'}[name];
   for (const tab of document.querySelectorAll('[role=tab]')) {
     const selected = tab.dataset.view === name;
     tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
@@ -96,6 +96,7 @@ function showView(name, load = true) {
   if (name === 'live') { renderWelcome(); $('feed').scrollTop = $('welcome').hidden ? $('feed').scrollHeight : 0; }
   if (load && (name === 'review' || name === 'performance')) refresh().catch(e => notice(e.message));
   if (load && name === 'activity') loadHistory();
+  if (load && name === 'usage') loadUsage().catch(e => notice(e.message));
 }
 for (const tab of document.querySelectorAll('[role=tab]')) {
   tab.onclick = () => showView(tab.dataset.view);
@@ -440,6 +441,7 @@ async function refresh() {
     if (review) { renderRequests(c.commands); renderLessons(l.lessons); }
     if (performance) renderScorecard(sc);
     if (view === 'activity') await loadHistory();
+    if (view === 'usage') await loadUsage();
   } finally {
     refreshing = false;
     if (refreshAgain) { refreshAgain = false; scheduleRefresh(); }
@@ -1026,6 +1028,49 @@ function renderScorecard(sc) {
   $('score-caveats').replaceChildren(...(sc.caveats || []).map(c => text('li', c)));
 }
 $('score-days').onchange = attempt(refresh);
+
+// ── AI usage ───────────────────────────────────────────────────────────────
+const tokenCount = n => n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+const tokenCell = n => { const cell = text('span', tokenCount(n)); cell.title = `${n.toLocaleString()} tokens`; return cell; };
+const usageRole = role => ({ trader: 'Trader', assistant: 'Assistant', researcher: 'Research', unassigned: 'Unassigned' })[role] || role;
+let usageDay = null;
+async function loadUsage() {
+  const days = $('usage-days').value, u = await api('llm-usage' + (days ? '?days=' + days : ''));
+  const total = u.total.inputTokens + u.total.outputTokens, today = new Date().toISOString().slice(0, 10);
+  const todayRow = u.days.find(d => d.day === today), limit = u.budget?.settings?.maxRequestsPerDay;
+  const cells = [
+    ['Total tokens', tokenCount(total)], ['Input tokens', tokenCount(u.total.inputTokens)], ['Output tokens', tokenCount(u.total.outputTokens)],
+    ['Model calls', u.total.calls.toLocaleString()], ['Today (UTC)', todayRow ? tokenCount(todayRow.inputTokens + todayRow.outputTokens) : '0'],
+    ['Average per day', u.days.length ? tokenCount(Math.round(total / u.days.length)) : '—'], ['Failed calls', u.total.failed.toLocaleString()],
+    ['Daily call limit', limit == null ? 'Unlimited' : `${u.budget.usage.requests} / ${limit} used`],
+  ];
+  $('usage-summary').replaceChildren(...cells.map(([label, value]) => { const cell = text('div', ''); cell.append(text('span', label), text('strong', String(value))); return cell; }));
+  $('usage-caveats').replaceChildren(...[...u.caveats, ...Object.keys(u.byModel).length ? [`Models: ${Object.entries(u.byModel).map(([m, t]) => `${m} (${tokenCount(t.inputTokens + t.outputTokens)})`).join(', ')}.`] : []].map(c => text('li', c)));
+  const agents = Object.entries(u.byAgent).sort((a, b) => (b[1].inputTokens + b[1].outputTokens) - (a[1].inputTokens + a[1].outputTokens));
+  rows('usage-agents', agents, ([role, t]) => [usageRole(role), t.calls.toLocaleString(), tokenCell(t.inputTokens), tokenCell(t.outputTokens),
+    tokenCell(t.inputTokens + t.outputTokens), total ? `${((t.inputTokens + t.outputTokens) / total * 100).toFixed(1)}%` : '—', String(t.failed)]);
+  const peak = Math.max(1, ...u.days.map(d => d.inputTokens + d.outputTokens));
+  const agentTokens = (d, role) => d.byAgent[role] ? tokenCell(d.byAgent[role].inputTokens + d.byAgent[role].outputTokens) : '—';
+  rows('usage-day-list', u.days, d => {
+    const bar = text('span', '', 'usage-bar'); bar.style.width = `${(d.inputTokens + d.outputTokens) / peak * 100}%`;
+    const pick = uiButton(d.day, () => loadUsageDay(d.day)); pick.setAttribute('aria-pressed', String(d.day === usageDay));
+    return [pick, d.calls.toLocaleString(), tokenCell(d.inputTokens), tokenCell(d.outputTokens), tokenCell(d.inputTokens + d.outputTokens),
+      agentTokens(d, 'trader'), agentTokens(d, 'researcher'), agentTokens(d, 'assistant'),
+      { calls: 'Per call', runs: 'Estimated', mixed: 'Partly estimated' }[d.source], bar];
+  });
+  if (usageDay && !u.days.some(d => d.day === usageDay)) { usageDay = null; $('usage-day-panel').hidden = true; }
+  else if (usageDay) await loadUsageDay(usageDay);
+}
+async function loadUsageDay(day) {
+  usageDay = day;
+  for (const b of $('usage-day-list').querySelectorAll('button[aria-pressed]')) b.setAttribute('aria-pressed', String(b.textContent === day));
+  const { requests } = await api('llm-usage/day?day=' + day);
+  $('usage-day-title').textContent = `Requests on ${day}`;
+  $('usage-day-panel').hidden = false;
+  rows('usage-requests', requests, r => [new Date(r.firstAt).toLocaleTimeString(), usageRole(r.role), String(r.calls), tokenCell(r.inputTokens), tokenCell(r.outputTokens),
+    tokenCell(r.inputTokens + r.outputTokens), rowSummary(r.task || '—'), r.status || '—', r.requestId ? uiButton('Open', () => openAgentTask(r.requestId)) : '—']);
+}
+$('usage-days').onchange = attempt(loadUsage);
 let allowedSymbols = [];
 const symbolInput = $('symbol-input');
 function symbolFeedback(message = '', invalid = false) {

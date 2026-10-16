@@ -49,3 +49,32 @@ test('notification retries preserve delivery identity until the receiver acknowl
     assert.deepEqual(pendingNotifications(),[]);assert.equal(keys[0],keys[1]);
   } finally {global.fetch=prior;delete process.env.ALERT_WEBHOOK_URL;}
 });
+test('every model call is kept by day; earlier days are estimated from saved runs without double counting',async()=>{
+  const {withModelBudget}=require('../src/core/modelBudget');
+  const {agentContext}=require('../src/core/agentContext');
+  const {llmUsage,llmUsageForDay}=require('../src/review/llmUsage');
+  const previous=process.env.AI_MAX_REQUESTS_PER_DAY;process.env.AI_MAX_REQUESTS_PER_DAY='50';
+  const today=new Date().toISOString().slice(0,10);
+  try {
+    for(const id of storage.listRecords('model-calls').map(r=>r.id))storage.deleteRecord?.('model-calls',id);
+    // Two runs saved before per-call recording: one on an old day, one today that later gets calls of its own.
+    storage.appendRecord('requests','req-old','2026-10-01T10:00:00.000Z',{role:'researcher',text:'Research AAPL',status:'completed',actorId:'system'});
+    storage.appendRecord('trajectories','req-old','2026-10-01T10:05:00.000Z',{inTokens:1000,outTokens:50});
+    storage.appendRecord('trajectories','req-now',new Date().toISOString(),{inTokens:999999,outTokens:999});
+    const provider=withModelBudget({chat:async()=>({content:[],stopReason:'end_turn',usage:{inputTokens:300,outputTokens:20}})},'test-model');
+    const failing=withModelBudget({chat:async()=>{throw new Error('upstream timeout');}},'test-model');
+    await agentContext.run({role:'trader',actorId:'test',requestId:'req-now'},async()=>{await provider.chat({systemPrompt:'x',messages:[],tools:[],maxTokens:10});await provider.chat({systemPrompt:'x',messages:[],tools:[],maxTokens:10});
+      await assert.rejects(()=>failing.chat({systemPrompt:'x',messages:[],tools:[],maxTokens:10}),/upstream timeout/);});
+    const u=llmUsage();
+    const day=u.days.find(d=>d.day===today), old=u.days.find(d=>d.day==='2026-10-01');
+    assert.equal(day.source,'calls');assert.equal(day.calls,3);assert.equal(day.failed,1);
+    assert.equal(day.inputTokens,600,"today's run is counted from its calls, not again from its trajectory");
+    assert.deepEqual(day.byModel['test-model'],{calls:3,inputTokens:600,outputTokens:40,failed:1});
+    assert.equal(old.source,'runs');assert.deepEqual(old.byAgent.researcher,{calls:1,inputTokens:1000,outputTokens:50,failed:0});
+    assert.equal(u.caveats.length,1);
+    assert.equal(llmUsage({days:7}).days.some(d=>d.day==='2026-10-01'),false);
+    const [top]=llmUsageForDay('2026-10-01').requests;
+    assert.equal(top.requestId,'req-old');assert.equal(top.task,'Research AAPL');assert.equal(top.role,'researcher');
+    assert.throws(()=>llmUsageForDay('yesterday'),/YYYY-MM-DD/);
+  } finally {process.env.AI_MAX_REQUESTS_PER_DAY=previous;}
+});
