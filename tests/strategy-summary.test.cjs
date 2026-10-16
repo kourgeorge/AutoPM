@@ -89,3 +89,22 @@ test('the full summary fits the tool budget even with 100 allowed symbols', () =
   assert.equal(policy.strategy.watchlist.length, 100);
   assert.notEqual(policy.regime.recession.sizeMult, 999);
 });
+
+test('the playbook is prose only; numbers reach the prompt as structured data with units', () => {
+  const { assertProsePlaybook, policyFields, renderPolicyBlock } = require('../src/policy/render');
+  const playbook = fs.readFileSync(path.join(__dirname, '../policy/PLAYBOOK.md'), 'utf8');
+  assert.doesNotMatch(playbook, /\{\{/);
+  assert.doesNotThrow(() => assertProsePlaybook(playbook, base));
+  assert.throws(() => assertProsePlaybook('Max {{risk.maxPositions}} positions', base), /prose only/);
+  assert.throws(() => assertProsePlaybook('No more than `risk.maxPostions` positions', base), /not a setting/);
+  assert.doesNotThrow(() => assertProsePlaybook('Size from `regime.late_cycle`, cap `risk.positionSizePct`', base));
+  const fields = policyFields(base);
+  assert.deepEqual(fields['risk.positionSizePct'], { value: base.risk.positionSizePct, unit: 'fraction of equity (0.1 = 10%), capital cap per position' });
+  assert.match(fields['risk.maxSingleWeightPct'].unit, /^percentage points/);
+  assert.equal(fields['triggers.tickIntervalMs'].unit, 'milliseconds');
+  assert.match(fields['regime.recession.sizeMult'].unit, /multiplier/);
+  assert.deepEqual(fields['strategy.watchlist'], base.strategy.watchlist);
+  const block = JSON.parse(renderPolicyBlock(base).replace(/^.*\n/, ''));
+  assert.equal(block.profile, 'balanced');
+  assert.equal(block.fields['risk.maxPositions'], base.risk.maxPositions);
+});

@@ -1,107 +1,84 @@
 /**
  * L0 — the policy renderer.
  *
- * Interpolates policy.yaml values into policy/PLAYBOOK.md to produce the L3 system
- * prompt. The point is that a risk number appears in the prompt because it appears
- * in the policy — prose and machine config cannot drift.
- *
- * Every failure mode throws. A typo must NEVER render an empty string: that would
- * silently delete a risk rule from the system prompt, which is worse than a crash
- * at load because nothing would ever notice.
+ * The system prompt is the account's playbook (prose only) followed by the ACTIVE POLICY block:
+ * every configured number, as data, keyed by the dotted name the prose refers to it by
+ * (`risk.maxPositions`). A number lives in one place — the saved settings — so prose and
+ * machine config cannot drift, and there is no template to mistype. Until 2026-10-16 the
+ * playbook carried `{{risk.maxPositions}}` placeholders and the account copies had drifted
+ * into rules (a fixed 10% sizing formula) the settings no longer held.
  */
 
 import { getPolicy, readPlaybook } from './load';
+import { riskProfileName } from './riskProfiles';
 import type { Policy } from './types';
 
-const PLACEHOLDER = /\{\{([^}|]+)(?:\|([^}]+))?\}\}/g;
+const FRACTION = 'fraction of equity (0.1 = 10%)';
+const POINTS = 'percentage points (10 = 10%)';
+const MS = 'milliseconds';
 
-type Filter = (value: unknown, key: string) => string;
-
-/** Strip float artifacts: 0.155 * 100 = 15.500000000000002 must render as 15.5%. */
-function clean(n: number): string {
-  return String(Number(n.toFixed(6)));
-}
-
-function expectNumber(value: unknown, key: string, filter: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`policy template: ${key}|${filter} expects a finite number, got ${JSON.stringify(value)}`);
-  }
-  return value;
-}
-
-const FILTERS: Record<string, Filter> = {
-  pct: (v, k) => `${clean(expectNumber(v, k, 'pct') * 100)}%`,
-
-  usd: (v, k) =>
-    `$${expectNumber(v, k, 'usd').toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`,
-
-  min: (v, k) => `${clean(expectNumber(v, k, 'min') / 60_000)} min`,
-
-  list: (v, k) => {
-    if (!Array.isArray(v)) {
-      throw new Error(`policy template: ${k}|list expects a list, got ${JSON.stringify(v)}`);
-    }
-    return v.join(', ');
-  },
+/** Units for every field whose meaning is not obvious from its value. Anything else is a count, ratio or label. */
+const UNITS: Record<string, string> = {
+  'risk.riskPerTradePct': POINTS + ' of equity lost at the planned stop',
+  'risk.targetVolatilityPct': POINTS + ' per year, estimated',
+  'risk.minRewardRisk': 'ratio, (target - entry) / (entry - stop)',
+  'risk.positionSizePct': FRACTION + ', capital cap per position',
+  'risk.stopLossAtrMult': 'multiples of ATR, stop-distance guide',
+  'risk.maxDailyLossPct': FRACTION + ', drawdown that halts entries for the day',
+  'risk.maxGrossExposurePct': FRACTION + ', whole book',
+  'risk.earningsBlackoutDays': 'days before a print',
+  'risk.maxSingleWeightPct': POINTS + ' of equity in one name',
+  'risk.maxSectorWeightPct': POINTS + ' of equity in one sector',
+  'strategy.compositeMin': 'signal composite, -1..+1',
+  'triggers.positionDropPct': POINTS, 'triggers.trailingDrawdownPct': POINTS, 'triggers.positionSurgePct': POINTS,
+  'triggers.hysteresisPct': POINTS, 'triggers.portfolioDrawdownPct': POINTS + ' from the equity peak',
+  'regime.*.sizeMult': 'multiplier on risk.positionSizePct (0.5 = half size)',
+  'regime.*.compositeMin': 'signal composite, -1..+1; replaces strategy.compositeMin in that regime',
+  'immutable.maxDailyLossPctCeiling': FRACTION, 'immutable.positionSizePctCeiling': FRACTION,
+  'immutable.maxGrossExposurePctCeiling': FRACTION, 'immutable.stopLossAtrMultCeiling': 'multiples of ATR',
 };
 
-/** Walk a dotted path. Throws on a miss — an unknown key must not become ''. */
-function resolve(policy: Policy, key: string): unknown {
-  let cursor: unknown = policy;
-  for (const part of key.split('.')) {
-    if (typeof cursor !== 'object' || cursor === null || !(part in cursor)) {
-      throw new Error(`policy template: unknown key {{${key}}}`);
+function unitFor(key: string): string | undefined {
+  if (/Ms$/.test(key)) return MS;
+  return UNITS[key] ?? UNITS[key.replace(/^regime\.[^.]+\./, 'regime.*.')];
+}
+
+/** Every policy value under its dotted name, with its unit where one is needed. */
+export function policyFields(policy: Policy = getPolicy()): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const walk = (value: unknown, path: string) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [k, v] of Object.entries(value)) walk(v, path ? `${path}.${k}` : k);
+      return;
     }
-    cursor = (cursor as Record<string, unknown>)[part];
-  }
-  return cursor;
+    const unit = unitFor(path);
+    out[path] = unit ? { value, unit } : value;
+  };
+  for (const section of ['risk', 'strategy', 'triggers', 'regime', 'automation', 'immutable'] as const) walk(policy[section], section);
+  return out;
+}
+
+/** The structured block appended to the playbook. */
+export function renderPolicyBlock(policy: Policy = getPolicy()): string {
+  return `ACTIVE POLICY (generated from saved settings — the only source of these numbers; the playbook refers to them by name)\n` +
+    JSON.stringify({ profile: riskProfileName(policy.risk), version: policy.version, nullMeans: 'not configured', fields: policyFields(policy) }, null, 2);
 }
 
 /**
- * Render a template against a policy.
- *
- * Trailing newlines are stripped: PLAYBOOK.md is a file and ends with one, the prompt
- * it replaces does not.
+ * The playbook is prose: a placeholder is refused, and so is a setting name that does not exist —
+ * the check the template used to give, since a misspelt `risk.maxPostions` would otherwise point
+ * the trader at nothing without anyone noticing.
  */
-export function renderTemplate(template: string, policy: Policy): string {
-  const rendered = template.replace(PLACEHOLDER, (_match, rawKey: string, rawFilter?: string) => {
-    const key = rawKey.trim();
-    const value = resolve(policy, key);
-
-    if (rawFilter === undefined) {
-      if (typeof value === 'object' && value !== null) {
-        throw new Error(`policy template: {{${key}}} is a ${Array.isArray(value) ? 'list' : 'mapping'} — needs a filter`);
-      }
-      return String(value);
-    }
-
-    const name = rawFilter.trim();
-    const filter = FILTERS[name];
-    if (!filter) {
-      throw new Error(`policy template: unknown filter |${name} on {{${key}}} (have: ${Object.keys(FILTERS).join(', ')})`);
-    }
-    return filter(value, key);
-  });
-
-  return rendered.replace(/\n+$/, '');
+export function assertProsePlaybook(playbook: string, policy: Policy = getPolicy()): void {
+  const placeholder = /\{\{[^}]*\}\}/.exec(playbook);
+  if (placeholder) throw new Error(`The playbook is prose only; ${placeholder[0]} must be referred to by name (e.g. \`risk.maxPositions\`). Settings values are supplied separately as structured data.`);
+  const keys = Object.keys(policyFields(policy));
+  for (const [, name] of playbook.matchAll(/`((?:risk|strategy|triggers|regime|automation|immutable)\.[A-Za-z_.]+)`/g)) {
+    if (!keys.some(k => k === name || k.startsWith(name + '.'))) throw new Error(`The playbook refers to \`${name}\`, which is not a setting`);
+  }
 }
 
-/** The L3 system prompt: policy/PLAYBOOK.md rendered against the active policy. */
+/** The L3 system prompt: the account playbook followed by the active policy as data. */
 export function renderPolicy(policy: Policy = getPolicy()): string {
-  const r = policy.risk;
-  const configured = (value: number | null, suffix: string) => value == null ? 'not configured' : `${value}${suffix}`;
-  return renderTemplate(readPlaybook(), policy) + `\n\nACTIVE RISK PROFILE (generated from saved settings)\n` +
-    `Risk per trade: ${configured(r.riskPerTradePct, '% of equity at the planned stop')}. ` +
-    `Annualized portfolio volatility target: ${configured(r.targetVolatilityPct, '%')}. ` +
-    `Minimum planned reward:risk: ${configured(r.minRewardRisk, ':1')}.\n` +
-    `These sizing instructions supersede older sizing prose in this account's playbook. positionSizePct is only a capital cap. ` +
-    `Use get_watchlist_scan to compare portfolio risk fit, then get_entry_plan with a supported stop and target before execute_entry; request no more than maxQty. ` +
-    `A sizing preview without a target does not clear reward:risk. Never invent a target or tighten a stop merely to qualify. ` +
-    `When configured, volatility uses up to 60 completed daily return intervals, at least 30 aligned observations, annualized with 252 sessions. ` +
-    `Missing required risk data blocks new entries. Unclassified holdings count conservatively toward sector overlap. ` +
-    `A volatility target and a stop budget are estimates, not guaranteed outcomes; reward:risk does not establish positive expectancy. ` +
-    `Leave cash uncommitted when no supported setup fits. Only the user changes the risk profile.\n`;
+  return readPlaybook().replace(/\n+$/, '') + '\n\n' + renderPolicyBlock(policy) + '\n';
 }
