@@ -135,7 +135,12 @@ export interface AccountData {
 
 /** Book-wide shape, computed via `concentration()` so a 60s tick and an on-demand read agree. */
 export interface PortfolioData {
-  grossDeployedPct: number;
+  /**
+   * Percentage points of equity invested. Null when equity is stale/unavailable this tick:
+   * `concentration()` reports 0 then, and 0 would read as "fully in cash" to the investment
+   * target and floor, which would demand buys on an account it cannot see.
+   */
+  grossDeployedPct: number | null;
   maxWeightPct: number;
   maxWeightSymbol: string | null;
   hhi: number;
@@ -509,7 +514,7 @@ export function computeTick(
       : pct(equityPeak - accountData.equity, equityPeak);
 
   const portfolio: PortfolioData = {
-    grossDeployedPct: shape.grossDeployedPct,
+    grossDeployedPct: accountData.equity === null ? null : shape.grossDeployedPct,
     maxWeightPct: shape.maxWeightPct,
     maxWeightSymbol: shape.maxWeightSymbol,
     hhi: shape.hhi,

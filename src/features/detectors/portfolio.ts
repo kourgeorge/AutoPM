@@ -26,7 +26,7 @@ export const portfolioDrawdownDetector: Detector = {
         equityPeak: p.equityPeak,
         equity: data.account.equity ?? 'n/a',
         positionCount: data.account.positionCount,
-        grossDeployedPct: p.grossDeployedPct,
+        grossDeployedPct: p.grossDeployedPct ?? 'n/a',
       },
       suggestedAction: 'resize',
       confirmTicks: policy.triggers.confirmTicks,
