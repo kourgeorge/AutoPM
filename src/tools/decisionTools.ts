@@ -94,7 +94,7 @@ async function compareActions(input: Record<string, unknown>) {
     const replacement = await positionReviewContext(candidate), candidatePrice = replacement.forward.price;
     if (candidatePrice == null) throw new Error('Candidate quote unavailable');
     const after = positions.filter(p => canonicalSymbol(p.symbol) !== symbol);
-    const risk = assessEntryRisk({ symbol: candidate, price: entryLimitPrice(candidatePrice, candidatePrice), stopLoss: Number(input.candidateStop), takeProfit: Number(input.candidateTarget),
+    const risk = assessEntryRisk({ symbol: candidate, price: entryLimitPrice(candidatePrice, candidatePrice), quotePrice: candidatePrice, stopLoss: Number(input.candidateStop), takeProfit: Number(input.candidateTarget),
       equity: account.equity, buyingPower: account.buyingPower + qty * price - (exitCost(qty) ?? 0), positions: after, policy, inputs });
     alternatives.push({ action: 'replace', candidate, candidateGeometry: forwardGeometry(candidatePrice, Number(input.candidateStop), Number(input.candidateTarget), replacement.atr),
       candidateRelative: replacement.relative, candidateLiquidity: replacement.liquidity, riskAfterAssumedExit: risk,

@@ -78,13 +78,22 @@ test('wider stops buy fewer shares for the same planned loss; capital remains a 
   assert.equal(assess({ qty: 101 }).allowed, false);
 });
 
-test('reward:risk is checked at the executable limit, not the optimistic quoted entry', () => {
+test('reward:risk is measured from the quote; sizing still uses the executable limit', () => {
   assert.equal(assess({ takeProfit: 110 }).allowed, true);
+  // Without a quote the limit is all we know, and a planned 2:1 falls just short.
   const atLimit = assess({ price: entryLimitPrice(100, 100), takeProfit: 110 });
   assert.equal(atLimit.allowed, false);
   assert.equal(atLimit.violations[0].rule, 'reward_risk_too_low');
   assert.equal(atLimit.maxQty, 0);
   assert.ok(atLimit.rewardRisk < 2);
+  // With the quote, the 0.2% limit buffer no longer eats the ratio...
+  const quoted = assess({ price: entryLimitPrice(100, 100), quotePrice: 100, takeProfit: 110 });
+  assert.equal(quoted.allowed, true);
+  assert.ok(Math.abs(quoted.rewardRisk - 2) < 1e-9);
+  // ...but planned loss is still charged at the limit.
+  assert.equal(quoted.entryPrice, entryLimitPrice(100, 100));
+  // A quote above the limit is ignored rather than trusted.
+  assert.ok(assess({ price: 100, quotePrice: 101, takeProfit: 110 }).rewardRisk === 2);
 });
 
 test('portfolio volatility sizes volatile assets down and never fills a fractional share', () => {
@@ -256,7 +265,7 @@ test('live planning and execution enforce the same risk constraints and record t
     assert.equal(validated.riskAssessment.allowed, true);
     assert.equal(validated.riskAssessment.plannedLoss, plan.plannedLoss);
     await assert.rejects(() => orders.validateEntry(signal, plan.maxQty + 1), e => e.rule === 'risk_per_trade');
-    await assert.rejects(() => orders.validateEntry({ ...signal, takeProfit: 110 }, 1), e => e.rule === 'reward_risk_too_low');
+    await assert.rejects(() => orders.validateEntry({ ...signal, takeProfit: 109 }, 1), e => e.rule === 'reward_risk_too_low');
     const queued = await orders.enterPosition(signal, plan.maxQty);
     assert.equal(require('../src/core/orders').getOrder(queued.orderId).params.riskAssessment.plannedLoss, plan.plannedLoss);
     const held = [{ symbol: 'MSFT', qty: 400, marketValue: 40000 }];

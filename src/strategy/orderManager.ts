@@ -496,7 +496,7 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   const policy = getPolicy();
   if (hasRiskProfile(policy.risk)) {
     const inputs = await collectRiskInputs([...positions.map(p => p.symbol), symbol], policy);
-    riskAssessment = assessEntryRisk({ symbol, price, stopLoss, takeProfit, qty: regimeQty,
+    riskAssessment = assessEntryRisk({ symbol, price, quotePrice: quote.value, stopLoss, takeProfit, qty: regimeQty,
       equity: account.equity, buyingPower: account.buyingPower, positions, policy, inputs });
     if (!riskAssessment.allowed) {
       const violation = riskAssessment.violations[0];

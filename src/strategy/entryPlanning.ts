@@ -25,7 +25,7 @@ export async function entryPlan(input: { symbol: string; price: number; stopLoss
   if (getPolicyHash() !== policyHash) return { allowed: false, maxQty: 0, error: 'Strategy changed; request a fresh plan' };
   return { symbol, policyHash, profile: riskProfileName(policy.risk),
     proposedLevels: { referencePrice: input.price, stopLoss: input.stopLoss, takeProfit: input.takeProfit },
-    ...assessEntryRisk({ ...input, symbol, price: entryLimitPrice(input.price, quote.value), equity: account.equity,
+    ...assessEntryRisk({ ...input, symbol, price: entryLimitPrice(input.price, quote.value), quotePrice: quote.value, equity: account.equity,
       buyingPower: account.buyingPower, positions, policy, inputs }),
     scope: 'Risk budget only. Request no more than maxQty. Execution rechecks all entry rules and may reduce size for the market regime.',
   };
@@ -43,7 +43,7 @@ export async function riskAwareWatchlistScan() {
     if (getPolicyHash() !== policyHash) throw new Error('Strategy changed during scan; refresh');
     const rows = scan.rows.map(row => {
       const riskFit = row.price != null && row.atr != null && row.atr > 0 && !row.notScored
-        ? assessEntryRisk({ symbol: row.symbol, price: entryLimitPrice(row.price, row.price),
+        ? assessEntryRisk({ symbol: row.symbol, price: entryLimitPrice(row.price, row.price), quotePrice: row.price,
           stopLoss: Math.round((row.price - row.atr * policy.risk.stopLossAtrMult) * 100) / 100,
           takeProfit: null, equity: account.equity, buyingPower: account.buyingPower, positions, policy, inputs })
         : null;

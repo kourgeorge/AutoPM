@@ -90,7 +90,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   ...DECISION_TOOL_DEFINITIONS,
   {
     name: 'get_entry_plan',
-    description: 'Size a proposed long equity trade against the user risk profile using the IOC entry limit, stop loss, reward:risk, current holdings, sector limits and estimated portfolio volatility. Returns maxQty and measured risk. Choose a supported stop and target first; never move them merely to pass a budget. This is a read-only plan, not an order or an approval.',
+    description: 'Size a proposed long equity trade against the user risk profile sizing at the IOC entry limit, with reward:risk measured from the current quote, current holdings, sector limits and estimated portfolio volatility. Returns maxQty and measured risk. Choose a supported stop and target first; never move them merely to pass a budget. This is a read-only plan, not an order or an approval.',
     input_schema: { type: 'object', properties: {
       symbol: { type: 'string' }, price: { type: 'number', minimum: 0.01 },
       stopLoss: { type: 'number', minimum: 0.01 }, takeProfit: { type: 'number', minimum: 0.01 },
