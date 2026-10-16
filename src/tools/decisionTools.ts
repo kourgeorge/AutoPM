@@ -33,7 +33,7 @@ function definition(name: string, description: string, properties: Record<string
 export const DECISION_TOOL_DEFINITIONS: ToolDefinition[] = [
   definition('get_position_review', 'Read a position or new-entry candidate dossier: fresh price, completed-session metrics, relative strength, catalyst/fundamental changes, and holding protection when applicable. Each result has an evidenceId; use it as snapshotId when recording a decision. For a non-held symbol, an original thesis/holding geometry is not applicable: research a proposed buy case and derive levels for get_entry_plan. Only legacy holdings have an unknown original thesis.', { symbol: symbolSchema }, ['symbol']),
   definition('get_thesis_status', 'Check each recorded entry premise against current measured metrics, or assess a proposed entry thesis. Returns supported/contradicted/unknown with sources and dates. A qualitative premise remains unverified; missing data cannot establish an intact thesis. With snapshotId, use the exact previously observed dossier instead of refetching.', { symbol: symbolSchema, snapshotId: { type: 'string' }, thesis: THESIS_SCHEMA }, ['symbol']),
-  definition('record_position_review', 'Save a MATERIAL change to a managed holding assessment independently of machine events and stop adjustments. This is a review receipt, not an order. Reductions/exits must be sent separately. Keep the original entry thesis immutable; unknown conditions remain stated.', {
+  definition('record_position_review', 'Save a MATERIAL change to a managed holding assessment independently of machine events and stop adjustments. snapshotId must be the evidenceId from a get_position_review for this symbol taken in the last 15 minutes; include that ID in evidenceIds. The cycle brief, events, positions and other evidence cannot serve as snapshotId. This is a review receipt, not an order. Reductions/exits must be sent separately. Keep the original entry thesis immutable; unknown conditions remain stated.', {
     symbol: symbolSchema, decision: { type: 'string', enum: ['keep', 'reduce', 'exit', 'wait'] }, changedEvidence: { type: 'string', minLength: 20, maxLength: 2000 },
     evidenceIds: idsSchema, snapshotId: { type: 'string' }, unknowns: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 300 } },
   }, ['symbol', 'decision', 'changedEvidence', 'evidenceIds', 'snapshotId', 'unknowns']),
@@ -120,7 +120,12 @@ export async function executeDecisionTool(name: string, input: Record<string, un
     }
     case 'record_position_review': {
       const e = readEvidence(String(input.snapshotId));
-      if (e?.data.positionKnown !== true || !e.data.holding) throw new Error('Review snapshot must confirm a current holding');
+      // A rejected review saves nothing, so the error says so: a turn once acknowledged an event
+      // citing "the fresh review" after this call had failed.
+      const retry = `Nothing was saved. Call get_position_review for ${symbol} and pass its evidenceId as snapshotId.`;
+      if (!e) throw new Error(`snapshotId ${input.snapshotId} is not a saved observation. ${retry}`);
+      if (e.tool !== 'get_position_review' || !sameSymbol(e.symbol ?? '', symbol)) throw new Error(`snapshotId is a ${e.tool}${e.symbol ? ` (${e.symbol})` : ''} observation, not a get_position_review for ${symbol}. ${retry}`);
+      if (e.data.positionKnown !== true || !e.data.holding) throw new Error(`That get_position_review does not show a current ${symbol} holding, so there is no position to review. Nothing was saved.`);
       if (e.data.policyHash !== getPolicyHash()) throw new Error('Strategy changed since this review snapshot');
       result = savePositionReview({ symbol, decision: input.decision as any, changedEvidence: String(input.changedEvidence), evidenceIds: input.evidenceIds as string[],
         snapshotId: String(input.snapshotId), unknowns: input.unknowns as string[], price: e.data.forward?.price ?? null,
