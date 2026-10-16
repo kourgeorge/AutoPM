@@ -345,7 +345,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'request_research',
-    description: 'Start full research on one stock in the separate research worker: business, news and SEC filings, trend, catalysts, portfolio fit and proposed entry/stop/target levels, ending in a saved buy/wait/skip candidate review or a holding review. Returns a request ID immediately. It places no orders, runs even while trading is paused, and a stock already being researched is not started twice. Asked from chat, the finished summary is posted to the chat; otherwise read the saved verdict later with get_decision_followup.',
+    description: 'Start full research on one stock in the separate research worker: business, news and SEC filings, trend, catalysts, portfolio fit and proposed entry/stop/target levels, ending in a saved buy/wait/skip candidate review or a holding review. Use it on a candidate that interests you but that you cannot judge yet; it counts as the decision on that name for this cycle, and a request_finished event wakes you with the verdict. Returns a request ID immediately. It places no orders, runs even while trading is paused, and a stock already being researched is not started twice. Asked from chat, the finished summary is posted to the chat; otherwise read the saved verdict later with get_decision_followup.',
     input_schema: {
       type: 'object',
       properties: { symbol: { type: 'string', description: 'Ticker as written, e.g. "BRK.B".' } },
@@ -1174,7 +1174,7 @@ function toolSleep(): string {
   if (requestId && !sleepRefusedBefore(requestId)) {
     const open = unresolvedDecisions(requestId);
     if (open.length) return JSON.stringify({ ok: false,
-      error: 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, or send the order. For an under-invested account with no scan, run get_watchlist_scan. Calling sleep again ends the cycle anyway and journals these as "no reason recorded".',
+      error: 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, send the order, or — for a candidate you cannot judge yet — request_research(symbol) for a full review. For an under-invested account with no scan, run get_watchlist_scan. Calling sleep again ends the cycle anyway and journals these as "no reason recorded".',
       open: open.map(u => ({ symbol: u.symbol, problem: u.problem })) });
   }
   return JSON.stringify({ ok: true });

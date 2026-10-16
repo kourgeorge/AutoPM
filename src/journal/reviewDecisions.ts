@@ -108,6 +108,10 @@ export function unresolvedDecisions(requestId: string): Unresolved[] {
     if (symbol && ![...symbols.keys()].some(s => sameSymbol(s, symbol))) symbols.set(symbol.toUpperCase(), c.value.name);
   }
   const out: Unresolved[] = [];
+  // Sending a name to the research worker is this cycle's decision on it: the verdict comes back
+  // as request_finished, and the entry decision is made in that later cycle.
+  const researched = tradersCalls(requestId, ['request_research']).filter(c => parse<{ ok?: boolean }>(c.value.result)?.ok)
+    .map(c => c.value.input?.symbol ?? '');
   // Only while the market is open and the book is short of its target: then a fitting candidate
   // left undecided is cash the profile asked to put to work.
   const tick = getLastTick(), gap = investmentGap(getPolicy(), tick?.portfolio?.grossDeployedPct);
@@ -135,7 +139,7 @@ export function unresolvedDecisions(requestId: string): Unresolved[] {
       if (!rows.some(r => ACTED.includes(r.kind) && r.at >= lastReview.at))
         out.push({ symbol, kind, problem: `your review says ${lastReview.decision}, but no ${lastReview.decision === 'buy' ? 'entry' : 'exit'} order was sent`,
           fields: { reviewDecision: lastReview.decision, ...(kind === 'skip' ? planFields(requestId, symbol) : {}) } });
-    } else if (!lastReview && !rows.length) {
+    } else if (!lastReview && !rows.length && !researched.some(s => sameSymbol(s, symbol))) {
       const scan = scanned.get(symbol), planned = mine.some(c => c.value.name === 'get_entry_plan');
       const problem = position ? 'you compared exit options but recorded no decision'
         : planned ? 'you ran an entry plan but recorded no decision'
