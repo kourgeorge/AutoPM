@@ -493,7 +493,7 @@ export function saveStrategy(settings: unknown, expectedHash: string, playbook =
   const parsed = parsePolicy(text);
   if (!parsed.ok) throw new Error(parsed.errors.join('; '));
   // Lazy import avoids the renderer/loader module cycle during startup.
-  require('./render').renderTemplate(playbook, parsed.policy);
+  require('./render').assertProsePlaybook(playbook, parsed.policy);
   transaction(() => {
     const persisted = readTradeSettings();
     const active = persisted ? parsePolicy(persisted.text) : null;

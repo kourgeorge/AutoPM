@@ -20,8 +20,8 @@
  *   npm run verify:policy
  */
 
-import { loadPolicy } from '../policy/load';
-import { renderPolicy } from '../policy/render';
+import { loadPolicy, readPlaybook } from '../policy/load';
+import { assertProsePlaybook, renderPolicy } from '../policy/render';
 
 /** Prose the prompt must contain. Each entry is a rule whose absence changes behaviour. */
 const REQUIRED = [
@@ -29,8 +29,9 @@ const REQUIRED = [
   'MACHINE EVENTS',
   'CYCLE FRAMEWORK',
   'RISK RULES',
-  'SLEEP CADENCE',
+  'WAKING',
   'CORE WATCHLIST',
+  'ACTIVE POLICY',
   'sleep()',
   'execute_entry',
   'execute_exit',
@@ -73,6 +74,7 @@ function main(): void {
   }
 
   const failures: string[] = [];
+  try { assertProsePlaybook(readPlaybook(), policy); } catch (err: any) { failures.push(err.message); }
 
   if (prompt.includes('{{')) {
     const leaked = prompt.match(/\{\{[^}]*\}?\}?/g) ?? [];
