@@ -421,6 +421,18 @@ test('below the investment target, fitting scan candidates need a decision and t
     assert.equal(rd.journalUnresolved(req), 2);
     assert.equal(journal.readDecisions({ symbol: 'V' })[0].intendedPrice, 100);
 
+    // Sending a name to the research worker is the decision on it for this cycle; a failed request is not.
+    storage.saveRecord('tool-calls', 'rr-lly', { name: 'request_research', role: 'trader', requestId: req, input: { symbol: 'LLY' }, result: JSON.stringify({ ok: true, requestId: 'r1' }) });
+    storage.saveRecord('tool-calls', 'rr-v', { name: 'request_research', role: 'trader', requestId: req, input: { symbol: 'V' }, result: JSON.stringify({ error: 'queue full' }) });
+    storage.saveRecord('tool-calls', 'plan-cost', { name: 'get_entry_plan', role: 'trader', requestId: req, input: { symbol: 'COST' }, result: JSON.stringify({ symbol: 'COST', allowed: true, maxQty: 3 }) });
+    storage.saveRecord('tool-calls', 'rr-cost', { name: 'request_research', role: 'trader', requestId: req, input: { symbol: 'COST' }, result: JSON.stringify({ ok: true, requestId: 'r2' }) });
+    storage.saveRecord('tool-calls', 'scan-3', { name: 'get_watchlist_scan', role: 'trader', requestId: 'req-scan-2', input: {},
+      result: JSON.stringify({ rows: rowsOf([['KO', 0.5, 9], ['PG', 0.4, 9]]) }) });
+    storage.saveRecord('tool-calls', 'rr-ko', { name: 'request_research', role: 'trader', requestId: 'req-scan-2', input: { symbol: 'KO' }, result: JSON.stringify({ ok: true, requestId: 'r3' }) });
+    storage.saveRecord('tool-calls', 'rr-pg', { name: 'request_research', role: 'trader', requestId: 'req-scan-2', input: { symbol: 'PG' }, result: JSON.stringify({ error: 'failed' }) });
+    assert.deepEqual(rd.unresolvedDecisions('req-scan-2').map(o => o.symbol), ['PG'], 'researched KO is decided; PG, whose request failed, is not');
+    assert.ok(!rd.unresolvedDecisions(req).some(o => o.symbol === 'COST'), 'an entry plan followed by a research request is decided too');
+
     assert.match(rd.unresolvedDecisions('req-no-scan')[0].problem, /under-invested.*did not scan the watchlist/);
     assert.equal(rd.unresolvedDecisions('req-no-scan')[0].symbol, null);
   } finally { lastTick.resetLastTick(); policy.loadPolicy(); }
