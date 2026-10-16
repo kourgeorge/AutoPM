@@ -354,7 +354,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: "End this trader cycle. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again. It is refused once if a decision is still open this cycle: an entry plan or exit comparison you ran with no review recorded, or a buy/reduce/exit review with no order sent. The refusal lists them.",
+    description: "End this trader cycle. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again. It is refused once if a decision is still open this cycle: an entry plan or exit comparison you ran with no review recorded, a buy/reduce/exit review with no order sent, or — while the market is open and the account is below its investment target — one of the best-ranked scan candidates that fits the risk budget with neither an entry nor a recorded review. The refusal lists them.",
     input_schema: {
       type: 'object',
       properties: {
@@ -1174,7 +1174,7 @@ function toolSleep(): string {
   if (requestId && !sleepRefusedBefore(requestId)) {
     const open = unresolvedDecisions(requestId);
     if (open.length) return JSON.stringify({ ok: false,
-      error: 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, or send the order. Calling sleep again ends the cycle anyway and journals these as "no reason recorded".',
+      error: 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, or send the order. For an under-invested account with no scan, run get_watchlist_scan. Calling sleep again ends the cycle anyway and journals these as "no reason recorded".',
       open: open.map(u => ({ symbol: u.symbol, problem: u.problem })) });
   }
   return JSON.stringify({ ok: true });

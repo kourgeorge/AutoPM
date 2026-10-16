@@ -2,6 +2,9 @@ import { listRecords } from '../core/storage';
 import { agentContext } from '../core/agentContext';
 import { sameSymbol } from '../core/symbols';
 import { decision, readDecisions, recordDecision } from './journal';
+import { getLastTick } from '../features/lastTick';
+import { getPolicy } from '../policy/load';
+import { describeGap, investmentGap } from '../strategy/investment';
 import type { DecisionInput, DecisionRecord, EntryPlanSummary } from './types';
 
 /**
@@ -22,6 +25,14 @@ interface PlanResult {
 }
 type ReviewLabel = 'buy' | 'wait' | 'skip' | 'keep' | 'reduce' | 'exit';
 const PREVIEWS = ['get_entry_plan', 'compare_position_actions'];
+/**
+ * Below the investment target, this many of the best-ranked scan rows that already fit the risk
+ * budget need a decision. A scan the trader read and walked away from was the one way left to
+ * pass on a buy without a trace: on 2026-10-16 MA, LLY and V all fit, nothing was entered, and
+ * the journal stayed empty because no entry plan had been run.
+ */
+const SCAN_CANDIDATES_TO_DECIDE = 3;
+interface ScanRow { symbol?: string; price?: number | null; priceStale?: boolean; composite?: number | null; riskAdjustedScore?: number | null; riskFit?: { maxQty?: number } | null }
 const REVIEWS = ['record_candidate_review', 'record_position_review'];
 const ACTED = ['entry', 'exit', 'veto', 'rejected'];
 
@@ -73,7 +84,16 @@ export function journalReview(review: { symbol: string; held: boolean; decision:
     reviewDecision: review.decision, reviewId: review.reviewId, observationIds: review.evidenceIds, ...numbers }));
 }
 
-export interface Unresolved { symbol: string; problem: string; kind: 'hold' | 'skip'; fields: Partial<DecisionInput> }
+export interface Unresolved { symbol: string | null; problem: string; kind: 'hold' | 'skip'; fields: Partial<DecisionInput> }
+
+/** The strongest fitting candidates the trader's scans showed in this request, best first. */
+function scanCandidates(requestId: string): ScanRow[] {
+  const rows = new Map<string, ScanRow>();
+  for (const c of tradersCalls(requestId, ['get_watchlist_scan']))
+    for (const row of parse<{ rows?: ScanRow[] }>(c.value.result)?.rows ?? [])
+      if (row.symbol && row.riskAdjustedScore != null && !row.priceStale) rows.set(row.symbol.toUpperCase(), row);
+  return [...rows.values()].sort((a, b) => b.riskAdjustedScore! - a.riskAdjustedScore!).slice(0, SCAN_CANDIDATES_TO_DECIDE);
+}
 
 /**
  * What the trader looked at or decided in this request and has not closed: a plan or exit
@@ -88,6 +108,19 @@ export function unresolvedDecisions(requestId: string): Unresolved[] {
     if (symbol && ![...symbols.keys()].some(s => sameSymbol(s, symbol))) symbols.set(symbol.toUpperCase(), c.value.name);
   }
   const out: Unresolved[] = [];
+  // Only while the market is open and the book is short of its target: then a fitting candidate
+  // left undecided is cash the profile asked to put to work.
+  const tick = getLastTick(), gap = investmentGap(getPolicy(), tick?.portfolio?.grossDeployedPct);
+  const scanned = new Map<string, ScanRow>();
+  if (tick?.session === 'open' && gap?.belowTarget) {
+    for (const row of scanCandidates(requestId)) {
+      scanned.set(row.symbol!.toUpperCase(), row);
+      if (![...symbols.keys()].some(s => sameSymbol(s, row.symbol!))) symbols.set(row.symbol!.toUpperCase(), 'get_watchlist_scan');
+    }
+    if (gap.belowFloor && !tradersCalls(requestId, ['get_watchlist_scan']).length)
+      out.push({ symbol: null, kind: 'skip', fields: {},
+        problem: `the account is under-invested (${describeGap(gap)}) and you did not scan the watchlist this cycle` });
+  }
   for (const symbol of symbols.keys()) {
     const mine = calls.filter(c => sameSymbol(c.value.input?.symbol ?? parse<{ symbol?: string }>(c.value.result)?.symbol ?? '', symbol));
     const rows = journal.filter(r => sameSymbol(r.symbol!, symbol));
@@ -103,8 +136,11 @@ export function unresolvedDecisions(requestId: string): Unresolved[] {
         out.push({ symbol, kind, problem: `your review says ${lastReview.decision}, but no ${lastReview.decision === 'buy' ? 'entry' : 'exit'} order was sent`,
           fields: { reviewDecision: lastReview.decision, ...(kind === 'skip' ? planFields(requestId, symbol) : {}) } });
     } else if (!lastReview && !rows.length) {
-      out.push({ symbol, kind, problem: position ? 'you compared exit options but recorded no decision' : 'you ran an entry plan but recorded no decision',
-        fields: kind === 'skip' ? planFields(requestId, symbol) : {} });
+      const scan = scanned.get(symbol), planned = mine.some(c => c.value.name === 'get_entry_plan');
+      const problem = position ? 'you compared exit options but recorded no decision'
+        : planned ? 'you ran an entry plan but recorded no decision'
+        : `the scan shows it fitting the risk budget (composite ${scan?.composite ?? '?'}, up to ${scan?.riskFit?.maxQty ?? '?'} shares) while the account is below its investment target, and you recorded no decision`;
+      out.push({ symbol, kind, problem, fields: kind === 'skip' ? { ...(scan?.price != null ? { intendedPrice: scan.price } : {}), ...planFields(requestId, symbol) } : {} });
     }
   }
   return out;

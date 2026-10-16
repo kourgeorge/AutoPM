@@ -85,6 +85,8 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
         minRewardRisk:      { type: 'number', minimum: 0.1, maximum: 20, description: 'Minimum planned reward:risk ratio: 2 means 2:1. Not a promised return.' },
         maxSingleWeightPct: { type: 'number', minimum: 0, maximum: 100, description: 'Single-name concentration threshold in percentage points: 10 means 10% of equity.' },
         maxSectorWeightPct: { type: 'number', minimum: 0, maximum: 100, description: 'Sector concentration threshold in percentage points: 30 means 30% of equity.' },
+        targetInvestedPct:  { type: 'number', minimum: 0, maximum: 150, description: 'Share of equity the trader aims to keep invested, in percentage points: 80 means 80%. Must not exceed the gross exposure limit.' },
+        minInvestedPct:     { type: 'number', minimum: 0, maximum: 150, description: 'Investment floor in percentage points: below it, holding cash needs a stated reason for each strong candidate. Must not exceed the target.' },
       },
       required: [],
     },

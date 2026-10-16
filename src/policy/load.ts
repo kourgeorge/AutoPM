@@ -250,7 +250,13 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
     maxSectorWeightPct: r.maxSectorWeightPct === undefined
       ? DEFAULT_MAX_SECTOR_WEIGHT_PCT
       : num(r, 'risk', 'maxSectorWeightPct', errs, { min: 0, max: 100 }),
+    targetInvestedPct: optionalRiskNumber('targetInvestedPct', 0, 150),
+    minInvestedPct: optionalRiskNumber('minInvestedPct', 0, 150),
   };
+  if (risk.minInvestedPct != null && risk.targetInvestedPct != null && risk.minInvestedPct > risk.targetInvestedPct)
+    errs.push('risk.minInvestedPct must not exceed risk.targetInvestedPct');
+  if (risk.targetInvestedPct != null && risk.targetInvestedPct > risk.maxGrossExposurePct * 100 + 1e-9)
+    errs.push('risk.targetInvestedPct must not exceed the gross exposure limit (risk.maxGrossExposurePct)');
 
   const s = block(root, 'strategy', errs);
   const strategy = {

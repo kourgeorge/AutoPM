@@ -2,6 +2,8 @@ import { withAccountRead } from '../core/accountRead';
 import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
 import { journalUnresolved } from '../journal/reviewDecisions';
+import { getLastTick } from '../features/lastTick';
+import { describeGap, investmentGap } from '../strategy/investment';
 import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
@@ -469,6 +471,11 @@ async function buildAccountStatus(): Promise<string> {
       lines.push(account.lossLimitUnmeasurable);
     }
     lines.push(`Max positions: ${account.maxPositions}.`);
+    const gap = investmentGap(getPolicy(), getLastTick()?.portfolio?.grossDeployedPct);
+    if (gap && (gap.targetPct != null || gap.floorPct != null)) {
+      lines.push(`Invested: ${describeGap(gap)}.` + (gap.belowFloor ? ' *** BELOW THE INVESTMENT FLOOR — holding this much cash needs a stated reason. ***'
+        : gap.belowTarget ? ' Below target.' : ''));
+    }
   } catch (err: any) {
     lines.push(`Account unavailable this cycle (${err.message}) — equity, cash and daily loss status are unknown. Retry with get_account.`);
   }
