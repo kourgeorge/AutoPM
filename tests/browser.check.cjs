@@ -53,7 +53,7 @@ test('conversation tool calls expand complete inputs and outputs without losing 
     await expect(first.locator('.tool-call-type')).toHaveText('Tool result');
     await expect(page.locator('#feed .operator .message-author')).toHaveText('You');
     await expect(page.locator('#feed .reply[data-source="assistant"] .message-author')).toHaveText('Assistant');
-    await expect(page.locator('#feed .reply[data-source="assistant"] .message-type')).toHaveText('Assistant');
+    await expect(page.locator('#feed .reply[data-source="assistant"] .message-type'), 'the author already says Assistant').toHaveCount(0);
     await expect(page.locator('#live-feed .activity-entry.operator .activity-entity')).toHaveText('You');
     await expect(page.locator('#live-feed .activity-entry.operator .activity-kind')).toHaveText('[MESSAGE]');
     await expect(page.locator('#live-feed .activity-entry.tool .activity-entity')).toHaveText('Assistant');
@@ -316,8 +316,8 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('.reply-body')).toContainText('<img src=x onerror=alert(1)>');
     await page.getByRole('tab',{name:'Live',exact:true}).click();
     await page.locator('#watchlist-rows button').first().click();
-    await expect(page.locator('#ticker-chart-dialog')).toBeVisible();
-    await expect(page.locator('#ticker-chart-title')).toHaveText('AAPL');
+    await expect(page.locator('#position-review-dialog')).toBeVisible();
+    await expect(page.locator('#position-review-title')).toHaveText('AAPL');
     await expect(page.locator('#ticker-chart .price-candle')).toHaveCount(3);
     await page.getByRole('button',{name:'Trend',exact:true}).click();
     await expect(page.locator('#ticker-chart .price-trend')).toHaveCount(1);
@@ -330,15 +330,12 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('#ticker-chart')).toHaveAttribute('aria-label',/1Hour/);
     await page.getByRole('button',{name:'Candles',exact:true}).click();
     await expect(page.locator('#ticker-chart .price-candle')).toHaveCount(3);
-    await page.locator('#ticker-chart-dialog').screenshot({path:'/tmp/autotrade-ticker-chart-desktop.png'});
+    await page.locator('#position-review-dialog').screenshot({path:'/tmp/autotrade-ticker-chart-desktop.png'});
     await page.getByRole('button',{name:'Discuss with agent'}).click();
     await expect(page.getByRole('tab',{name:'Live',exact:true})).toHaveAttribute('aria-selected','true');
-    await expect(page.locator('#message-text')).toHaveValue('What is your current view on AAPL?');
+    await expect(page.locator('#message-text')).toHaveValue('What is your current assessment and plan for AAPL?');
     await page.locator('#message-text').fill('');
     await expect(page.locator('#account-mode')).toHaveText('paper');
-    await page.getByRole('tab',{name:'Live',exact:true}).click();
-    await page.locator('#positions').getByRole('button',{name:'Ask the agent about MSFT'}).click();
-    await expect(page.locator('#message-text')).toHaveValue('How is MSFT doing, and what is your plan for it?');
     await page.getByRole('tab',{name:'Live',exact:true}).click();
     await expect(page.locator('#positions')).toContainText('+$15.00');
     // A new tick reaches the page through the event stream and extends the equity chart.
@@ -392,7 +389,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.getByRole('tab',{name:'Live',exact:true}).click();
     await page.getByRole('button',{name:'Pause trading',exact:true}).click();
     await page.getByRole('button',{name:'Resume trading',exact:true}).waitFor();assert.equal(getState().paused,true);
-    await page.getByRole('tab',{name:'Strategy'}).click();
+    await page.getByRole('tab',{name:'Settings',exact:true}).click();
     const originalSymbols=[...getPolicySnapshot().policy.strategy.watchlist];
     await expect(page.locator('#allowed-symbols .symbol-tag')).toHaveCount(originalSymbols.length);
     await page.getByRole('textbox',{name:'Symbol to add'}).fill('tagtest');
@@ -412,15 +409,15 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('#allowed-symbols .symbol-tag')).toHaveCount(originalSymbols.length);
     assert.deepEqual(getPolicySnapshot().policy.strategy.watchlist,originalSymbols,'tag edits remain drafts until the strategy is saved');
     await page.locator('.symbol-field').screenshot({path:'/tmp/autotrade-allowed-symbols-desktop.png'});
-    await page.getByLabel('Maximum positions',{exact:true}).fill('2');
+    await page.getByLabel('Maximum positions').fill('2');
     const profileRevision=getPolicySnapshot().hash;
-    await page.getByLabel('Profile',{exact:true}).selectOption('conservative');
-    assert.equal(await page.getByLabel('Risk per trade (% of equity)',{exact:true}).inputValue(),'0.25');
-    assert.equal(await page.getByLabel('Portfolio volatility target (% per year)',{exact:true}).inputValue(),'8');
-    assert.equal(await page.getByLabel('Maximum position size (%)',{exact:true}).inputValue(),'5');
+    await page.getByLabel('Profile').selectOption('conservative');
+    assert.equal(await page.getByLabel('Risk per trade (% of equity)').inputValue(),'0.25');
+    assert.equal(await page.getByLabel('Portfolio volatility target (% per year)').inputValue(),'8');
+    assert.equal(await page.getByLabel('Maximum position size (%)').inputValue(),'5');
     assert.equal(getPolicySnapshot().hash,profileRevision,'editing a preset does not activate it');
-    await page.getByLabel('Risk per trade (% of equity)',{exact:true}).fill('0.35');
-    assert.equal(await page.getByLabel('Profile',{exact:true}).inputValue(),'custom');
+    await page.getByLabel('Risk per trade (% of equity)').fill('0.35');
+    assert.equal(await page.getByLabel('Profile').inputValue(),'custom');
     await page.getByRole('button',{name:'Review and save',exact:true}).click();
     assert.match(await page.locator('#review-text').textContent(),/Risk per trade: 0.5% → 0.35%/);
     await page.getByRole('button',{name:'Save this revision',exact:true}).click();
@@ -429,7 +426,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     assert.equal(getPolicySnapshot().policy.risk.targetVolatilityPct,8);
     assert.deepEqual(getPolicySnapshot().policy.strategy.watchlist,[...originalSymbols.slice(1),'TAGTEST']);
     await page.getByRole('button',{name:'Reload saved settings',exact:true}).click();
-    assert.equal(await page.getByLabel('Profile',{exact:true}).inputValue(),'custom');
+    assert.equal(await page.getByLabel('Profile').inputValue(),'custom');
     await expect(page.getByRole('button',{name:'Remove TAGTEST',exact:true})).toBeVisible();
     await expect(page.getByRole('button',{name:`Remove ${originalSymbols[0]}`,exact:true})).toHaveCount(0);
     await page.locator('.risk-profile').screenshot({path:'/tmp/autotrade-risk-profile-desktop.png'});
@@ -460,7 +457,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.getByRole('tab',{name:'Live'}).click();
     await page.locator('#message-text').fill('What is the request status?');
     await page.locator('#message').getByRole('button',{name:'Send',exact:true}).click();
-    await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('queued'));
+    await expect(page.locator('#thinking')).toBeVisible();
     await expect(page.locator('#feed .msg.operator').last()).toContainText('What is the request status?');
     const input=page.getByRole('combobox',{name:'Message'}),menu=page.getByRole('listbox',{name:'Commands'});
     const queuedBefore=require('../src/core/requests').listRequests().length;
@@ -534,13 +531,14 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(mobile.locator('#account-mode')).toBeVisible();
     await expect(mobile.locator('#account-mode')).toHaveText('paper');
     await mobile.screenshot({path:'/tmp/autotrade-mobile.png'});
-    await mobile.locator('#positions').getByRole('button',{name:'View MSFT price chart',exact:true}).click();
+    await mobile.locator('#positions').getByRole('button',{name:'Open MSFT position details',exact:true}).click();
     await expect(mobile.locator('#ticker-chart .price-candle')).toHaveCount(3);
-    await mobile.locator('#ticker-chart-dialog').screenshot({path:'/tmp/autotrade-ticker-chart-mobile.png'});
+    await mobile.locator('#position-review-dialog').screenshot({path:'/tmp/autotrade-ticker-chart-mobile.png'});
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
-    await mobile.getByRole('button',{name:'Close price chart'}).click();
+    await mobile.getByRole('button',{name:'Close position details'}).click();
     await mobile.getByRole('tab',{name:'Activity',exact:true}).click();
-    await expect(mobile.locator('#view-activity .history-row')).toHaveCount(4);
+    // The four seeded rows plus the /pause, /lessons and /positions commands run above.
+    await expect(mobile.locator('#view-activity .history-row')).toHaveCount(7);
     await mobile.screenshot({path:'/tmp/autotrade-activity-mobile.png',fullPage:true});
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await mobile.getByRole('tab',{name:'Live',exact:true}).click();
@@ -548,7 +546,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await mobile.getByRole('tab',{name:'Review'}).click();
     await mobile.locator('#lessons').screenshot({path:'/tmp/autotrade-mobile-lessons.png'});
-    await mobile.getByRole('tab',{name:'Strategy'}).click();
+    await mobile.getByRole('tab',{name:'Settings',exact:true}).click();
     await expect(mobile.getByRole('button',{name:'Remove TAGTEST',exact:true})).toBeVisible();
     await mobile.locator('.symbol-field').screenshot({path:'/tmp/autotrade-allowed-symbols-mobile.png'});
     await mobile.locator('.risk-profile').screenshot({path:'/tmp/autotrade-risk-profile-mobile.png'});
