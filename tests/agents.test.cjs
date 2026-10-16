@@ -388,6 +388,18 @@ test('a kept holding is a hold row when the decision changes; an exit review hol
   assert.deepEqual(rd.unresolvedDecisions(req), []);
 });
 
+test('a tick with unreadable equity reports the invested share as unknown, not 0%', () => {
+  const { computeTick } = from('features/compute'), { missing } = from('collect/types');
+  const at = new Date().toISOString(), ok = value => ({ value, source: 'alpaca', fetchedAt: at, asOf: at });
+  const raw = equity => ({ collectedAt: at,
+    positions: ok([{ symbol: 'AAPL', qty: 10, avgEntryPrice: 100, marketValue: 1000, currentPrice: 100 }]),
+    account: equity == null ? missing('alpaca', 'account endpoint 503') : ok({ equity, cash: equity - 1000, buyingPower: equity }),
+    openOrders: ok([]), prices: new Map([['AAPL', ok(100)]]), bars: new Map() });
+  const p = policy.getPolicy();
+  assert.equal(computeTick(raw(null), p).portfolio.grossDeployedPct, null);
+  assert.equal(computeTick(raw(10000), p).portfolio.grossDeployedPct, 10);
+});
+
 test('below the investment target, fitting scan candidates need a decision and the flat heartbeat speeds up', async () => {
   const rd = from('journal/reviewDecisions'), lastTick = from('features/lastTick'), { heartbeatDetector } = from('features/detectors/heartbeat');
   const base = policy.getPolicy();
@@ -400,6 +412,12 @@ test('below the investment target, fitting scan candidates need a decision and t
     assert.match(flatUnder.headline, /UNDER-INVESTED: 0\.0% invested, target 80%, floor 60%/);
     assert.equal(heartbeatDetector.evaluate(tick('open', 85), p)[0].cooldownMs, p.triggers.heartbeatFlatMs, 'at target, flat stays hourly');
     assert.equal(heartbeatDetector.evaluate(tick('closed', 0), p)[0].cooldownMs, p.triggers.heartbeatFlatMs, 'closed, nothing to buy');
+    // Unreadable equity is an unknown invested share, not 0%: it must not demand buys.
+    const blind = heartbeatDetector.evaluate(tick('open', null), p)[0];
+    assert.equal(blind.cooldownMs, p.triggers.heartbeatFlatMs);
+    assert.doesNotMatch(blind.headline, /UNDER-INVESTED|below target/);
+    lastTick.recordTick(tick('open', null));
+    assert.deepEqual(rd.unresolvedDecisions('req-blind'), [], 'equity unknown: no floor complaint');
 
     const req = 'req-scan';
     const rowsOf = list => list.map(([symbol, score, maxQty]) => ({ symbol, price: 100, priceStale: false, composite: score, riskAdjustedScore: score, riskFit: { allowed: score != null, maxQty } }));
