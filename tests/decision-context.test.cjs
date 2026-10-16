@@ -262,6 +262,27 @@ test('candidate review rejects signal snapshots and raw metric citations, then s
   assert.equal(storage.listRecords('orders').length, 0);
 });
 
+test('position review snapshot errors name the wrong observation and say nothing was saved', async () => {
+  const brief = evidence.recordEvidence('cycle_decision_brief', { rows: [] });
+  const events = evidence.recordEvidence('get_pending_events', { events: [] });
+  const other = evidence.recordEvidence('get_position_review', { symbol: 'LLY', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null });
+  const input = { symbol: 'AMZN', decision: 'keep', changedEvidence: 'Still protected by the venue stop; no material break in the trend.', unknowns: [] };
+  for (const [snapshotId, expected] of [
+    ['made-up-id', /not a saved observation.*Nothing was saved.*get_position_review for AMZN/],
+    [brief.id, /cycle_decision_brief observation, not a get_position_review for AMZN.*Nothing was saved/],
+    [events.id, /get_pending_events observation/],
+    [other.id, /get_position_review \(LLY\) observation, not a get_position_review for AMZN/],
+  ]) {
+    const result = JSON.parse(await traderTools.executeTraderTool('record_position_review', { ...input, snapshotId, evidenceIds: [snapshotId] }));
+    assert.equal(result.ok, false);
+    assert.match(result.error, expected);
+  }
+  const unheld = evidence.recordEvidence('get_position_review', { symbol: 'AMZN', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null });
+  const result = JSON.parse(await traderTools.executeTraderTool('record_position_review', { ...input, snapshotId: unheld.id, evidenceIds: [unheld.id] }));
+  assert.match(result.error, /does not show a current AMZN holding.*Nothing was saved/);
+  assert.equal(reviews.listReviews('record_position_review').length, 0);
+});
+
 test('candidate snapshot errors distinguish missing citations, unknown positions and held symbols', async () => {
   const candidate = evidence.recordEvidence('get_position_review', { symbol: 'LLY', policyHash: policy.getPolicyHash(), positionKnown: true, holding: null });
   const other = evidence.recordEvidence('get_signals', { symbol: 'LLY', tally: { composite: .024 } });
