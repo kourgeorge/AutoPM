@@ -95,6 +95,22 @@ export interface DecisionRecord {
   observationIds?: string[];
   reviewId?: string | null;
   contextVariant?: string;
+  /**
+   * On a `skip`: the last get_entry_plan the trader ran for this symbol in the same request.
+   * Without it a skip says "failed 2:1" and nobody can tell whether it was 1.98 or 1.2.
+   */
+  entryPlan?: EntryPlanSummary | null;
+  /** On a hold/skip written from a saved review: what the review said (keep, wait, skip, …). */
+  reviewDecision?: string;
+}
+
+export interface EntryPlanSummary {
+  evidenceId: string | null;
+  allowed: boolean;
+  maxQty: number;
+  rewardRisk: number | null;
+  /** Rule codes the plan refused on, e.g. `reward_risk_too_low`. Empty when allowed. */
+  refusals: string[];
 }
 
 /** Everything a caller must supply. `id` and `at` are stamped by `recordDecision`. */

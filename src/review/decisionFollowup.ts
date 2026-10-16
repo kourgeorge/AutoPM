@@ -11,6 +11,7 @@ import { getPolicyHash } from '../policy/load';
 import type { Bar } from '../core/types';
 import type { DecisionRecord } from '../journal/types';
 import { sameSymbol } from '../core/symbols';
+import { journalReview } from '../journal/reviewDecisions';
 
 export interface CandidateReviewDetails { thesis?: EntryThesis; entryPlanId?: string; unknowns?: string[] }
 /** Saved as the result of the record_candidate_review tool call (see `journal/reviews.ts`). */
@@ -48,7 +49,10 @@ export function saveCandidateReview(symbol: string, decision: CandidateReview['d
   const id = 'candidate-' + (agentContext.getStore()?.toolCallId ?? crypto.randomUUID());
   const row: CandidateReview = { id, at: new Date().toISOString(), symbol, decision, reason, evidenceIds, snapshotId, ...savedDetails,
     price: snapshot.data.forward?.price ?? null, contextVariant: snapshot.data.contextVariant ?? 'decision-context-v1', policyHash: getPolicyHash() };
-  return transaction(() => saveReview('record_candidate_review', row, 'Candidate research recommendation saved. This does not place or approve an order; execution rechecks the full strategy.'));
+  return transaction(() => {
+    journalReview({ symbol, held: false, decision, reason, reviewId: id, evidenceIds, planId: details.entryPlanId });
+    return saveReview('record_candidate_review', row, 'Candidate research recommendation saved. This does not place or approve an order; execution rechecks the full strategy.');
+  });
 }
 
 /** Rebase a contemporaneous quote using the SAME daily close observed at decision time. */

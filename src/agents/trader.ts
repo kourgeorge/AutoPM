@@ -1,6 +1,7 @@
 import { withAccountRead } from '../core/accountRead';
 import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
+import { journalUnresolved } from '../journal/reviewDecisions';
 import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
@@ -138,6 +139,8 @@ export class Trader {
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
+    // Normally empty: sleep refuses once while decisions are open. This covers a second sleep, a turn limit or an error.
+    try { journalUnresolved(command.id); } catch (err) { logger.warn(`[Trader] could not journal open decisions: ${err instanceof Error ? err.message : err}`); }
     const actions = getRequest(command.id)?.orderIds ?? [];
     // The request is the agent's work, so it ends with the turn. Each queued action tracks its own outcome.
     updateRequest(command.id, { status: turn.status,
