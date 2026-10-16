@@ -9,6 +9,7 @@
   <symbol id="icon-strategy" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></symbol>
   <symbol id="icon-review" viewBox="0 0 24 24"><path d="M4 20V10m8 10V4m8 16v-7M2 20h20"/></symbol>
   <symbol id="icon-performance" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></symbol>
+  <symbol id="icon-usage" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
   <symbol id="icon-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="icon-journal" viewBox="0 0 24 24"><path d="M5 3h14v18H5zM9 3v18M12 8h4M12 12h4M12 16h3"/></symbol>
   <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
@@ -22,6 +23,7 @@
     <button role="tab" id="tab-activity" aria-controls="view-activity" data-view="activity"><svg><use href="#icon-history"/></svg><span>Activity</span></button>
     <button role="tab" id="tab-strategy" aria-controls="view-strategy" data-view="strategy"><svg><use href="#icon-strategy"/></svg><span>Settings</span></button>
     <button role="tab" id="tab-performance" aria-controls="view-performance" data-view="performance"><svg><use href="#icon-performance"/></svg><span>Performance</span></button>
+    <button role="tab" id="tab-usage" aria-controls="view-usage" data-view="usage"><svg><use href="#icon-usage"/></svg><span>AI usage</span></button>
     <button role="tab" id="tab-review" aria-controls="view-review" data-view="review"><svg><use href="#icon-journal"/></svg><span>Review</span></button>
   </nav>
   <div class="sidebar-bottom"><div class="workspace-note"><svg><use href="#icon-agent"/></svg><strong>Research. Reason. Execute.</strong><p>Your strategy, with an agent<br>keeping the context.</p></div>
@@ -143,6 +145,13 @@
 <div id="view-performance" class="view" role="tabpanel" aria-labelledby="tab-performance" hidden>
 <div class="view-heading"><h1>Performance</h1></div>
 <section id="performance" class="panel"><div class="pane-title"><h2>Performance</h2><select id="score-days" aria-label="Performance window"><option value="">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div><div id="scorecard" class="score-grid"></div><ul id="score-caveats" class="caveats"></ul></section>
+</div>
+<div id="view-usage" class="view" role="tabpanel" aria-labelledby="tab-usage" hidden>
+<div class="view-heading"><h1>AI usage</h1></div>
+<section id="usage" class="panel"><div class="pane-title"><h2>Model tokens</h2><select id="usage-days" aria-label="Usage window"><option value="">All time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div><p class="section-description">Every model call made by the trader, researcher and assistant. Days are in UTC.</p><div id="usage-summary" class="score-grid"></div><ul id="usage-caveats" class="caveats"></ul></section>
+<section class="panel"><div class="pane-title"><h2 id="usage-agents-title">By agent</h2></div><div class="table-wrap" tabindex="0" role="region" aria-label="Usage by agent"><table class="history-table" aria-labelledby="usage-agents-title"><thead><tr><th scope="col">Agent</th><th scope="col">Calls</th><th scope="col">Input tokens</th><th scope="col">Output tokens</th><th scope="col">Total</th><th scope="col">Share</th><th scope="col">Failed</th></tr></thead><tbody id="usage-agents"></tbody></table></div></section>
+<section class="panel"><div class="pane-title"><h2 id="usage-days-title">By day</h2></div><p class="section-description">Select a day to see which requests used the most.</p><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Usage by day"><table class="history-table usage-table" aria-labelledby="usage-days-title"><thead><tr><th scope="col">Day</th><th scope="col">Calls</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Total</th><th scope="col">Trader</th><th scope="col">Researcher</th><th scope="col">Assistant</th><th scope="col">Source</th><th scope="col" class="usage-bar-col">Volume</th></tr></thead><tbody id="usage-day-list"></tbody></table></div></section>
+<section id="usage-day-panel" class="panel" hidden><div class="pane-title"><h2 id="usage-day-title">Requests</h2></div><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Requests on the selected day"><table class="history-table" aria-labelledby="usage-day-title"><thead><tr><th scope="col">Time</th><th scope="col">Agent</th><th scope="col">Calls</th><th scope="col">Input</th><th scope="col">Output</th><th scope="col">Total</th><th scope="col">Task</th><th scope="col">Status</th><th scope="col">Trail</th></tr></thead><tbody id="usage-requests"></tbody></table></div></section>
 </div>
 <div id="view-review" class="view" role="tabpanel" aria-labelledby="tab-review" hidden>
 <div class="view-heading"><h1>Review</h1></div>

@@ -394,5 +394,5 @@ export class OpenAICompatibleProvider implements ModelProvider {
  * be a typo and posting the API key to it.
  */
 export function createModelProvider(cfg: AiConfig): ModelProvider {
-  return withModelBudget(cfg.provider.toLowerCase() === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatibleProvider(cfg));
+  return withModelBudget(cfg.provider.toLowerCase() === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatibleProvider(cfg), cfg.model);
 }

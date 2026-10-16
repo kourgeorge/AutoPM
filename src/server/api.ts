@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudget';
+import { llmUsage, llmUsageForDay } from '../review/llmUsage';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
@@ -352,6 +353,18 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('GET', '/api/events', () => {
     const snap = ui.snapshot();
     return { pending: snap.events, activity: snap.activity };
+  });
+
+  add('GET', '/api/llm-usage', ({ url }) => {
+    const raw = url.searchParams.get('days');
+    const days = raw == null || raw === '' ? undefined : Number(raw);
+    if (days !== undefined && (!Number.isInteger(days) || days <= 0)) throw new HttpError(400, 'days must be a whole number above 0');
+    return { ...llmUsage({ days }), budget: modelBudgetStatus() };
+  });
+
+  add('GET', '/api/llm-usage/day', ({ url }) => {
+    try { return llmUsageForDay(url.searchParams.get('day') ?? ''); }
+    catch (err) { throw new HttpError(400, err instanceof Error ? err.message : String(err)); }
   });
 
   add('GET', '/api/scorecard', ({ url }) => {

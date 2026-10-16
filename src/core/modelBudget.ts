@@ -1,4 +1,5 @@
-import { readValue, saveValue, transaction } from './storage';
+import crypto from 'crypto';
+import { appendRecord, readValue, saveValue, transaction } from './storage';
 import { agentContext } from './agentContext';
 import type { ModelProvider } from './modelProvider';
 interface AgentUsage { requests: number; inputTokens: number; outputTokens: number; missingUsage: number }
@@ -40,7 +41,7 @@ export function modelBudgetStatus() {
     researchLimit: shareLimit(limit, SHARES.researcher),
     resetsAt: new Date(Date.parse(usage.day + 'T00:00:00Z') + 86_400_000).toISOString() };
 }
-export function withModelBudget(provider: ModelProvider): ModelProvider {
+export function withModelBudget(provider: ModelProvider, model = 'unknown'): ModelProvider {
   aiSettings();
   return { async chat(params) {
     if (JSON.stringify(params).length > 200_000) throw new Error('Model context exceeds the account request limit');
@@ -58,7 +59,15 @@ export function withModelBudget(provider: ModelProvider): ModelProvider {
         byAgent: { ...usage.byAgent, [role]: { ...(usage.byAgent?.[role] ?? emptyUsage()), requests: (usage.byAgent?.[role]?.requests ?? 0) + 1 } },
         assistantRequests: (usage.assistantRequests ?? 0) + (assistant ? 1 : 0) });
     });
-    const response = await provider.chat(params);
+    const startedAt = new Date().toISOString();
+    let response: Awaited<ReturnType<ModelProvider['chat']>>;
+    try {
+      response = await provider.chat(params);
+    } catch (err) {
+      recordModelCall({ startedAt, role, model, inputTokens: 0, outputTokens: 0, error: err instanceof Error ? err.message.slice(0, 300) : String(err) });
+      throw err;
+    }
+    recordModelCall({ startedAt, role, model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens });
     params.signal?.throwIfAborted();
     transaction(() => {
       const usage = modelUsage(day);
@@ -74,4 +83,20 @@ export function withModelBudget(provider: ModelProvider): ModelProvider {
     });
     return response;
   } };
+}
+
+/**
+ * One row per model call, kept for good: `modelUsage` holds today only (it is the budget), so
+ * without this nothing could answer what yesterday cost. Read by `review/llmUsage.ts`.
+ */
+export interface ModelCall {
+  at: string; day: string; role: string; requestId: string | null; model: string;
+  inputTokens: number; outputTokens: number; durationMs: number; error?: string;
+}
+function recordModelCall(c: { startedAt: string; role: string; model: string; inputTokens: number; outputTokens: number; error?: string }): void {
+  const at = new Date().toISOString();
+  const row: ModelCall = { at, day: at.slice(0, 10), role: c.role, requestId: agentContext.getStore()?.requestId ?? null,
+    model: c.model, inputTokens: c.inputTokens, outputTokens: c.outputTokens,
+    durationMs: Date.parse(at) - Date.parse(c.startedAt), ...(c.error ? { error: c.error } : {}) };
+  try { appendRecord('model-calls', crypto.randomUUID(), at, row); } catch { /* usage history must never fail a model call */ }
 }
