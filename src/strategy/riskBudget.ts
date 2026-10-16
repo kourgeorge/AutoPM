@@ -73,11 +73,14 @@ export function volatilityModel(symbol: string, positions: Position[], equity: n
  * Shared by planning, live validation and historical simulation. With qty omitted it sizes
  * the trade; with qty supplied it validates that exact size (including a partial approval).
  * A null target is only a sizing preview; it cannot establish that a trade clears reward:risk.
+ * Sizing and planned loss use `price` (the worst-case limit). Reward:risk uses `quotePrice`
+ * when given: the 0.2% limit buffer is a ceiling, not the expected fill, and charging it to a
+ * ~3% stop turned planned 2:1 setups into 1.8:1 refusals.
  */
 export function assessEntryRisk(args: {
   symbol: string; price: number; stopLoss: number; takeProfit: number | null;
   equity: number; buyingPower: number; positions: Position[]; policy: Policy;
-  inputs: RiskInputs; qty?: number;
+  inputs: RiskInputs; qty?: number; quotePrice?: number;
 }): RiskAssessment {
   const { symbol, price, stopLoss, takeProfit, equity, buyingPower, positions, policy, inputs } = args;
   const risk = policy.risk;
@@ -126,10 +129,12 @@ export function assessEntryRisk(args: {
     cap('sector_weight', equity * risk.maxSectorWeightPct / 100 - overlap);
     if (!candidateSector || unknown > 0) caveats.push('Unknown sectors count toward the largest possible sector overlap; ETF constituents are not modeled.');
   }
-  result.rewardRisk = takeProfit == null ? null : (takeProfit - price) / distance;
+  const rrEntry = args.quotePrice != null && Number.isFinite(args.quotePrice) && args.quotePrice > stopLoss && args.quotePrice <= price
+    ? args.quotePrice : price;
+  result.rewardRisk = takeProfit == null ? null : (takeProfit - rrEntry) / (rrEntry - stopLoss);
   if (takeProfit == null) caveats.push('Sizing preview only: provide a supported profit target with get_entry_plan to check reward:risk.');
   if (result.rewardRisk != null && risk.minRewardRisk != null && result.rewardRisk + 1e-10 < risk.minRewardRisk) {
-    refuse('reward_risk_too_low', `Planned reward:risk ${result.rewardRisk.toFixed(2)} is below ${risk.minRewardRisk}:1 at the entry limit`);
+    refuse('reward_risk_too_low', `Planned reward:risk ${result.rewardRisk.toFixed(2)} is below ${risk.minRewardRisk}:1 at the quoted price`);
   }
 
   let model: ReturnType<typeof volatilityModel> | null = null;

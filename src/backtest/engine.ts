@@ -458,7 +458,7 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
       const takeProfit = cand.aiTakeProfit != null ? cand.aiTakeProfit
         : (exitMode === 'stop_takeprofit' ? limit + takeProfitRMult * (limit - stop) : null);
       const riskPlan = hasRiskProfile(policy.risk) ? assessEntryRisk({
-        symbol: cand.symbol, price: limit, stopLoss: stop, takeProfit,
+        symbol: cand.symbol, price: limit, quotePrice: cand.price, stopLoss: stop, takeProfit,
         equity: equityNow, buyingPower, positions: openPositions, policy,
         inputs: { asOf: t, sectors: {}, errors: {}, histories: Object.fromEntries(
           [...openPositions.map(p => p.symbol), cand.symbol].map(symbol => [symbol,
