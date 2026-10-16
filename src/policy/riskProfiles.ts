@@ -4,13 +4,13 @@ import type { RiskPolicy } from './types';
 export const RISK_PROFILES = {
   conservative: { riskPerTradePct: 0.25, targetVolatilityPct: 8, minRewardRisk: 2,
     positionSizePct: 0.05, maxDailyLossPct: 0.01, maxGrossExposurePct: 0.5,
-    maxSingleWeightPct: 5, maxSectorWeightPct: 20 },
+    maxSingleWeightPct: 5, maxSectorWeightPct: 20, targetInvestedPct: 30, minInvestedPct: 0 },
   balanced: { riskPerTradePct: 0.5, targetVolatilityPct: 12, minRewardRisk: 2,
     positionSizePct: 0.1, maxDailyLossPct: 0.02, maxGrossExposurePct: 0.8,
-    maxSingleWeightPct: 10, maxSectorWeightPct: 30 },
+    maxSingleWeightPct: 10, maxSectorWeightPct: 30, targetInvestedPct: 60, minInvestedPct: 40 },
   aggressive: { riskPerTradePct: 1, targetVolatilityPct: 20, minRewardRisk: 2,
     positionSizePct: 0.1, maxDailyLossPct: 0.03, maxGrossExposurePct: 1,
-    maxSingleWeightPct: 10, maxSectorWeightPct: 35 },
+    maxSingleWeightPct: 10, maxSectorWeightPct: 35, targetInvestedPct: 80, minInvestedPct: 60 },
 } as const;
 
 export function riskProfileName(risk: RiskPolicy): string {

@@ -34,6 +34,10 @@ export interface TradingSettingsUpdate {
   maxSingleWeightPct?: number;
   /** risk.maxSectorWeightPct — percentage points */
   maxSectorWeightPct?: number;
+  /** risk.targetInvestedPct — percentage points of equity, e.g. 80 for 80% */
+  targetInvestedPct?: number;
+  /** risk.minInvestedPct — percentage points of equity, e.g. 60 for 60% */
+  minInvestedPct?: number;
 }
 
 export type UpdateTradingSettingsResult =
@@ -108,6 +112,8 @@ export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTra
     ['minRewardRisk',     'risk.minRewardRisk'],
     ['maxSingleWeightPct', 'risk.maxSingleWeightPct'],
     ['maxSectorWeightPct', 'risk.maxSectorWeightPct'],
+    ['targetInvestedPct', 'risk.targetInvestedPct'],
+    ['minInvestedPct',    'risk.minInvestedPct'],
   ];
   for (const [field, label] of riskFields) {
     const v = changes[field as keyof TradingSettingsUpdate];

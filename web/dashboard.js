@@ -9,10 +9,10 @@ const pendingOrderDetails = new Set(), lastPrices = new Map();
 const messageInput = $('message-text');
 const riskFractions = ['positionSizePct','maxDailyLossPct','maxGrossExposurePct'];
 const riskNumbers = ['maxPositions','stopLossAtrMult','maxSingleWeightPct','maxSectorWeightPct'];
-const riskOptional = ['riskPerTradePct','targetVolatilityPct','minRewardRisk'];
+const riskOptional = ['riskPerTradePct','targetVolatilityPct','minRewardRisk','targetInvestedPct','minInvestedPct'];
 const riskLabels = { positionSizePct:'Maximum position size', maxDailyLossPct:'Daily loss limit', maxGrossExposurePct:'Gross exposure limit',
   maxPositions:'Maximum positions', stopLossAtrMult:'Stop distance (ATR)', maxSingleWeightPct:'Single-name limit', maxSectorWeightPct:'Sector limit',
-  riskPerTradePct:'Risk per trade', targetVolatilityPct:'Annualized portfolio volatility target', minRewardRisk:'Minimum reward:risk' };
+  riskPerTradePct:'Risk per trade', targetVolatilityPct:'Annualized portfolio volatility target', minRewardRisk:'Minimum reward:risk', targetInvestedPct:'Investment target', minInvestedPct:'Investment floor' };
 const laneLabels = { starting:'Starting', idle:'Idle', thinking:'Thinking', sleeping:'Waiting', awaiting:'Waiting for you', error:'Error' };
 const suggestions = [['Portfolio brief', 'How is my portfolio doing?'], ['Latest decision', 'Why did you make your last trade?'], ['Watchlist', 'What are you watching right now?'], ['Risk check', 'What risks should I know about?']];
 const money = n => n == null ? 'Unavailable' : new Intl.NumberFormat('en-US', {style:'currency',currency:'USD'}).format(n);
@@ -1236,6 +1236,7 @@ function updateRiskSummary(keepCustom=false) {
   if(risk.riskPerTradePct!=null)parts.push(`Budget ${risk.riskPerTradePct}% of equity at the stop per trade`);
   if(risk.targetVolatilityPct!=null)parts.push(`aim for portfolio volatility up to ${risk.targetVolatilityPct}% per year`);
   if(risk.minRewardRisk!=null)parts.push(`require at least ${risk.minRewardRisk}:1 planned reward:risk`);
+  if(risk.targetInvestedPct!=null)parts.push(`aim to keep ${risk.targetInvestedPct}% of equity invested${risk.minInvestedPct!=null?`, and explain any shortfall below ${risk.minInvestedPct}%`:''}`);
   $('risk-summary').textContent=parts.length?parts.join('; ')+'.':'These optional risk controls are not configured. Choose a preset or enter your own values.';
 }
 $('settings').elements.riskProfile.onchange=()=>{

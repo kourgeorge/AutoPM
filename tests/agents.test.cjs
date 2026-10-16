@@ -388,6 +388,44 @@ test('a kept holding is a hold row when the decision changes; an exit review hol
   assert.deepEqual(rd.unresolvedDecisions(req), []);
 });
 
+test('below the investment target, fitting scan candidates need a decision and the flat heartbeat speeds up', async () => {
+  const rd = from('journal/reviewDecisions'), lastTick = from('features/lastTick'), { heartbeatDetector } = from('features/detectors/heartbeat');
+  const base = policy.getPolicy();
+  policy.useEphemeralPolicy({ ...base, risk: { ...base.risk, targetInvestedPct: 80, minInvestedPct: 60 } });
+  const tick = (session, grossDeployedPct) => ({ session, portfolio: { grossDeployedPct }, account: { positionCount: 0, dayPnLPct: 0, equity: 100000 }, positions: {}, watchlist: {}, tickAt: new Date().toISOString(), policyVersion: 1 });
+  try {
+    const p = policy.getPolicy();
+    const [flatUnder] = heartbeatDetector.evaluate(tick('open', 0), p);
+    assert.equal(flatUnder.cooldownMs, p.triggers.heartbeatWithPositionsMs);
+    assert.match(flatUnder.headline, /UNDER-INVESTED: 0\.0% invested, target 80%, floor 60%/);
+    assert.equal(heartbeatDetector.evaluate(tick('open', 85), p)[0].cooldownMs, p.triggers.heartbeatFlatMs, 'at target, flat stays hourly');
+    assert.equal(heartbeatDetector.evaluate(tick('closed', 0), p)[0].cooldownMs, p.triggers.heartbeatFlatMs, 'closed, nothing to buy');
+
+    const req = 'req-scan';
+    const rowsOf = list => list.map(([symbol, score, maxQty]) => ({ symbol, price: 100, priceStale: false, composite: score, riskAdjustedScore: score, riskFit: { allowed: score != null, maxQty } }));
+    storage.saveRecord('tool-calls', 'scan-1', { name: 'get_watchlist_scan', role: 'trader', requestId: req, input: {},
+      result: JSON.stringify({ rows: rowsOf([['MA', 0.74, 16], ['LLY', 0.67, 7], ['XOM', null, 0]]) }) });
+    storage.saveRecord('tool-calls', 'scan-2', { name: 'get_watchlist_scan', role: 'trader', requestId: req, input: { offset: 3 },
+      result: JSON.stringify({ rows: rowsOf([['V', 0.64, 24], ['WMT', 0.47, 30]]) }) });
+    lastTick.recordTick(tick('closed', 0));
+    assert.deepEqual(rd.unresolvedDecisions(req), [], 'market closed: no entry is possible, so nothing is owed');
+    lastTick.recordTick(tick('open', 85));
+    assert.deepEqual(rd.unresolvedDecisions(req), [], 'at target: cash is allowed');
+    lastTick.recordTick(tick('open', 0));
+    const open = rd.unresolvedDecisions(req);
+    assert.deepEqual(open.map(o => o.symbol), ['MA', 'LLY', 'V'], 'the three best fitting candidates, across pages; unscored XOM is not one');
+    assert.match(open[0].problem, /fitting the risk budget \(composite 0\.74, up to 16 shares\)/);
+    agentContext.run({ role: 'trader', requestId: req, actorId: 'system' }, () =>
+      journal.recordDecision(journal.decision('veto', 'guard', { symbol: 'MA', rationale: 'earnings_window', vetoRule: 'earnings_window' })));
+    assert.deepEqual(rd.unresolvedDecisions(req).map(o => o.symbol), ['LLY', 'V'], 'an attempted entry is a decision');
+    assert.equal(rd.journalUnresolved(req), 2);
+    assert.equal(journal.readDecisions({ symbol: 'V' })[0].intendedPrice, 100);
+
+    assert.match(rd.unresolvedDecisions('req-no-scan')[0].problem, /under-invested.*did not scan the watchlist/);
+    assert.equal(rd.unresolvedDecisions('req-no-scan')[0].symbol, null);
+  } finally { lastTick.resetLastTick(); policy.loadPolicy(); }
+});
+
 test('get_pending_events groups all-clears to their ids and still serves them in full by kind', async () => {
   events.resetEventRegistry();
   const p = policy.getPolicy();

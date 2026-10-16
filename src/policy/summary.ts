@@ -15,6 +15,8 @@ export function summarizeStrategy(policy: Policy, strategyHash: string) {
     riskPerTradePctOfEquity: r.riskPerTradePct,
     annualizedPortfolioVolatilityTargetPct: r.targetVolatilityPct,
     minimumPlannedRewardRisk: r.minRewardRisk,
+    targetInvestedPct: r.targetInvestedPct ?? null,
+    minInvestedPct: r.minInvestedPct ?? null,
   };
   const limits = {
     maximumPositions: r.maxPositions,
@@ -37,6 +39,7 @@ export function summarizeStrategy(policy: Policy, strategyHash: string) {
     `Risk per trade: ${percent(r.riskPerTradePct, ' of equity at the planned stop')}.`,
     `Portfolio volatility target: ${percent(r.targetVolatilityPct, ' per year (estimated)')}.`,
     `Minimum planned reward:risk: ${r.minRewardRisk == null ? 'Not configured' : `${clean(r.minRewardRisk)}:1`}.`,
+    `Investment target: ${percent(r.targetInvestedPct ?? null, ' of equity invested')}; floor: ${percent(r.minInvestedPct ?? null, ' (below it, cash needs a stated reason)')}.`,
   ];
   const summary = [
     `Saved strategy: ${profile} (revision ${policy.version}).`,

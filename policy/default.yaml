@@ -24,6 +24,11 @@ risk:
   maxSingleWeightPct: 10
   # Same units and same caveat, for a whole sector.
   maxSectorWeightPct: 30
+  # Percentage points of equity the profile aims to have invested, and the floor below which
+  # holding cash needs a stated reason. Every other risk value is a ceiling; these are the only
+  # ones that ask the trader to invest. Blank = no target.
+  targetInvestedPct: 60
+  minInvestedPct: 40
 strategy:
   watchlist:
     - AAPL

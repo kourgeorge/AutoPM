@@ -44,6 +44,15 @@ export interface RiskPolicy {
   maxSingleWeightPct: number;
   /** Same units and entry ceiling as maxSingleWeightPct, but for a whole GICS sector. */
   maxSectorWeightPct: number;
+  /**
+   * Percentage points of equity the profile aims to have invested. Every other risk field is a
+   * ceiling, so before this existed an "aggressive" account could sit at 0% and break no rule.
+   * Below it, the flat heartbeat runs at the holding cadence and the strongest fitting scan
+   * candidates need a decision before the cycle may end. Null = no target.
+   */
+  targetInvestedPct?: number | null;
+  /** Percentage points of equity below which holding cash needs a stated reason. Null = no floor. */
+  minInvestedPct?: number | null;
 }
 
 export interface StrategyPolicy {

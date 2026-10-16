@@ -130,6 +130,8 @@
 <label>Risk per trade (% of equity)<input aria-label="Risk per trade (% of equity)" name="riskPerTradePct" type="number" min="0.01" max="2" step="0.01" placeholder="Not configured"><small>Planned loss if the stop fills at its price.</small></label>
 <label>Portfolio volatility target (% per year)<input aria-label="Portfolio volatility target (% per year)" name="targetVolatilityPct" type="number" min="1" max="50" step="0.1" placeholder="Not configured"><small>Estimated variability of the whole account, including cash.</small></label>
 <label>Minimum reward:risk<input aria-label="Minimum reward:risk" name="minRewardRisk" type="number" min="0.1" max="20" step="0.1" placeholder="Not configured"><small>2 means planned upside is at least twice the downside.</small></label>
+<label>Investment target (% of equity)<input aria-label="Investment target (% of equity)" name="targetInvestedPct" type="number" min="0" max="150" step="1" placeholder="Not configured"><small>How much of the account the trader aims to keep invested.</small></label>
+<label>Investment floor (% of equity)<input aria-label="Investment floor (% of equity)" name="minInvestedPct" type="number" min="0" max="150" step="1" placeholder="Not configured"><small>Below this, the trader must give a reason for each strong candidate it passes on.</small></label>
 </div>
 <p class="risk-note">Presets set the budgets below. Customize any value to make it your own. Volatility and stop loss are estimates; gaps and slippage can exceed them. Blank optional controls remain unconfigured.</p>
 </fieldset><div class="form-grid"><div class="symbol-field">

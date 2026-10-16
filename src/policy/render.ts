@@ -29,6 +29,8 @@ const UNITS: Record<string, string> = {
   'risk.earningsBlackoutDays': 'days before a print',
   'risk.maxSingleWeightPct': POINTS + ' of equity in one name',
   'risk.maxSectorWeightPct': POINTS + ' of equity in one sector',
+  'risk.targetInvestedPct': POINTS + ' of equity the profile aims to have invested',
+  'risk.minInvestedPct': POINTS + ' of equity; below it, holding cash needs a stated reason',
   'strategy.compositeMin': 'signal composite, -1..+1',
   'triggers.positionDropPct': POINTS, 'triggers.trailingDrawdownPct': POINTS, 'triggers.positionSurgePct': POINTS,
   'triggers.hysteresisPct': POINTS, 'triggers.portfolioDrawdownPct': POINTS + ' from the equity peak',

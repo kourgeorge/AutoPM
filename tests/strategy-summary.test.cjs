@@ -108,3 +108,17 @@ test('the playbook is prose only; numbers reach the prompt as structured data wi
   assert.equal(block.profile, 'balanced');
   assert.equal(block.fields['risk.maxPositions'], base.risk.maxPositions);
 });
+
+test('investment target and floor load as percentage points, validate against each other, and keep profile names', () => {
+  const loader = require('../src/policy/load'), yaml = require('js-yaml'), { riskProfileName } = require('../src/policy/riskProfiles');
+  const withRisk = risk => loader.parsePolicy(yaml.dump({ ...base, risk: { ...base.risk, ...risk } }));
+  const ok = withRisk({});
+  assert.equal(ok.ok, true); assert.equal(ok.policy.risk.targetInvestedPct, 60); assert.equal(ok.policy.risk.minInvestedPct, 40);
+  assert.equal(riskProfileName(ok.policy.risk), 'balanced');
+  assert.match(withRisk({ minInvestedPct: 70 }).errors.join(), /minInvestedPct must not exceed/);
+  assert.match(withRisk({ targetInvestedPct: 90 }).errors.join(), /gross exposure limit/);
+  const legacy = withRisk({ targetInvestedPct: null, minInvestedPct: null });
+  assert.equal(legacy.ok, true); assert.equal(legacy.policy.risk.targetInvestedPct, null);
+  assert.equal(riskProfileName({ ...ok.policy.risk, ...RISK_PROFILES.aggressive }), 'aggressive');
+  assert.match(summarizeStrategy(ok.policy, 'h').summary, /Investment target: 60% of equity invested; floor: 40%/);
+});
