@@ -61,9 +61,16 @@ export function planFields(requestId: string | undefined, symbol: string, planId
   return chosen ? planSummary(chosen.id, chosen.plan) : {};
 }
 
+/**
+ * A re-run plan moves its levels by cents as the quote ticks: on 2026-10-16 MA's stop went
+ * 595.26 → 595.31 and reward:risk 2 → 2.0002 between two identical "wait"s, and each wrote a row.
+ * Levels within 0.5% and reward:risk within 0.1 are the same decision.
+ */
+const near = (a: number | null | undefined, b: number | null | undefined, tol: (x: number) => number) =>
+  a == null || b == null ? (a ?? null) === (b ?? null) : Math.abs(a - b) <= tol(Math.abs(a));
 const sameNumbers = (a: DecisionRecord, b: Partial<DecisionInput>) =>
-  (a.intendedStop ?? null) === (b.intendedStop ?? null) && (a.intendedTarget ?? null) === (b.intendedTarget ?? null)
-  && (a.entryPlan?.allowed ?? null) === (b.entryPlan?.allowed ?? null) && (a.entryPlan?.rewardRisk ?? null) === (b.entryPlan?.rewardRisk ?? null);
+  near(a.intendedStop, b.intendedStop, x => x * 0.005) && near(a.intendedTarget, b.intendedTarget, x => x * 0.005)
+  && (a.entryPlan?.allowed ?? null) === (b.entryPlan?.allowed ?? null) && near(a.entryPlan?.rewardRisk, b.entryPlan?.rewardRisk, () => 0.1);
 
 /**
  * Journal a trader's saved review. buy/reduce/exit write nothing here: the order they lead to
