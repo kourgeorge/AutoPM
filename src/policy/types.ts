@@ -29,7 +29,7 @@ export interface RiskPolicy {
    * Minimum days until the next earnings print required to open a new position.
    *
    * An earnings gap jumps past a resting stop, so this is the one entry risk `stopLossAtrMult`
-   * cannot bound. PLAYBOOK.md stated this as prose for as long as it existed; this is the number
+   * cannot bound. TRADER.md stated this as prose for as long as it existed; this is the number
    * `earningsVeto` in orderManager.ts actually enforces, and the prompt is templated from it so
    * the two cannot drift.
    */
@@ -68,7 +68,7 @@ export interface StrategyPolicy {
    * Minimum `SignalTally.composite` required to open a position, -1..+1.
    *
    * The single definition of the entry gate. It is enforced by `enterPosition` (`low_composite`),
-   * arms the `entry_signal` detector, and is rendered into PLAYBOOK.md by the template — so the
+   * arms the `entry_signal` detector, and is rendered into TRADER.md by the template — so the
    * prompt cannot state a threshold the machine does not hold.
    */
   compositeMin: number;

@@ -51,7 +51,7 @@ async function start() {
   configureConversationClear(initialStatus);
   addEntries(tail.entries);
   connectStream();
-  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadCommands()]);
+  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadCommands(), loadPrompts()]);
 }
 /**
  * The server pushes every new conversation line and a signal on each account update. The browser
@@ -1249,6 +1249,16 @@ $('settings').elements.riskProfile.onchange=()=>{
   updateRiskSummary(selected==='custom');$('settings-state').textContent='Unsaved changes';
 };
 $('reload-strategy').onclick=attempt(loadStrategy);
+let agentPrompts=null,shownPrompt='trader';
+function showPrompt(){
+  for(const b of document.querySelectorAll('[data-prompt]'))b.setAttribute('aria-pressed',String(b.dataset.prompt===shownPrompt));
+  const p=agentPrompts?.[shownPrompt];
+  $('prompt-text').value=!p?'Loading…':p.error?`Could not build this prompt: ${p.error}`:p.text;
+  $('prompt-size').textContent=p?.text?`${p.text.split('\n').length} lines · ${p.text.length.toLocaleString()} characters`:'';
+}
+async function loadPrompts(){agentPrompts=await api('settings/prompts');showPrompt();}
+for(const b of document.querySelectorAll('[data-prompt]'))b.onclick=()=>{shownPrompt=b.dataset.prompt;showPrompt();};
+$('reload-prompts').onclick=attempt(loadPrompts);
 $('settings').oninput=event=>{$('settings-state').textContent='Unsaved changes';if([...riskNumbers,...riskFractions,...riskOptional].includes(event.target.name))updateRiskSummary();};
 $('settings').onsubmit=attempt(async()=>{
   if (symbolInput.value.trim() && !addAllowedSymbols()) return;
@@ -1261,11 +1271,11 @@ $('settings').onsubmit=attempt(async()=>{
   for(const [key,value] of Object.entries(p.risk))if(value!==strategy.policy.risk[key])changes.push(`${riskLabels[key]||key}: ${formatRisk(key,strategy.policy.risk[key])} → ${formatRisk(key,value)}`);
   if(JSON.stringify(p.strategy.watchlist)!==JSON.stringify(strategy.policy.strategy.watchlist))changes.push('Allowed symbols: '+p.strategy.watchlist.join(', '));
   for(const key of ['entry','exit','stopAdjust','targetAdjust'])if(p.automation.level[key]!==strategy.policy.automation.level[key])changes.push(`${key}: ${strategy.policy.automation.level[key]} → ${p.automation.level[key]}`);
-  if(f.playbook.value!==strategy.playbook)changes.push('Account playbook text changed.');
+  if(f.playbook.value!==strategy.playbook)changes.push('Your playbook changed.');
   if(!changes.length){notice('No changes to save.',true);return;}
   pendingStrategy={policy:p,playbook:f.playbook.value,expectedHash:strategy.hash};$('review-text').textContent=changes.join('\n');$('review').showModal();
 });
-$('review').onclose=attempt(async()=>{if($('review').returnValue!=='save')return;await api('strategy',pendingStrategy);await loadStrategy();notice('Strategy saved. Older approved orders will require a fresh order.',true);});
+$('review').onclose=attempt(async()=>{if($('review').returnValue!=='save')return;await api('strategy',pendingStrategy);await loadStrategy();loadPrompts().catch(()=>{});notice('Strategy saved. Older approved orders will require a fresh order.',true);});
 
 $('pause').onclick=attempt(async()=>{await api('commands/'+(status.health.paused?'resume':'pause'),{});await refresh();});
 $('reconcile').onclick=attempt(async()=>{await api('reconcile',{});notice('Broker outcomes checked.',true);await refresh();});

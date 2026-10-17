@@ -92,7 +92,7 @@ test('the full summary fits the tool budget even with 100 allowed symbols', () =
 
 test('the playbook is prose only; numbers reach the prompt as structured data with units', () => {
   const { assertProsePlaybook, policyFields, renderPolicyBlock } = require('../src/policy/render');
-  const playbook = fs.readFileSync(path.join(__dirname, '../policy/PLAYBOOK.md'), 'utf8');
+  const playbook = fs.readFileSync(path.join(__dirname, '../prompts/TRADER.md'), 'utf8');
   assert.doesNotMatch(playbook, /\{\{/);
   assert.doesNotThrow(() => assertProsePlaybook(playbook, base));
   assert.throws(() => assertProsePlaybook('Max {{risk.maxPositions}} positions', base), /prose only/);
@@ -121,4 +121,17 @@ test('investment target and floor load as percentage points, validate against ea
   assert.equal(legacy.ok, true); assert.equal(legacy.policy.risk.targetInvestedPct, null);
   assert.equal(riskProfileName({ ...ok.policy.risk, ...RISK_PROFILES.aggressive }), 'aggressive');
   assert.match(summarizeStrategy(ok.policy, 'h').summary, /Investment target: 60% of equity invested; floor: 40%/);
+});
+
+test('the core trader prompt ships with the app; the user playbook is a separate, optional section', () => {
+  const { coreTraderPrompt, renderUserPlaybook } = require('../src/policy/render');
+  const core = coreTraderPrompt();
+  assert.match(core, /^You are the master trader/);
+  assert.equal(renderUserPlaybook(''), '');
+  assert.equal(renderUserPlaybook('  \n'), '');
+  const section = renderUserPlaybook('Prefer large, profitable companies.');
+  assert.match(section, /^USER PLAYBOOK/);
+  assert.match(section, /cannot loosen a platform limit/);
+  assert.match(section, /Prefer large, profitable companies\.$/);
+  assert.doesNotMatch(section, /master trader/);
 });

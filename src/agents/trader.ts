@@ -64,7 +64,7 @@ const traderTools = () => traderRegistry ??= new ToolRegistry(pickTools(TRADER_T
 const tradingRequests = () => pendingRequests('trader').filter(r => r.mode !== 'review_only');
 
 /** Policy activation validates the prompt; a later render error stops the cycle. */
-function systemPrompt(): string { return runtimeContract() + "\n\nACCOUNT STRATEGY\n" + renderPolicy(); }
+export function traderSystemPrompt(): string { return runtimeContract() + "\n\nTRADER INSTRUCTIONS\n" + renderPolicy(); }
 
 export class Trader {
   private running = false;
@@ -134,7 +134,7 @@ export class Trader {
     updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? getPendingEvents().map(e => e.id), wokenBy: command.wokenBy ?? wokenBy });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
-      provider: this.provider, registry: traderTools(), systemPrompt: systemPrompt(), revision: hash,
+      provider: this.provider, registry: traderTools(), systemPrompt: traderSystemPrompt(), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
       messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],

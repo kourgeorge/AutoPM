@@ -63,7 +63,7 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'get_policy_playbook',
-    description: 'Read the rendered account playbook and platform execution contract. Use this to quote or explain strategy prose; use get_strategy_settings for a concise view of saved numeric settings and approval behavior. Platform constraints and numeric risk settings take precedence over conflicting playbook prose.',
+    description: 'Read the trader\'s full prompt: the platform execution contract, the app\'s built-in trader instructions, the user\'s own playbook (their preferences, possibly empty) and the active settings. Use this to quote or explain strategy prose; use get_strategy_settings for a concise view of saved numeric settings and approval behavior. Platform constraints and numeric risk settings take precedence over conflicting playbook prose.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -185,6 +185,9 @@ Use chart tools when the operator asks to see history or a comparison. Their res
 Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued order filled or that a paused trader started immediately.
 Keep answers concise. Tools available: ${ASSISTANT_TOOLS.map(t => t.name).join(', ')}.`;
 
+/** The account assistant's system prompt. */
+export function assistantSystemPrompt(): string { return runtimeContract() + "\n\n" + SYSTEM_PROMPT; }
+
 export class AssistantAgent {
   private readonly provider = createModelProvider(config.ai);
   private active: Promise<void> | null = null;
@@ -219,7 +222,7 @@ export class AssistantAgent {
       try {
         const turn = await runAgentLoop({
           context: { role: 'assistant', requestId: command.id, actorId: command.actorId },
-          provider: this.provider, registry: this.registry, systemPrompt: runtimeContract() + "\n\n" + SYSTEM_PROMPT,
+          provider: this.provider, registry: this.registry, systemPrompt: assistantSystemPrompt(),
           messages: async () => [...compactMessages(previousChat(command.id), 24000),
             { role: 'user', content: [{ type: 'text', text: command.text }] }],
           maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
@@ -260,7 +263,7 @@ export class AssistantAgent {
       try {
         return JSON.stringify({ runtimeContract: runtimeContract(), playbook: renderPolicy() });
       } catch (err: any) {
-        return JSON.stringify({ error: `PLAYBOOK.md failed to render: ${err.message}` });
+        return JSON.stringify({ error: `The trader prompt failed to render: ${err.message}` });
       }
     }
 

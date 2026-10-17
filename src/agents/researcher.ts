@@ -21,6 +21,11 @@ import { getPolicyHash } from '../policy/load';
 import { renderPolicy } from '../policy/render';
 import { TRADER_REGISTRY } from '../tools/traderTools';
 
+/** The research worker's system prompt: platform contract, the trader's instructions, then its own task. */
+export function researcherSystemPrompt(): string {
+  return runtimeContract() + '\n\nTRADER INSTRUCTIONS\n' + renderPolicy() + '\n\n' + RESEARCH_CONTRACT;
+}
+
 /** The researcher's own tools: reads plus the verdict tools. Never order, protection, event or sleep tools. */
 export const RESEARCH_TOOLS = ['get_entry_plan', 'get_lessons', 'get_requests', 'get_market_status',
   'get_account', 'get_positions', 'get_open_orders', 'get_orders', 'get_journal', 'get_scorecard',
@@ -119,7 +124,7 @@ export class Researcher {
         const turn = await runAgentLoop({
           context: { role: 'researcher', requestId: request.id, actorId: request.actorId },
           provider: this.provider, registry: this.tools(), revision: hash,
-          systemPrompt: runtimeContract() + '\n\nACCOUNT STRATEGY\n' + renderPolicy() + '\n\n' + RESEARCH_CONTRACT,
+          systemPrompt: researcherSystemPrompt(),
           messages: async () => [{ role: 'user', content: [{ type: 'text', text: request.text }] }],
           maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
           // Research cannot trade, so a trading pause does not stop it. A strategy change does:

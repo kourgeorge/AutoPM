@@ -589,7 +589,7 @@ test('research runs while trading is paused, without order or sleep tools, and r
       assert.ok(!names.includes(name), name + ' must not be a research tool');
     for (const name of ['get_position_review', 'read_source', 'record_candidate_review', 'record_position_review', 'get_tool_result', 'get_saved_context'])
       assert.ok(names.includes(name), name + ' is a research tool');
-    assert.match(request.systemPrompt, /ACCOUNT STRATEGY/); assert.match(request.systemPrompt, /STOCK RESEARCH TASK/);
+    assert.match(request.systemPrompt, /TRADER INSTRUCTIONS/); assert.match(request.systemPrompt, /STOCK RESEARCH TASK/);
     if (rounds++ === 0) return toolResponse([['sleep', { reason: 'Market closed' }], ['get_lessons', {}]]);
     const results = request.messages.flatMap(m => m.content).filter(b => b.type === 'tool_result');
     assert.match(results[0].content, /not permitted/);

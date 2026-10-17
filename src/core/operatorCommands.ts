@@ -219,7 +219,7 @@ export function registerOperatorCommands(trader: Trader): void {
   ui.registerCommand({
     name: 'playbook',
     api: true,
-    help: 'The trading rules (PLAYBOOK.md) with live policy values filled in.',
+    help: 'The full trader prompt: built-in instructions, your playbook and the live policy values.',
     run: () => ui.reply(renderPolicy().trimEnd()),
   });
 }

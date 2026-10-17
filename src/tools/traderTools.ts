@@ -517,7 +517,7 @@ async function toolGetMacroRegime(): Promise<string> {
  * `entry_signal` event — which fires on an EMA cross, not on being asked about. A
  * discretionary scan ("enter the best setup on the watchlist") therefore had no way to
  * obtain them, and the rationale it wrote named signals it had never seen, using the
- * five names PLAYBOOK.md lists.
+ * five names TRADER.md lists.
  *
  * Same bar request and same `minBars` floor as `collectAndCompute`, so a scan and an
  * event cannot report different scores for the same symbol at the same moment.
@@ -1302,7 +1302,7 @@ async function toolGetPriceStats(input: Record<string, unknown>): Promise<string
  * cycle rather than this one.
  *
  * Deliberately unguarded beyond "not empty": there is no rate limit and no dedup, so the
- * bar is prose in PLAYBOOK.md and the tool description. A mechanical gate here would have to
+ * bar is prose in TRADER.md and the tool description. A mechanical gate here would have to
  * decide when a conclusion is allowed to occur, and the moment a lesson is worth writing is
  * the moment its evidence is in context — not a time of day. If the file starts growing
  * every cycle that is visible in `data/LESSONS.md` on the first read.

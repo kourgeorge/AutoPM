@@ -35,12 +35,9 @@ import { DATA_DIR } from '../core/paths';
 
 /**
  * Read-only defaults shipped with the project source. These stay under `policy/` in the repo
- * whatever DATA_DIR is set to: they are tracked source, not per-broker record, and PLAYBOOK.md
- * is the system prompt itself.
+ * whatever DATA_DIR is set to: they are tracked source, not per-broker record.
  */
 export const DEFAULT_POLICY_FILE = path.join(__dirname, '../../policy/default.yaml');
-export const SHIPPED_TEMPLATE_FILE = path.join(__dirname, '../../policy/PLAYBOOK.md');
-export const TEMPLATE_FILE = path.join(DATA_DIR, 'policy', 'PLAYBOOK.md');
 
 /** Live (user-managed) policy and its history — inside the gitignored data directory. */
 export const DATA_POLICY_DIR = path.join(DATA_DIR, 'policy');
@@ -51,7 +48,18 @@ export const POLICY_FILE = path.join(DATA_POLICY_DIR, 'policy.yaml');
  * shipped default; after the first load the active strategy lives in storage.
  */
 function policyFile(): string { return fs.existsSync(POLICY_FILE) ? POLICY_FILE : DEFAULT_POLICY_FILE; }
-function playbookFile(): string { return fs.existsSync(TEMPLATE_FILE) ? TEMPLATE_FILE : SHIPPED_TEMPLATE_FILE; }
+
+/**
+ * The playbook is the account owner's own preferences, added to the app's trader prompt
+ * (`prompts/TRADER.md`); a new account has none. Until 2026-10-17 the playbook WAS the whole
+ * trader prompt, so every account carried a copy of it. A playbook that is exactly that old
+ * copy holds no preferences of the user's and is read as empty.
+ */
+const LEGACY_CORE_PROMPT_SHA256 = 'b271921c384bff3d9a851094c650d19bdeeece5b570adc216fe77f3033c87eb7';
+export const MAX_PLAYBOOK_CHARS = 20000;
+function userPlaybook(text: string): string {
+  return crypto.createHash('sha256').update(text).digest('hex') === LEGACY_CORE_PROMPT_SHA256 ? '' : text;
+}
 
 /**
  * Risk settings and playbook together: one file, one revision.
@@ -67,7 +75,7 @@ function readTradeSettings(): TradeSettings | undefined {
   if (!fs.existsSync(TRADE_SETTINGS_FILE)) return undefined;
   const file = JSON.parse(fs.readFileSync(TRADE_SETTINGS_FILE, 'utf8'));
   if (!file?.settings || typeof file.playbook !== 'string') throw new Error(`${TRADE_SETTINGS_FILE} must contain "settings" and "playbook"`);
-  return { text: dumpYaml(file.settings, { lineWidth: -1 }), playbook: file.playbook };
+  return { text: dumpYaml(file.settings, { lineWidth: -1 }), playbook: userPlaybook(file.playbook) };
 }
 
 function writeTradeSettings(settings: TradeSettings): void {
@@ -421,7 +429,7 @@ export function loadPolicy(): Policy {
   if (!result.ok) {
     throw new Error(`Invalid policy at ${POLICY_FILE}:\n  - ${result.errors.join('\n  - ')}`);
   }
-  if (!readTradeSettings()) writeTradeSettings({ text, playbook: fs.readFileSync(playbookFile(), 'utf8') });
+  if (!readTradeSettings()) writeTradeSettings({ text, playbook: '' });
   _policy = result.policy;
   _meta = result.meta;
   logger.info(`[Policy] Loaded v${result.meta.version} (${result.meta.hash})`);
@@ -470,7 +478,7 @@ export function readPolicyText(): string {
   return readTradeSettings()?.text ?? fs.readFileSync(policyFile(), 'utf8');
 }
 
-/** Full effective strategy identity, including the per-account pinned playbook. */
+/** Full effective strategy identity, including the account's playbook. */
 export function getPolicyHash(): string {
   const policy = getPolicy();
   const template = readPlaybook();
@@ -483,17 +491,18 @@ export function getPolicySnapshot() {
     riskProfiles: RISK_PROFILES, riskProfile: riskProfileName(getPolicy().risk) };
 }
 
+/** The user's playbook: their own preferences, '' when they have written none. */
 export function readPlaybook(): string {
-  return readTradeSettings()?.playbook ?? fs.readFileSync(playbookFile(), 'utf8');
+  return readTradeSettings()?.playbook ?? '';
 }
 
-/** Atomically activate settings and pinned prose as one revision. */
+/** Atomically activate settings and the user's playbook as one revision. */
 export function saveStrategy(settings: unknown, expectedHash: string, playbook = readPlaybook()) {
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('Strategy must be an object');
   const doc = settings as Record<string, unknown>;
   const allowed = ['version', 'risk', 'strategy', 'triggers', 'regime', 'automation', 'immutable'];
   if (Object.keys(doc).some(key => !allowed.includes(key))) throw new Error('Unknown strategy field');
-  if (typeof playbook !== 'string' || playbook.length < 100 || playbook.length > 50000) throw new Error('Playbook must contain 100–50000 characters');
+  if (typeof playbook !== 'string' || playbook.length > MAX_PLAYBOOK_CHARS) throw new Error(`Playbook must be at most ${MAX_PLAYBOOK_CHARS} characters`);
   const next = { ...doc, version: getPolicy().version + 1, immutable: getPolicy().immutable };
   const text = dumpYaml(next, { lineWidth: -1 });
   const parsed = parsePolicy(text);
