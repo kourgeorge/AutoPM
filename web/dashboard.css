@@ -1120,3 +1120,13 @@ details[open] > summary > .json-hint { display: none; }
 .usage-bar-col { width: 22%; }
 .usage-bar { display: block; height: 8px; min-width: 2px; border-radius: 4px; background: var(--accent, var(--ink-2)); opacity: .8; }
 .usage-table button[aria-pressed="true"] { font-weight: 600; text-decoration: underline; }
+
+/* Risk settings: a compact vertical list, one row per setting (name | value | explanation). */
+.risk-profile .risk-grid { display: flex; flex-direction: column; gap: 0; max-width: 860px; border-top: 1px solid var(--line-soft); }
+.risk-grid > label { display: grid; grid-template-columns: 230px 96px minmax(0, 1fr); align-items: center; gap: 4px 14px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+.risk-grid > label input { width: 100%; padding-top: 4px; padding-bottom: 4px; }
+.risk-grid > label small { line-height: 1.35; }
+@media (max-width: 700px) {
+  .risk-grid > label { grid-template-columns: minmax(0, 1fr) 88px; }
+  .risk-grid > label small { grid-column: 1 / -1; }
+}
