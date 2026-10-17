@@ -546,6 +546,10 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .signal-score { color: var(--ink-2); }
 .watchlist-legend { font-size: 9px; color: var(--ink-3); margin: 9px 0 0; }
 #watchlist-status { font-size: 10px; }
+.watchlist-search { margin: 0 0 8px; }
+.watchlist-search input { max-width: 180px; padding: 3px 8px; font: 12px/1.5 var(--font-mono); text-transform: uppercase; }
+.watchlist-search input::placeholder { font-family: inherit; text-transform: none; }
+.watchlist-search input[aria-invalid="true"] { border-color: var(--down); }
 @media (max-width: 800px) { #watchlist-panel { order: 3; }#live-activity { order: 4; }.live-secondary { order: 5; } }
 @media (max-width: 1000px) and (min-width: 601px) { .brand { font-size: 0; } }
 @media (max-width: 600px) { .brand { font-size: 0; }.welcome h2 { font-size: 18px; } }

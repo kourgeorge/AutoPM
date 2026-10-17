@@ -544,9 +544,24 @@ function watchComposite(signals) {
   const scores=(signals || []).map(signal=>signal.score);
   return scores.length && scores.every(Number.isFinite) ? Number((scores.reduce((sum,score)=>sum+score,0)/scores.length).toFixed(3)) : null;
 }
+// The search box filters the last watchlist snapshot; Enter opens a ticker even when it is not watched.
+let lastWatchlist = {watchlist:[],lastTickAt:null};
+const watchFilter = $('watchlist-filter');
+const watchQuery = () => watchFilter.value.trim().toUpperCase();
+function watchMatches(data) { const q=watchQuery();return (data.watchlist || []).filter(row=>!q || row.symbol.includes(q)); }
+watchFilter.addEventListener('input', () => { watchFilter.removeAttribute('aria-invalid');renderWatchlist(lastWatchlist); });
+watchFilter.addEventListener('keydown', event => { if(event.key==='Escape' && watchFilter.value){event.preventDefault();watchFilter.value='';renderWatchlist(lastWatchlist);} });
+$('watchlist-search').addEventListener('submit', event => {
+  event.preventDefault();
+  const q=watchQuery(),matches=watchMatches(lastWatchlist);
+  const symbol=matches.find(row=>row.symbol===q)?.symbol || (matches.length===1 ? matches[0].symbol : q);
+  if(!/^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(symbol)){watchFilter.setAttribute('aria-invalid','true');return;}
+  watchFilter.removeAttribute('aria-invalid');void openPositionReview(symbol);
+});
 function renderWatchlist(data) {
-  const outdated=!data.lastTickAt || Date.now()-Date.parse(data.lastTickAt)>180000;
-  const list=(data.watchlist || []).map(row=>({...row,trend:watchComposite(row.signals),mr:watchComposite(row.meanReversionSignals)}))
+  lastWatchlist=data;
+  const outdated=!data.lastTickAt || Date.now()-Date.parse(data.lastTickAt)>180000,q=watchQuery(),total=(data.watchlist || []).length;
+  const list=watchMatches(data).map(row=>({...row,trend:watchComposite(row.signals),mr:watchComposite(row.meanReversionSignals)}))
     .sort((a,b)=>(b.trend ?? -Infinity)-(a.trend ?? -Infinity) || a.symbol.localeCompare(b.symbol));
   const scoreCell=(score,signals,summary)=>{
     const cell=text('span',score==null?'—':`${score>=0?'+':''}${score.toFixed(2)}`,'signal-score');
@@ -560,8 +575,11 @@ function renderWatchlist(data) {
     return [symbol,price,text('span',stale||row.dayChangePct==null?'—':signedPct(row.dayChangePct),stale?'stale':direction(row.dayChangePct)),
       scoreCell(row.trend,row.signals,row.signalSummary),scoreCell(row.mr,row.meanReversionSignals,row.meanReversionSummary),Number.isFinite(row.rsi)?row.rsi.toFixed(0):'—'];
   });
-  $('watchlist-status').textContent=data.error || (!data.lastTickAt?'Waiting for data':`${list.length} symbols${outdated?' · stale snapshot':''}`);
-  if(!list.length){const row=text('tr',''),cell=text('td',data.error || (!data.lastTickAt?'Waiting for watchlist data.':'No watchlist symbols.'),'table-empty');cell.colSpan=6;row.append(cell);$('watchlist-rows').append(row);}
+  $('watchlist-status').textContent=data.error || (!data.lastTickAt?'Waiting for data':`${q?`${list.length} of ${total}`:list.length} symbols${outdated?' · stale snapshot':''}`);
+  if(!list.length){
+    const empty=q && total ? `No watchlist match · press Enter to open ${q}` : data.error || (!data.lastTickAt?'Waiting for watchlist data.':'No watchlist symbols.');
+    const row=text('tr',''),cell=text('td',empty,'table-empty');cell.colSpan=6;row.append(cell);$('watchlist-rows').append(row);
+  }
 }
 
 function renderChart(points, s) {

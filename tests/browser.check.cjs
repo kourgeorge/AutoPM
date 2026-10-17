@@ -315,6 +315,14 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('.reply-body img')).toHaveCount(0);
     await expect(page.locator('.reply-body')).toContainText('<img src=x onerror=alert(1)>');
     await page.getByRole('tab',{name:'Live',exact:true}).click();
+    await page.getByRole('searchbox',{name:'Search ticker'}).fill('zzz');
+    await expect(page.locator('#watchlist-rows')).toContainText('press Enter to open ZZZ');
+    await page.getByRole('searchbox',{name:'Search ticker'}).fill('aa');
+    await expect(page.locator('#watchlist-rows button')).toHaveText(['AAPL']);
+    await page.getByRole('searchbox',{name:'Search ticker'}).press('Enter');
+    await expect(page.locator('#position-review-title')).toHaveText('AAPL');
+    await page.keyboard.press('Escape');await expect(page.locator('#position-review-dialog')).toBeHidden();
+    await page.getByRole('searchbox',{name:'Search ticker'}).fill('');
     await page.locator('#watchlist-rows button').first().click();
     await expect(page.locator('#position-review-dialog')).toBeVisible();
     await expect(page.locator('#position-review-title')).toHaveText('AAPL');
