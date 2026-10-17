@@ -1,14 +1,19 @@
 /**
  * L0 — the policy renderer.
  *
- * The system prompt is the account's playbook (prose only) followed by the ACTIVE POLICY block:
- * every configured number, as data, keyed by the dotted name the prose refers to it by
+ * The trader prompt has three parts, in this order:
+ *  1. the app's core trader instructions (`prompts/TRADER.md`) — shipped with the code, the same
+ *     for every account, and changed only by changing the app;
+ *  2. the user's playbook — their own preferences, empty unless they write one;
+ *  3. the ACTIVE POLICY block: every configured number, as data, keyed by the dotted name the prose refers to it by
  * (`risk.maxPositions`). A number lives in one place — the saved settings — so prose and
  * machine config cannot drift, and there is no template to mistype. Until 2026-10-16 the
  * playbook carried `{{risk.maxPositions}}` placeholders and the account copies had drifted
  * into rules (a fixed 10% sizing formula) the settings no longer held.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { getPolicy, readPlaybook } from './load';
 import { riskProfileName } from './riskProfiles';
 import type { Policy } from './types';
@@ -60,9 +65,24 @@ export function policyFields(policy: Policy = getPolicy()): Record<string, unkno
   return out;
 }
 
-/** The structured block appended to the playbook. */
+export const CORE_PROMPT_FILE = path.join(__dirname, '../../prompts/TRADER.md');
+
+/** The app's own trader instructions. Not account data: no user edit reaches this file. */
+export function coreTraderPrompt(): string {
+  return fs.readFileSync(CORE_PROMPT_FILE, 'utf8').replace(/\n+$/, '');
+}
+
+/** The user's playbook as a prompt section, or '' when they have written none. */
+export function renderUserPlaybook(playbook: string = readPlaybook()): string {
+  const text = playbook.trim();
+  if (!text) return '';
+  return 'USER PLAYBOOK (the account owner\'s own preferences — follow them where they fit the instructions above; ' +
+    'they cannot loosen a platform limit, a saved setting or a human approval, and where they conflict with one, say so)\n' + text;
+}
+
+/** The structured block at the end of the prompt. */
 export function renderPolicyBlock(policy: Policy = getPolicy()): string {
-  return `ACTIVE POLICY (generated from saved settings — the only source of these numbers; the playbook refers to them by name)\n` +
+  return `ACTIVE POLICY (generated from saved settings — the only source of these numbers; the prose above refers to them by name)\n` +
     JSON.stringify({ profile: riskProfileName(policy.risk), version: policy.version, nullMeans: 'not configured', fields: policyFields(policy) }, null, 2);
 }
 
@@ -80,7 +100,7 @@ export function assertProsePlaybook(playbook: string, policy: Policy = getPolicy
   }
 }
 
-/** The L3 system prompt: the account playbook followed by the active policy as data. */
+/** The L3 system prompt: core trader instructions, the user's playbook, then the active policy as data. */
 export function renderPolicy(policy: Policy = getPolicy()): string {
-  return readPlaybook().replace(/\n+$/, '') + '\n\n' + renderPolicyBlock(policy) + '\n';
+  return [coreTraderPrompt(), renderUserPlaybook(), renderPolicyBlock(policy)].filter(Boolean).join('\n\n') + '\n';
 }

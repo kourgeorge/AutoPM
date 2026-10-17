@@ -3,7 +3,7 @@ import { readAccount, readPositions, readOrders } from '../core/accountRead';
  * Portfolio exposure as measured fact — weights, sectors, concentration, held-vs-held
  * correlation.
  *
- * This exists because PLAYBOOK.md instructed the model to "avoid sector concentration" and
+ * This exists because TRADER.md instructed the model to "avoid sector concentration" and
  * no tool in the system returned a sector. Naming a vocabulary the prompt cannot populate
  * is the fabrication vector `get_signals` was added to close; this closes the portfolio one.
  *

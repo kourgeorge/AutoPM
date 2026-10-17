@@ -2,7 +2,7 @@
  * Policy render smoke test.
  *
  * Until step 2 this script proved `renderPolicy()` reproduced the hardcoded
- * `buildSystemPrompt()` byte for byte. That prompt is now deleted — PLAYBOOK.md IS the
+ * `buildSystemPrompt()` byte for byte. That prompt is now deleted — TRADER.md IS the
  * system prompt — so byte-equality has nothing left to compare against. What byte-
  * equality was really buying was a guarantee that the rendered text is a valid prompt,
  * and that is what is checked here instead:
@@ -21,7 +21,7 @@
  */
 
 import { loadPolicy, readPlaybook } from '../policy/load';
-import { assertProsePlaybook, renderPolicy } from '../policy/render';
+import { assertProsePlaybook, coreTraderPrompt, renderPolicy } from '../policy/render';
 
 /** Prose the prompt must contain. Each entry is a rule whose absence changes behaviour. */
 const REQUIRED = [
@@ -74,7 +74,9 @@ function main(): void {
   }
 
   const failures: string[] = [];
-  try { assertProsePlaybook(readPlaybook(), policy); } catch (err: any) { failures.push(err.message); }
+  // The core prompt and the user's playbook follow the same rule: settings by name, never by value.
+  try { assertProsePlaybook(coreTraderPrompt(), policy); } catch (err: any) { failures.push(`prompts/TRADER.md: ${err.message}`); }
+  try { assertProsePlaybook(readPlaybook(), policy); } catch (err: any) { failures.push(`user playbook: ${err.message}`); }
 
   if (prompt.includes('{{')) {
     const leaked = prompt.match(/\{\{[^}]*\}?\}?/g) ?? [];

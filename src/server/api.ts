@@ -440,6 +440,16 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     try { return saveStrategy(input.policy, String(input.expectedHash ?? ''), input.playbook as string | undefined); }
     catch (err: any) { throw new HttpError(/changed/.test(err.message) ? 409 : 400, err.message); }
   });
+  // Read-only, for debugging: the exact system prompt each agent is given right now.
+  // Required lazily — the agent modules import the tool registry, which imports this server's neighbours.
+  add('GET', '/api/settings/prompts', () => {
+    const prompt = (build: () => string) => { try { return { text: build() }; } catch (err: any) { return { error: err.message }; } };
+    return {
+      trader: prompt(() => require('../agents/trader').traderSystemPrompt()),
+      researcher: prompt(() => require('../agents/researcher').researcherSystemPrompt()),
+      assistant: prompt(() => require('../agents/assistant').assistantSystemPrompt()),
+    };
+  });
   add('GET', '/api/broker-orders', () => {
     const tick = getLastTick();
     return { available: !!tick && !tick.ordersStale, lastTickAt: tick?.tickAt, orders: tick && !tick.ordersStale ? tick.orders : null };

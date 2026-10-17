@@ -1130,3 +1130,7 @@ details[open] > summary > .json-hint { display: none; }
   .risk-grid > label { grid-template-columns: minmax(0, 1fr) 88px; }
   .risk-grid > label small { grid-column: 1 / -1; }
 }
+
+#agent-prompts .prompt-tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+#agent-prompts .prompt-tabs button[aria-pressed="true"] { border-color: var(--ink-3); font-weight: 600; }
+#prompt-text { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
