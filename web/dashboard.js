@@ -282,7 +282,8 @@ function toolCallEntry(entry) {
 }
 function renderWelcome() {
   const feed=$('feed');
-  $('welcome').hidden=!!feed.querySelector('.msg.operator, .msg.reply, .msg.chart, .msg.alert, .msg.tool') || ($('show-log').checked && !!feed.querySelector('.msg.log'));
+  const hidden=!!feed.querySelector('.msg.operator, .msg.reply, .msg.chart, .msg.alert, .msg.tool') || ($('show-log').checked && !!feed.querySelector('.msg.log'));
+  if ($('welcome').hidden !== hidden) $('welcome').hidden=hidden;
 }
 
 function removeConversationMessages(through = Infinity) {
@@ -345,9 +346,15 @@ function appendLiveEntries(fragment) {
 $('open-conversation').onclick=()=>{showView('live');messageInput.focus();};
 
 function addEntries(entries) {
-  const feed = $('feed'), atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+// While the conversation follows new rows it glides to the bottom instead of jumping a row at a
+// time, which flickers during a burst of tool calls. Any scroll by the reader stops the following.
+let feedFollowing = false;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+for (const type of ['wheel','touchstart','keydown','pointerdown']) $('feed').addEventListener(type, () => { feedFollowing = false; }, {passive: true});
+  const feed = $('feed'), atBottom = feedFollowing || feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
   const liveRows = document.createDocumentFragment();
   for (const entry of entries) {
+  if (!entries.some(entry => entry.seq > cursor)) { renderThinking(); return; }
     if (entry.seq <= cursor) continue;
     cursor = entry.seq;
     if (entry.kind === 'reply' || entry.kind === 'chart') awaitingReply = 0;
@@ -373,8 +380,11 @@ function addEntries(entries) {
     oldest.remove();
   }
   renderWelcome();
-  if (!$('welcome').hidden) feed.scrollTop = 0;
-  else if (atBottom || entries.some(e => e.kind === 'operator')) feed.scrollTop = feed.scrollHeight;
+  if (!$('welcome').hidden) { feedFollowing = false; feed.scrollTop = 0; }
+  else if (atBottom || entries.some(e => e.kind === 'operator')) {
+    feedFollowing = true;
+    feed.scrollTo({top: feed.scrollHeight, behavior: reducedMotion.matches ? 'auto' : 'smooth'});
+  }
   renderThinking();
 }
 $('show-log').onchange = () => {
@@ -387,8 +397,10 @@ function renderThinking() {
   const assistant = status?.assistant?.lane?.state === 'thinking';
   // A reply normally arrives well inside two minutes; stop claiming one is coming after that.
   const waiting = awaitingReply && Date.now() - awaitingReply < 120000;
-  $('thinking').hidden = !(assistant || waiting);
-  $('thinking-text').textContent = assistant ? 'The assistant is thinking…' : 'Waiting for the assistant…';
+  // Runs every second; only touch the page when something changed so the chat stays still.
+  const hidden = !(assistant || waiting), label = assistant ? 'The assistant is thinking…' : 'Waiting for the assistant…';
+  if ($('thinking').hidden !== hidden) $('thinking').hidden = hidden;
+  if ($('thinking-text').textContent !== label) $('thinking-text').textContent = label;
 }
 async function sendMessage(value) {
   const slash = /^\s*\/(\S+)(?:\s+([\s\S]*))?$/.exec(value);
