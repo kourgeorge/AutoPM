@@ -17,6 +17,9 @@ export function summarizeStrategy(policy: Policy, strategyHash: string) {
     minimumPlannedRewardRisk: r.minRewardRisk,
     targetInvestedPct: r.targetInvestedPct ?? null,
     minInvestedPct: r.minInvestedPct ?? null,
+    maxEntriesPerDay: r.maxEntriesPerDay ?? null,
+    lossCooldownHours: r.lossCooldownHours ?? null,
+    trailingStopAtrMult: r.trailingStopAtrMult ?? null,
   };
   const limits = {
     maximumPositions: r.maxPositions,
@@ -40,6 +43,11 @@ export function summarizeStrategy(policy: Policy, strategyHash: string) {
     `Portfolio volatility target: ${percent(r.targetVolatilityPct, ' per year (estimated)')}.`,
     `Minimum planned reward:risk: ${r.minRewardRisk == null ? 'Not configured' : `${clean(r.minRewardRisk)}:1`}.`,
     `Investment target: ${percent(r.targetInvestedPct ?? null, ' of equity invested')}; floor: ${percent(r.minInvestedPct ?? null, ' (below it, cash needs a stated reason)')}.`,
+    `New entries per day: ${r.maxEntriesPerDay == null ? 'no cap' : `at most ${r.maxEntriesPerDay}`}.`,
+    `After a losing trade: ${r.lossCooldownHours == null ? 'no cooldown' : `the same symbol cannot be bought again for ${clean(r.lossCooldownHours)} hours`}.`,
+    `Trailing stop: ${r.trailingStopAtrMult == null ? 'off — stops move only when the trader raises them'
+      : `raised automatically to ${clean(r.trailingStopAtrMult)} ATR below the highest price since entry, never lowered`
+        + (a.level.stopAdjust === 'auto' ? '' : ' — inactive while stop adjustments need human approval')}.`,
   ];
   const summary = [
     `Saved strategy: ${profile} (revision ${policy.version}).`,

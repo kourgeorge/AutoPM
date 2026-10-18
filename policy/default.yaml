@@ -29,6 +29,14 @@ risk:
   # ones that ask the trader to invest. Blank = no target.
   targetInvestedPct: 60
   minInvestedPct: 40
+  # How often the trader may buy. Blank = off. maxEntriesPerDay counts new entries sent to the
+  # broker per ET trading day; lossCooldownHours blocks buying a symbol again for that many hours
+  # after it closed at a loss. Both are enforced by validateEntry (max_entries_today, loss_cooldown).
+  maxEntriesPerDay: null
+  lossCooldownHours: null
+  # Machine-owned trailing stop, in ATR multiples below the highest price since entry. Raised on
+  # every tick, never lowered, and only while automation.level.stopAdjust is auto. Blank = off.
+  trailingStopAtrMult: null
 strategy:
   watchlist:
     - AAPL
