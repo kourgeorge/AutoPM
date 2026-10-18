@@ -6,7 +6,7 @@ import { pendingOrders, getOrder, transitionOrder, ensureOrderDecision } from '.
 import { getState, getPositionSnapshot, openPositionSnapshot, removePositionSnapshot, type Order } from '../state/state';
 import type { SignalResult } from '../core/types';
 import type { ExecutionOrder } from '../broker/IBroker';
-import { GuardRejection, validateEntry, actEntry, validateExit, actExit } from './orderManager';
+import { GuardRejection, validateEntry, actEntry, validateExit, actExit, EXTENDED_ORDER_TTL_MS } from './orderManager';
 import { validateAnnotation, actAnnotation, type AnnotateInput } from './annotation';
 import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
 import { readFills } from '../review/fills';
@@ -55,8 +55,22 @@ async function reconcile(p: Order): Promise<void> {
       (order.filledQty > 0 && (order.filledPrice == null || !Number.isFinite(order.filledPrice) || order.filledPrice <= 0))) {
     throw new Error('Broker execution quantities or fill price are incomplete; inspect the broker outcome');
   }
+  // An extended-hours limit cannot be IOC, so it rests; past its time limit it is cancelled
+  // here and the read below records the outcome — filled, partly filled, or nothing.
+  if (p.result?.extendedHours && ['open', 'partial'].includes(order.status) && Date.now() - (p.result.submittedAt ?? 0) >= EXTENDED_ORDER_TTL_MS) {
+    try {
+      await broker.cancelOrder(order.id);
+      logger.trade(`[Execution] ${p.kind} ${p.symbol}: extended-hours limit did not fill within ${EXTENDED_ORDER_TTL_MS / 60_000} min — cancelled`);
+    } catch (err: any) {
+      // A fill racing the cancel is an outcome, not a failure: re-read it.
+      logger.warn(`[Execution] ${p.id}: cancelling the resting extended-hours order failed — ${err?.message ?? err}`);
+    }
+    const reread = await broker.getOrder(order.id);
+    if (reread) order = reread;
+  }
+  const extended = p.result?.extendedHours ? { extendedHours: true, submittedAt: p.result.submittedAt } : {};
   const result = { brokerOrderId: order.id, qty: order.qty, filledQty: order.filledQty,
-    ...(order.filledPrice != null ? { filledPrice: order.filledPrice } : {}) };
+    ...(order.filledPrice != null ? { filledPrice: order.filledPrice } : {}), ...extended };
   const terminal = ['filled', 'cancelled', 'rejected'].includes(order.status);
   const status = order.status === 'filled' || (terminal && order.filledQty > 0) ? 'executed' : terminal ? 'failed' : order.filledQty > 0 ? 'partial' : 'submitted';
   const positions = p.kind === 'exit' && terminal ? await broker.getPositions() : null;
@@ -125,7 +139,8 @@ async function execute(p: Order): Promise<void> {
           intendedStop: entry?.stopLoss ?? null, intendedTarget: entry?.takeProfit ?? null, atrAtEntry: entry?.atr ?? null,
         }), 'order-' + p.id);
         recordDecisionOutcome('order-' + p.id, { orderStatus: 'submitted', brokerOrderId: result.brokerOrderId, requestedQty: result.qty, filledQty: 0, qty: 0, price: null });
-        transitionOrder(p.id, 'submitted', { result: { brokerOrderId: result.brokerOrderId, qty: result.qty } });
+        transitionOrder(p.id, 'submitted', { result: { brokerOrderId: result.brokerOrderId, qty: result.qty,
+          ...(result.extendedHours ? { extendedHours: true, submittedAt: Date.now() } : {}) } });
       });
       await reconcile(getOrder(p.id)!);
     } else if (annotation?.ok) {
@@ -137,7 +152,7 @@ async function execute(p: Order): Promise<void> {
     const current = getOrder(p.id)!;
     const message = err?.message ?? String(err);
     if (current.status === 'approved') transitionOrder(p.id, 'failed', { result: { error: message } });
-    else if (current.status === 'executing') transitionOrder(p.id, (err instanceof GuardRejection && ['paused_before_submission','position_changed','external_order'].includes(err.rule)) || err instanceof BrokerRejection && err.status != null && err.status >= 400 && err.status < 500 && ![408,409,429].includes(err.status) ? 'failed' : 'unknown', { result: { ...current.result, error: message } });
+    else if (current.status === 'executing') transitionOrder(p.id, (err instanceof GuardRejection && ['paused_before_submission','position_changed','external_order','quote_unavailable'].includes(err.rule)) || err instanceof BrokerRejection && err.status != null && err.status >= 400 && err.status < 500 && ![408,409,429].includes(err.status) ? 'failed' : 'unknown', { result: { ...current.result, error: message } });
     recordDecisionOutcome('order-' + p.id, { orderStatus: getOrder(p.id)?.status, vetoRule: err instanceof GuardRejection ? err.rule : null, venueMessage: err instanceof BrokerRejection ? err.venueMessage : null });
     logger.warn('[Execution] ' + p.id + ': ' + message);
   }

@@ -7,6 +7,7 @@ import type { IBroker, ExecutionOrder, Position, AccountInfo, OrderRequest, Open
 import { BrokerRejection, type BrokerAttempt } from './errors';
 import { logger } from '../core/logger';
 import { isCryptoSymbol } from '../core/symbols';
+import type { VenueSession } from '../collect/marketCalendar';
 
 const API_TIMEOUT_MS = parseInt(process.env.IBKR_API_TIMEOUT_MS ?? '10000');
 
@@ -281,6 +282,8 @@ export class IBKRBroker implements IBroker {
       // and TWS reads empty as false: the order is created but held as ApiPending, never sent.
       // (The library's own order classes default it to true; a plain object like this does not.)
       transmit:      true,
+      // IBKR's name for Alpaca's `extended_hours`: without it a limit order waits for 09:30.
+      outsideRth:    req.extendedHours || undefined,
     };
 
     let orderId: number;
@@ -602,6 +605,15 @@ export class IBKRBroker implements IBroker {
     if (day === 0 || day === 6) return false;
     const etMin = hours * 60 + minutes;
     return etMin >= 9 * 60 + 30 && etMin < 16 * 60;
+  }
+
+  /** Same clock-only hours as `isMarketOpen`: no holidays, no early closes. */
+  async marketSession(): Promise<VenueSession> {
+    const { day, hours, minutes } = etNow();
+    if (day === 0 || day === 6) return 'closed';
+    const etMin = hours * 60 + minutes;
+    if (etMin >= 9 * 60 + 30 && etMin < 16 * 60) return 'regular';
+    return etMin >= 4 * 60 && etMin < 20 * 60 ? 'extended' : 'closed';
   }
 
   disconnect(): void {

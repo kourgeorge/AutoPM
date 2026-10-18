@@ -75,7 +75,7 @@ export function registerOperatorCommands(trader: Trader): void {
       }
       try {
         const m = await getMarketStatusSnapshot();
-        lines.push(`Market     ${m.isOpen ? 'OPEN' : 'closed'} (per the broker)`);
+        lines.push(`Market     ${m.isOpen ? 'OPEN' : m.session === 'extended' ? 'extended hours' : 'closed'} (per the broker)`);
       } catch (err: any) {
         lines.push(`Market     unknown — broker clock check failed: ${err.message}`);
       }
