@@ -9,10 +9,11 @@ const pendingOrderDetails = new Set(), lastPrices = new Map();
 const messageInput = $('message-text');
 const riskFractions = ['positionSizePct','maxDailyLossPct','maxGrossExposurePct'];
 const riskNumbers = ['maxPositions','stopLossAtrMult','maxSingleWeightPct','maxSectorWeightPct'];
-const riskOptional = ['riskPerTradePct','targetVolatilityPct','minRewardRisk','targetInvestedPct','minInvestedPct'];
+const riskOptional = ['riskPerTradePct','targetVolatilityPct','minRewardRisk','targetInvestedPct','minInvestedPct','maxEntriesPerDay','lossCooldownHours','trailingStopAtrMult'];
 const riskLabels = { positionSizePct:'Maximum position size', maxDailyLossPct:'Daily loss limit', maxGrossExposurePct:'Gross exposure limit',
   maxPositions:'Maximum positions', stopLossAtrMult:'Stop distance (ATR)', maxSingleWeightPct:'Single-name limit', maxSectorWeightPct:'Sector limit',
-  riskPerTradePct:'Risk per trade', targetVolatilityPct:'Annualized portfolio volatility target', minRewardRisk:'Minimum reward:risk', targetInvestedPct:'Investment target', minInvestedPct:'Investment floor' };
+  riskPerTradePct:'Risk per trade', targetVolatilityPct:'Annualized portfolio volatility target', minRewardRisk:'Minimum reward:risk', targetInvestedPct:'Investment target', minInvestedPct:'Investment floor',
+  maxEntriesPerDay:'New entries per day', lossCooldownHours:'Cooldown after a loss', trailingStopAtrMult:'Trailing stop' };
 const laneLabels = { starting:'Starting', idle:'Idle', thinking:'Thinking', sleeping:'Waiting', awaiting:'Waiting for you', error:'Error' };
 const suggestions = [['Portfolio brief', 'How is my portfolio doing?'], ['Latest decision', 'Why did you make your last trade?'], ['Watchlist', 'What are you watching right now?'], ['Risk check', 'What risks should I know about?']];
 const money = n => n == null ? 'Unavailable' : new Intl.NumberFormat('en-US', {style:'currency',currency:'USD'}).format(n);
@@ -1267,6 +1268,9 @@ function updateRiskSummary(keepCustom=false) {
   if(risk.targetVolatilityPct!=null)parts.push(`aim for portfolio volatility up to ${risk.targetVolatilityPct}% per year`);
   if(risk.minRewardRisk!=null)parts.push(`require at least ${risk.minRewardRisk}:1 planned reward:risk`);
   if(risk.targetInvestedPct!=null)parts.push(`aim to keep ${risk.targetInvestedPct}% of equity invested${risk.minInvestedPct!=null?`, and explain any shortfall below ${risk.minInvestedPct}%`:''}`);
+  if(risk.maxEntriesPerDay!=null)parts.push(`open at most ${risk.maxEntriesPerDay} new position${risk.maxEntriesPerDay===1?'':'s'} a day`);
+  if(risk.lossCooldownHours!=null)parts.push(`wait ${risk.lossCooldownHours} hours before buying a stock again after a loss on it`);
+  if(risk.trailingStopAtrMult!=null)parts.push(`raise stops automatically to ${risk.trailingStopAtrMult} ATR below the high since entry`);
   $('risk-summary').textContent=parts.length?parts.join('; ')+'.':'These optional risk controls are not configured. Choose a preset or enter your own values.';
 }
 $('settings').elements.riskProfile.onchange=()=>{
@@ -1297,7 +1301,7 @@ $('settings').onsubmit=attempt(async()=>{
   p.strategy.watchlist=[...allowedSymbols];
   p.risk=readRiskFields();
   for(const key of ['entry','exit','stopAdjust','targetAdjust'])p.automation.level[key]=f[key].value;
-  const formatRisk=(key,value)=>value==null?'Not configured':riskFractions.includes(key)?`${Number((value*100).toFixed(4))}%`:[...riskOptional.filter(k=>k!=='minRewardRisk'),'maxSingleWeightPct','maxSectorWeightPct'].includes(key)?`${value}%`:key==='minRewardRisk'?`${value}:1`:value;
+  const formatRisk=(key,value)=>value==null?'Not configured':riskFractions.includes(key)?`${Number((value*100).toFixed(4))}%`:key==='lossCooldownHours'?`${value} hours`:key==='trailingStopAtrMult'?`${value} ATR`:key==='maxEntriesPerDay'?value:[...riskOptional.filter(k=>k!=='minRewardRisk'),'maxSingleWeightPct','maxSectorWeightPct'].includes(key)?`${value}%`:key==='minRewardRisk'?`${value}:1`:value;
   for(const [key,value] of Object.entries(p.risk))if(value!==strategy.policy.risk[key])changes.push(`${riskLabels[key]||key}: ${formatRisk(key,strategy.policy.risk[key])} → ${formatRisk(key,value)}`);
   if(JSON.stringify(p.strategy.watchlist)!==JSON.stringify(strategy.policy.strategy.watchlist))changes.push('Allowed symbols: '+p.strategy.watchlist.join(', '));
   for(const key of ['entry','exit','stopAdjust','targetAdjust'])if(p.automation.level[key]!==strategy.policy.automation.level[key])changes.push(`${key}: ${strategy.policy.automation.level[key]} → ${p.automation.level[key]}`);

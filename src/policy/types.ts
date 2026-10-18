@@ -53,6 +53,20 @@ export interface RiskPolicy {
   targetInvestedPct?: number | null;
   /** Percentage points of equity below which holding cash needs a stated reason. Null = no floor. */
   minInvestedPct?: number | null;
+  /**
+   * New entries allowed per ET trading day, counted from orders that reached the broker. Null =
+   * no cap. Overtrading is the most common way LLM traders lose money (Alpha Arena, Senpi's own
+   * 22-agent test), and nothing else here limits how often the trader buys.
+   */
+  maxEntriesPerDay?: number | null;
+  /** Hours after a losing round trip closes before the same symbol may be bought again. Null = off. */
+  lossCooldownHours?: number | null;
+  /**
+   * Trailing stop distance in ATR multiples below the highest price since entry. The machine
+   * raises the resting stop to `sessionHigh - mult x ATR` on its own, never lowers it. Null = off.
+   * Runs only while `automation.level.stopAdjust` is auto.
+   */
+  trailingStopAtrMult?: number | null;
 }
 
 export interface StrategyPolicy {

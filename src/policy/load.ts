@@ -260,6 +260,9 @@ function validate(doc: unknown): { policy: Policy; errors: Errors } {
       : num(r, 'risk', 'maxSectorWeightPct', errs, { min: 0, max: 100 }),
     targetInvestedPct: optionalRiskNumber('targetInvestedPct', 0, 150),
     minInvestedPct: optionalRiskNumber('minInvestedPct', 0, 150),
+    maxEntriesPerDay: r.maxEntriesPerDay == null ? null : num(r, 'risk', 'maxEntriesPerDay', errs, { int: true, min: 1, max: 50 }),
+    lossCooldownHours: optionalRiskNumber('lossCooldownHours', 0, 720),
+    trailingStopAtrMult: optionalRiskNumber('trailingStopAtrMult', 0.5, 10),
   };
   if (risk.minInvestedPct != null && risk.targetInvestedPct != null && risk.minInvestedPct > risk.targetInvestedPct)
     errs.push('risk.minInvestedPct must not exceed risk.targetInvestedPct');

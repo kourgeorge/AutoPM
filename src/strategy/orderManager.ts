@@ -31,7 +31,9 @@ import {
   isAtMaxPositions,
 } from './riskManager';
 import { automationLevel } from '../core/automation';
-import { createOrder } from '../core/orders';
+import { createOrder, listOrders } from '../core/orders';
+import { entryCapVeto, lossCooldownVeto } from './tradePace';
+import { computeOutcomes } from '../review/ledger';
 import { config } from '../core/config';
 import { hasRiskProfile } from '../policy/riskProfiles';
 import { assessEntryRisk, entryLimitPrice, type RiskAssessment } from './riskBudget';
@@ -423,6 +425,16 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   if (isCryptoSymbol(symbol) || !Number.isInteger(qty)) reject('unsupported_asset', 'This worker supports long-only whole-share equities with broker protection');
   const session = await tradableSession('entry');
   if (getState().dailyLossHalted) reject('daily_loss_breached', 'Entries are halted for this trading day');
+  // Pace guards. Local reads only, so before the quote. When the executor re-validates an order
+  // it is still `approved`, a status the count ignores, so an order never counts against itself.
+  const risk = getPolicy().risk;
+  const capped = entryCapVeto(risk.maxEntriesPerDay, listOrders());
+  if (capped) reject('max_entries_today', capped);
+  if (risk.lossCooldownHours) {
+    const since = new Date(Date.now() - risk.lossCooldownHours * 3_600_000);
+    const cooling = lossCooldownVeto(risk.lossCooldownHours, symbol, computeOutcomes({ symbol, since }));
+    if (cooling) reject('loss_cooldown', cooling);
+  }
   let quote: { value: number };
   if (session === 'extended') {
     quote = { value: await extendedPrint(symbol) };

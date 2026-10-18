@@ -132,6 +132,9 @@
 <label>Minimum reward:risk<input aria-label="Minimum reward:risk" name="minRewardRisk" type="number" min="0.1" max="20" step="0.1" placeholder="Not configured"><small>2 means planned upside is at least twice the downside.</small></label>
 <label>Investment target (% of equity)<input aria-label="Investment target (% of equity)" name="targetInvestedPct" type="number" min="0" max="150" step="1" placeholder="Not configured"><small>How much of the account the trader aims to keep invested.</small></label>
 <label>Investment floor (% of equity)<input aria-label="Investment floor (% of equity)" name="minInvestedPct" type="number" min="0" max="150" step="1" placeholder="Not configured"><small>Below this, the trader must give a reason for each strong candidate it passes on.</small></label>
+<label>New entries per day<input aria-label="New entries per day" name="maxEntriesPerDay" type="number" min="1" max="50" step="1" placeholder="Not configured"><small>Most new positions the trader may open in one trading day.</small></label>
+<label>Cooldown after a loss (hours)<input aria-label="Cooldown after a loss (hours)" name="lossCooldownHours" type="number" min="0" max="720" step="1" placeholder="Not configured"><small>After a losing trade, the same stock cannot be bought again for this long.</small></label>
+<label>Trailing stop (ATR)<input aria-label="Trailing stop (ATR)" name="trailingStopAtrMult" type="number" min="0.5" max="10" step="0.1" placeholder="Not configured"><small>Raises each stop automatically to this many ATR below the highest price since entry. Never lowers it. Needs automatic stop adjustments.</small></label>
 </div>
 <p class="risk-note">Presets set the budgets below. Customize any value to make it your own. Volatility and stop loss are estimates; gaps and slippage can exceed them. Blank optional controls remain unconfigured.</p>
 </fieldset><div class="form-grid"><div class="symbol-field">

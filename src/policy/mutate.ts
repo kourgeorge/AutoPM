@@ -38,6 +38,12 @@ export interface TradingSettingsUpdate {
   targetInvestedPct?: number;
   /** risk.minInvestedPct — percentage points of equity, e.g. 60 for 60% */
   minInvestedPct?: number;
+  /** risk.maxEntriesPerDay — new entries per trading day; null turns the cap off */
+  maxEntriesPerDay?: number | null;
+  /** risk.lossCooldownHours — hours before re-buying a symbol after a loss; null turns it off */
+  lossCooldownHours?: number | null;
+  /** risk.trailingStopAtrMult — ATR multiples below the high since entry; null turns it off */
+  trailingStopAtrMult?: number | null;
 }
 
 export type UpdateTradingSettingsResult =
@@ -114,6 +120,9 @@ export function updateTradingSettings(changes: TradingSettingsUpdate): UpdateTra
     ['maxSectorWeightPct', 'risk.maxSectorWeightPct'],
     ['targetInvestedPct', 'risk.targetInvestedPct'],
     ['minInvestedPct',    'risk.minInvestedPct'],
+    ['maxEntriesPerDay',  'risk.maxEntriesPerDay'],
+    ['lossCooldownHours', 'risk.lossCooldownHours'],
+    ['trailingStopAtrMult', 'risk.trailingStopAtrMult'],
   ];
   for (const [field, label] of riskFields) {
     const v = changes[field as keyof TradingSettingsUpdate];

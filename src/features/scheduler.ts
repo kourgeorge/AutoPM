@@ -30,6 +30,7 @@ import { publishReviewReady } from '../review/reviewReady';
 import { publishPortfolioReview } from '../review/scheduledReview';
 import { sweepStops } from '../strategy/stopOrders';
 import { sweepOrders } from '../strategy/orderExecutor';
+import { trailStops } from '../strategy/trailingStop';
 import { collectAndCompute, type TickData } from './compute';
 import { DETECTORS } from './detectors';
 import { publishTick, releaseAllLatches, type Detector, type TriggerEvent } from './eventBus';
@@ -218,6 +219,14 @@ export class FeatureScheduler {
     // critical event by the length of a broker call. `reconcileFills` swallows its own
     // errors, so this cannot cost the tick either.
     await this.maybeReconcile(data);
+
+    // After routing, so a stop breach reaches the trader before the trail touches the stop. Its
+    // own guard for the same reason as the observer above: a tick never throws out.
+    try {
+      await trailStops(data, policy);
+    } catch (err: any) {
+      logger.warn(`[Scheduler] trailing stops failed: ${err?.message ?? err}`);
+    }
 
     return events;
   }
