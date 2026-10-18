@@ -3,6 +3,7 @@ import { BrokerRejection } from './errors';
 import { alpacaTimeToMs, alpacaTrading as trading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
 import { isCryptoSymbol } from '../core/symbols';
+import { venueSession, type VenueSession } from '../collect/marketCalendar';
 
 /**
  * Alpaca's `type` strings, which happen to be our names already. The lookup exists so an
@@ -111,6 +112,7 @@ export class AlpacaBroker implements IBroker {
         time_in_force:  req.timeInForce ?? this.tifFor(req),
         limit_price:    req.limitPrice,
         stop_price:     req.type === 'stop' ? req.stopPrice : undefined,
+        extended_hours: req.extendedHours || undefined,
       });
       return { id: res.data.id };
     } catch (err: any) {
@@ -336,6 +338,12 @@ export class AlpacaBroker implements IBroker {
   async isMarketOpen(): Promise<boolean> {
     const res = await trading.get('/v2/clock');
     return res.data.is_open as boolean;
+  }
+
+  /** The clock settles regular hours (it knows halts and early closes); the calendar row places the extended session. */
+  async marketSession(): Promise<VenueSession> {
+    if (await this.isMarketOpen()) return 'regular';
+    return (await venueSession()) === 'extended' ? 'extended' : 'closed';
   }
 }
 

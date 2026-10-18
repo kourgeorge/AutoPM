@@ -43,6 +43,11 @@ export interface OrderRequest {
    * rejects a plain `stop`. `strategy/stopOrders.ts` decides that, so nothing here has to.
    */
   stopPrice?: number;
+  /**
+   * Eligible to fill in the pre-market and after-hours sessions. Venues accept it only on a
+   * whole-share limit order with day duration; this system sets it only outside regular hours.
+   */
+  extendedHours?: boolean;
 }
 
 /**
@@ -179,6 +184,8 @@ export interface IBroker {
    */
   replaceTakeProfitOrder(id: string, limitPrice: number): Promise<{ id: string }>;
   isMarketOpen(): Promise<boolean>;
+  /** Regular hours, the extended session around them (04:00–09:30 and 16:00–20:00 ET), or closed. */
+  marketSession(): Promise<import('../collect/marketCalendar').VenueSession>;
   /**
    * Recent executions, newest-last.
    *

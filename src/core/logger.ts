@@ -81,7 +81,7 @@ function summarizeResult(tool: string, raw: string): string {
       case 'get_strategy_settings':
         return `saved ${r.profile} strategy (revision ${r.version})`;
       case 'get_market_status':
-        return `market ${r.isOpen ? 'OPEN' : 'CLOSED'}, ET ${r.etTime}${r.minutesUntilChange != null ? `, ${r.minutesUntilChange}min to ${r.changeLabel}` : ''}`;
+        return `market ${r.isOpen ? 'OPEN' : r.session === 'extended' ? 'EXTENDED' : 'CLOSED'}, ET ${r.etTime}${r.minutesUntilChange != null ? `, ${r.minutesUntilChange}min to ${r.changeLabel}` : ''}`;
       case 'get_account':
         return `equity $${r.equity?.toFixed(2)}, cash $${r.cash?.toFixed(2)}, dailyPnL ${r.dailyPnL >= 0 ? '+' : ''}$${r.dailyPnL?.toFixed(2)} (${r.dailyPnLPct?.toFixed(2)}%)${r.lossLimitBreached ? ' ⚠ LOSS LIMIT' : ''}`;
       case 'get_positions':

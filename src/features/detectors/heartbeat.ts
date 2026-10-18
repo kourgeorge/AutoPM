@@ -21,10 +21,14 @@ export const heartbeatDetector: Detector = {
     const holding = a.positionCount > 0;
     const symbols = Object.keys(data.positions);
 
-    // The trader sets no timer of its own, so while the market is open this beat is what
-    // wakes it: every 15 minutes holding, hourly flat. Closed, nothing can move a position,
+    // The trader sets no timer of its own, so while orders can trade this beat is what wakes
+    // it: every 15 minutes holding, hourly flat. That includes pre-market and after-hours,
+    // where entries and exits go out as extended-hours limits. 20:00–04:00 nothing can trade,
     // so the beat is context only — ungated it meant 96 unactionable cycles a night.
-    const open = data.session === 'open';
+    //
+    // Clock-only like the session itself: a holiday reads as tradable here, and the order
+    // guard (which asks the venue calendar) is what refuses.
+    const open = data.session !== 'closed';
     // Below the profile's investment target there is work to do even with nothing held, so
     // the beat runs at the holding cadence. Flat used to mean hourly — the less it had
     // invested, the less often it looked for something to buy.

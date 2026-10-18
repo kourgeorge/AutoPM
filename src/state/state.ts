@@ -44,7 +44,9 @@ export interface Order {
   decidedBy: 'human' | 'timeout' | null;
   decidedAt: number | null;
   rejectReason: string | null;
-  result: { brokerOrderId?: string; qty?: number; filledQty?: number; filledPrice?: number; error?: string } | null;
+  result: { brokerOrderId?: string; qty?: number; filledQty?: number; filledPrice?: number; error?: string;
+    /** An extended-hours limit, and when it reached the venue: it is cancelled if it rests past its time limit. */
+    extendedHours?: boolean; submittedAt?: number } | null;
   /** Hashes of (request + intent) that resolve to this action, so a replayed request reuses it. */
   dedupKeys?: string[];
   /** Each status change, oldest first, with what changed at that step. */

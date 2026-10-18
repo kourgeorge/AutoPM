@@ -101,7 +101,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked order IDs. Read get_orders for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
   {
     name: 'get_market_status',
-    description: 'Get current market status: open/closed, ET time, and minutes until next open or close.',
+    description: 'Get current market status: session (regular, extended or closed), ET time, and minutes until the next regular open or close. Entries and exits can trade in the extended session as well as regular hours.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -460,7 +460,10 @@ export const executeTraderTool = (name: string, input: Record<string, unknown>) 
 // ── Implementations ───────────────────────────────────────────────────────────
 
 export interface MarketStatusSnapshot {
+  /** Regular session only — what `isOpen` has always meant. */
   isOpen: boolean;
+  /** Where orders can trade now: `extended` is 04:00–09:30 / 16:00–20:00 ET, limit orders only. */
+  session: 'regular' | 'extended' | 'closed';
   etTime: string;
   utcTime: string;
   isWeekend: boolean;
@@ -473,7 +476,8 @@ export interface MarketStatusSnapshot {
  * derive market-open/close timing differently.
  */
 export async function getMarketStatusSnapshot(): Promise<MarketStatusSnapshot> {
-  const isOpen = await broker.isMarketOpen();
+  const session = await broker.marketSession();
+  const isOpen = session === 'regular';
   const { day, hours, minutes, timeStr } = etNow();
   const isWeekend = day === 0 || day === 6;
   const etMinutes = hours * 60 + minutes;
@@ -492,6 +496,7 @@ export async function getMarketStatusSnapshot(): Promise<MarketStatusSnapshot> {
 
   return {
     isOpen,
+    session,
     etTime: timeStr,
     utcTime: new Date().toISOString(),
     isWeekend,

@@ -30,6 +30,16 @@ export interface TradingSession {
   date: string;
   /** ET wall time the session ends, "HH:MM" — "13:00" on a half day. */
   close: string;
+  /** ET wall time the regular session opens, "HH:MM". */
+  open?: string;
+  /** ET wall times of the extended session around it, "HH:MM" — "04:00" and "20:00", or "17:00" on a half day. */
+  extendedOpen?: string;
+  extendedClose?: string;
+}
+
+/** Alpaca writes the extended bounds as "0400"; everything else here is "HH:MM". */
+function hhmm(v: unknown): string | undefined {
+  return typeof v === 'string' && /^\d{4}$/.test(v) ? `${v.slice(0, 2)}:${v.slice(2)}` : undefined;
 }
 
 /**
@@ -51,7 +61,9 @@ function fetchSessions(todayEt: string): Promise<TradingSession[]> {
     .then((res) => {
       const sessions = (res.data ?? [])
         .filter((d) => typeof d?.date === 'string' && typeof d?.close === 'string')
-        .map((d) => ({ date: d.date as string, close: d.close as string }))
+        .map((d) => ({ date: d.date as string, close: d.close as string,
+          open: typeof d.open === 'string' ? d.open as string : undefined,
+          extendedOpen: hhmm(d.session_open), extendedClose: hhmm(d.session_close) }))
         // Alpaca answers in ascending date order; sorting anyway is what lets the scan
         // below take the last element as the newest session rather than assume it.
         .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -101,6 +113,24 @@ export async function lastCompletedSession(now: Date = new Date()): Promise<Trad
   throw new Error(
     `no session closed on or before ${todayEt} ${timeStr} ET within the last ${LOOKBACK_DAYS} days`,
   );
+}
+
+export type VenueSession = 'regular' | 'extended' | 'closed';
+
+/**
+ * Which session the venue is in right now, from today's calendar row — so a holiday is closed
+ * and the Friday after Thanksgiving ends its extended session at 17:00, not 20:00.
+ *
+ * THROWS when the calendar is unreachable; an order path must refuse rather than guess.
+ */
+export async function venueSession(now: Date = new Date()): Promise<VenueSession> {
+  const list = await sessions(now);
+  const { date: todayEt, timeStr } = etNow(now);
+  const today = list.find(s => s.date === todayEt);
+  if (!today) return 'closed';
+  if (timeStr >= (today.open ?? '09:30') && timeStr < today.close) return 'regular';
+  if (today.extendedOpen && today.extendedClose && timeStr >= today.extendedOpen && timeStr < today.extendedClose) return 'extended';
+  return 'closed';
 }
 
 /** Test/probe seam. Drops the cache so a probe can exercise the fetch more than once. */

@@ -353,3 +353,31 @@ export async function collectPrices(
 
   return result;
 }
+
+/** The last print an extended-hours limit is priced from, with the clock it really carries. */
+export interface ExtendedHoursPrint {
+  price: number;
+  /** When the trade happened — never the fetch time `effectiveAsOf` substitutes off-hours. */
+  tradedAt: string;
+  ageMs: number;
+}
+
+/**
+ * The last actual TRADE, for pricing an order outside regular hours.
+ *
+ * Not `collectPrices`: off-hours that path restamps every price with the fetch time so the
+ * freshness gate stays quiet overnight, which is right for watching and wrong for trading — a
+ * 16:00 close would read as fresh at 19:00. Not the book either: the IEX book empties after the
+ * close (measured 2026-10-16: AAPL 328.76 / 363.43, a 10% spread around a 343 tape), so its
+ * midpoint is not a price. Null when there is no readable print; the caller decides how old is
+ * too old.
+ */
+export async function lastExtendedHoursPrint(symbol: string, now = Date.now()): Promise<ExtendedHoursPrint | null> {
+  const res = await alpacaData.get<Record<string, any>>('/v2/stocks/snapshots', { params: { symbols: symbol, feed: 'iex' } });
+  const snap = res.data?.[symbol] ?? Object.values(res.data ?? {})[0];
+  const trade = tradeCandidate(snap);
+  if (!trade) return null;
+  const at = alpacaTimeToMs(trade.asOf);
+  if (!Number.isFinite(at)) return null;
+  return { price: trade.price, tradedAt: new Date(at).toISOString(), ageMs: now - at };
+}

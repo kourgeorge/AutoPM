@@ -444,7 +444,9 @@ async function buildAccountStatus(): Promise<string> {
     const untilClause = market.minutesUntilChange != null
       ? ` ${market.minutesUntilChange}m to ${market.changeLabel}.`
       : ` Next change: ${market.changeLabel}.`;
-    lines.push(`Market ${market.isOpen ? 'OPEN' : 'CLOSED'} — ${market.etTime} ET.${untilClause}`);
+    const label = market.session === 'regular' ? 'OPEN'
+      : market.session === 'extended' ? 'EXTENDED HOURS (entries and exits allowed; limit orders priced from the last trade)' : 'CLOSED';
+    lines.push(`Market ${label} — ${market.etTime} ET.${untilClause}`);
   } catch (err: any) {
     lines.push(`Market clock unavailable this cycle (${err.message}). Retry with get_market_status.`);
   }

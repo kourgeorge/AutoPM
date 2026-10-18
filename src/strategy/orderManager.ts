@@ -9,7 +9,8 @@ import { assertExecutionOwner } from '../core/runtime';
  */
 
 import { broker } from '../broker';
-import { collectPrices } from '../collect/priceSource';
+import { collectPrices, lastExtendedHoursPrint } from '../collect/priceSource';
+import type { VenueSession } from '../collect/marketCalendar';
 import { canonicalSymbol } from '../core/symbols';
 import type { OpenOrder, Position } from '../broker/IBroker';
 import { collectBars, DEFAULT_COLLECT_REQUEST, isPresent, type Maybe } from '../collect';
@@ -35,6 +36,49 @@ import { config } from '../core/config';
 import { hasRiskProfile } from '../policy/riskProfiles';
 import { assessEntryRisk, entryLimitPrice, type RiskAssessment } from './riskBudget';
 import { collectRiskInputs } from './riskData';
+
+/**
+ * Outside regular hours an order is priced from the last trade, and only a recent one. The IEX
+ * tape after the close can go minutes between prints on a liquid name and longer on others; an
+ * order priced from a print older than this is a guess at a market that may have moved.
+ */
+const EXTENDED_MAX_PRINT_AGE_MS = 5 * 60_000;
+/**
+ * How far past the last print an extended-hours limit may reach: 0.5% above it to buy, 0.5%
+ * below it to sell. Wider than the regular-hours 0.2% because the after-hours book is thin; a
+ * limit that cannot fill in thin trading is the safe failure, a market order is not allowed.
+ */
+const EXTENDED_LIMIT_SLIPPAGE = 0.005;
+/**
+ * How long an extended-hours limit may rest before it is cancelled. Regular hours use IOC, which
+ * venues refuse off-hours, so this is the bound that stands in for it: an order that has not
+ * filled in this long is cancelled, and one account-changing order at a time means a resting
+ * one would otherwise block every other entry and exit behind it.
+ */
+export const EXTENDED_ORDER_TTL_MS = 2 * 60_000;
+
+/** The session an order may trade in, or a refusal: weekends, holidays and 20:00–04:00 ET are closed. */
+async function tradableSession(kind: 'entry' | 'exit'): Promise<Exclude<VenueSession, 'closed'>> {
+  let session: VenueSession;
+  try { session = await broker.marketSession(); }
+  catch (err: any) { reject('market_closed', `Cannot read the market calendar (${err?.message ?? err}); ${kind === 'entry' ? 'entry' : 'exit'} refused rather than guessed`); }
+  if (session === 'closed') {
+    reject('market_closed', kind === 'entry'
+      ? 'Market is closed (trading runs 04:00–20:00 ET on trading days); entries wait for the next session'
+      : 'Market is closed (trading runs 04:00–20:00 ET on trading days); exit deferred to the next session, existing protection remains');
+  }
+  return session;
+}
+
+/** A fresh extended-hours print for `symbol`, or a refusal naming how stale the last one is. */
+async function extendedPrint(symbol: string): Promise<number> {
+  const print = await lastExtendedHoursPrint(symbol).catch(() => null);
+  if (!print) reject('quote_unavailable', `No readable last trade for ${symbol}; extended-hours orders are priced from a real trade`);
+  if (print.ageMs > EXTENDED_MAX_PRINT_AGE_MS) {
+    reject('quote_unavailable', `${symbol} last traded ${Math.round(print.ageMs / 60_000)} min ago at $${print.price} (${print.tradedAt}); extended-hours orders need a trade within ${EXTENDED_MAX_PRINT_AGE_MS / 60_000} min`);
+  }
+  return print.price;
+}
 
 /**
  * A refusal by this system's own rules, as opposed to the venue's (`BrokerRejection`).
@@ -332,9 +376,11 @@ export interface ValidatedEntry {
   regimeQty: number;
   atr: number;
   reason: string;
+  /** Extended-hours orders rest as day limits with `extended_hours`; regular-session ones are IOC. */
+  session?: Exclude<VenueSession, 'closed'>;
 }
 
-export type SubmittedEntry = { status: 'submitted'; brokerOrderId: string; qty: number };
+export type SubmittedEntry = { status: 'submitted'; brokerOrderId: string; qty: number; extendedHours?: boolean };
 
 export type QueuedOrder = { status: import('../state/state').OrderStatus; orderId: string; automatic: boolean };
 
@@ -375,14 +421,22 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   if (!getState().accountId) reject('account_unbound', 'Verify the brokerage account before trading');
   if (!getPolicy().strategy.watchlist.some(s => canonicalSymbol(s) === canonicalSymbol(symbol))) reject('outside_mandate', 'Symbol is outside the approved trading universe');
   if (isCryptoSymbol(symbol) || !Number.isInteger(qty)) reject('unsupported_asset', 'This worker supports long-only whole-share equities with broker protection');
-  if (!(await broker.isMarketOpen())) reject('market_closed', 'Entries wait for the regular market session');
+  const session = await tradableSession('entry');
   if (getState().dailyLossHalted) reject('daily_loss_breached', 'Entries are halted for this trading day');
-  const quotes = await collectPrices([symbol], getPolicy().triggers.maxQuoteAgeMs);
-  const quote = quotes.get(symbol);
-  if (!quote || !isPresent(quote) || quote.stale) reject('quote_unavailable', 'A fresh price is required before entry');
+  let quote: { value: number };
+  if (session === 'extended') {
+    quote = { value: await extendedPrint(symbol) };
+  } else {
+    const quotes = await collectPrices([symbol], getPolicy().triggers.maxQuoteAgeMs);
+    const observed = quotes.get(symbol);
+    if (!observed || !isPresent(observed) || observed.stale) reject('quote_unavailable', 'A fresh price is required before entry');
+    quote = observed;
+  }
   if (Math.abs(quote.value / price - 1) > 0.01) reject('price_changed', 'Price moved more than 1%; request a fresh action');
   // A limit order uses this ceiling, so the sizing checks bound actual entry notional.
-  price = entryLimitPrice(price, quote.value);
+  price = session === 'extended'
+    ? Math.floor(Math.min(price * 1.01, quote.value * (1 + EXTENDED_LIMIT_SLIPPAGE)) * 100) / 100
+    : entryLimitPrice(price, quote.value);
   if (stopLoss >= quote.value || takeProfit <= price) reject('invalid_levels', 'Stop/target must bracket the current price');
   if (!(atr > 0) || quote.value - stopLoss > atr * getPolicy().immutable.stopLossAtrMultCeiling) reject('stop_too_wide', 'Stop exceeds the platform ATR distance ceiling');
   const brokerOrders = await broker.getOpenOrders();
@@ -505,14 +559,16 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   }
   if (Date.now() - validationStarted > getPolicy().triggers.maxQuoteAgeMs) reject('quote_expired', 'Price validation expired while checking the trade; request a fresh action');
 
-  return { symbol, price, stopLoss, takeProfit, regimeQty, atr, reason: signal.reason, riskAssessment };
+  return { symbol, price, stopLoss, takeProfit, regimeQty, atr, reason: signal.reason, riskAssessment, session };
 }
 
 /** Called only by the durable executor after its claim has committed. */
 export async function actEntry(v: ValidatedEntry, clientOrderId?: string): Promise<SubmittedEntry> {
+  const extended = v.session === 'extended';
   const { id } = await guardedBroker().placeOrder({ symbol: v.symbol, side: 'buy', qty: v.regimeQty,
-    type: 'limit', limitPrice: v.price, timeInForce: 'ioc', clientOrderId });
-  return { status: 'submitted', brokerOrderId: id, qty: v.regimeQty };
+    type: 'limit', limitPrice: v.price, timeInForce: extended ? 'day' : 'ioc', clientOrderId,
+    ...(extended ? { extendedHours: true } : {}) });
+  return { status: 'submitted', brokerOrderId: id, qty: v.regimeQty, ...(extended ? { extendedHours: true } : {}) };
 }
 
 export async function enterPosition(signal: SignalResult, qty: number, eventId?: string): Promise<QueuedOrder> {
@@ -601,9 +657,13 @@ export interface ValidatedExit {
   sellQty: number;
   price: number | null;
   pnl: number | null;
+  /** Extended hours sells as a limit under the last print; venues refuse market orders off-hours. */
+  session?: Exclude<VenueSession, 'closed'>;
+  /** Set only in extended hours. */
+  limitPrice?: number;
 }
 
-export type ExitedPosition = { status: 'submitted'; brokerOrderId: string; cancelled: string[]; qty: number };
+export type ExitedPosition = { status: 'submitted'; brokerOrderId: string; cancelled: string[]; qty: number; extendedHours?: boolean };
 
 
 export async function validateExit(symbol: string, qty?: number): Promise<ValidatedExit> {
@@ -633,14 +693,22 @@ export async function validateExit(symbol: string, qty?: number): Promise<Valida
   if (!getState().accountId) reject('account_unbound', 'Verify the brokerage account before trading');
   if (!getPositionSnapshot(symbol)) reject('unmanaged_position', 'Adopt this position explicitly before the bot manages it');
   if (pos.qty <= 0) reject('unsupported_position', 'Short positions cannot be managed by this worker');
-  if (!(await broker.isMarketOpen())) reject('market_closed', 'Exit deferred until the market opens; existing protection remains');
+  const session = await tradableSession('exit');
   const sellQty = qty ?? pos.qty;
+  if (session === 'extended' && !Number.isInteger(sellQty)) reject('unsupported_asset', 'Extended-hours sells must be whole shares');
+  // Checked here, before approval, and priced again at submission: the stop is cancelled only
+  // after this has shown there is a market to sell into.
+  const limitPrice = session === 'extended' ? extendedSellLimit(await extendedPrint(symbol)) : undefined;
 
   // Below the `no_position` guard, so a phantom exit never wakes anyone. The operator sees
   // the venue's own qty and unrealized P&L — the numbers that make the decision — not the
   // model's account of them.
   const price = pos.marketValue != null && pos.qty !== 0 ? pos.marketValue / pos.qty : null;
-  return { pos, sellQty, price, pnl: pos.unrealizedPnL ?? null };
+  return { pos, sellQty, price, pnl: pos.unrealizedPnL ?? null, session, ...(limitPrice != null ? { limitPrice } : {}) };
+}
+
+function extendedSellLimit(print: number): number {
+  return Math.ceil(print * (1 - EXTENDED_LIMIT_SLIPPAGE) * 100) / 100;
 }
 
 /**
@@ -710,15 +778,24 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
       const heldNow = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
       if (!heldNow || heldNow.qty < sellQty) reject('position_changed', 'Position changed during cancellation; no sell submitted');
       if (getState().paused) reject('paused_before_submission', 'Trading paused during cancellation; no sell was submitted');
-      ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'market', clientOrderId }));
+      if (v.session === 'extended') {
+        // Re-priced from a print taken AFTER the cancellations, so the limit reflects the market
+        // the sell actually meets. No fresh print means no sell; the executor reports the
+        // refusal and the protection sweep re-arms the stop it just cancelled.
+        const limitPrice = extendedSellLimit(await extendedPrint(symbol));
+        ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'limit', limitPrice,
+          timeInForce: 'day', extendedHours: true, clientOrderId }));
+      } else {
+        ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'market', clientOrderId }));
+      }
     } catch (err) {
       // Preserve the action as unknown in the executor. Reconciliation must establish
       // whether a sell exists before the stop sweep can reserve these shares again.
       throw err;
     }
 
-    logger.trade(`Exit order ${id} submitted for ${symbol}`);
-    return { status: 'submitted', brokerOrderId: id, cancelled, qty: sellQty };
+    logger.trade(`Exit order ${id} submitted for ${symbol}${v.session === 'extended' ? ' (extended hours limit)' : ''}`);
+    return { status: 'submitted', brokerOrderId: id, cancelled, qty: sellQty, ...(v.session === 'extended' ? { extendedHours: true } : {}) };
   });
 }
 
