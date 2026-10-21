@@ -64,6 +64,7 @@ interface Ctx {
 
 interface Route {
   method: string;
+  path: string;
   pattern: RegExp;
   keys: string[];
   handler: Handler;
@@ -99,6 +100,7 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
   recordEquity();
   const unsubscribeEquity = deps.ui.subscribeTicks(recordEquity);
   const routes = buildRoutes(deps, equityHistory);
+  liveRoutes = routes;
   const streams = new Set<http.ServerResponse>();
 
   const server = http.createServer((req, res) => {
@@ -166,11 +168,70 @@ export function startApiServer(deps: ApiServerDeps): ApiServer {
     close: () =>
       new Promise<void>((resolve) => {
         unsubscribeEquity();
+        if (liveRoutes === routes) liveRoutes = null;
         for (const s of streams) s.end();
         server.close(() => resolve());
         server.closeIdleConnections();
       }),
   };
+}
+
+// ── In-process reads for the assistant ──────────────────────────────────────
+
+/** The running server's routes, so the account assistant can read anything the dashboard can. */
+let liveRoutes: Route[] | null = null;
+
+/** One line per readable route, for the assistant's endpoint list. Unlisted GET routes are still readable. */
+const ROUTE_DOCS: Record<string, string> = {
+  '/api/status': 'Service health, AI calls used today and the daily limit, trader/assistant/researcher state, market session, account, portfolio totals.',
+  '/api/terminal': 'What the terminal client shows: snapshot, model usage, last tick, pending orders, recent feed. ?after=SEQ for newer feed lines.',
+  '/api/positions': 'Broker positions from the last tick, each marked managed or not.',
+  '/api/positions/:symbol/review': 'Saved context for one symbol: reviews, research, decisions.',
+  '/api/evidence/:id': 'One saved observation. ?offset=&limit= pages the data.',
+  '/api/tool-receipts/:id': 'One saved tool call with its input and paged result.',
+  '/api/tool-output/:id': 'One saved tool call, whole input and output.',
+  '/api/source-text/:id': 'Saved original text of a research source, paged.',
+  '/api/agent-requests/:id': 'One agent request with its saved details.',
+  '/api/price-history': 'Price bars. ?symbol=AAPL&timeframe=5Min|15Min|1Hour|1Day.',
+  '/api/equity-history': 'Account equity points recorded since the engine started.',
+  '/api/watchlist': 'Watchlist rows from the last tick.',
+  '/api/orders': "The agent's orders. ?status=open|all.",
+  '/api/activity-history': 'Searchable history. ?type=all|decision|fill|event&q=TEXT&offset=&limit= (max 100).',
+  '/api/events': 'Pending events and recent activity.',
+  '/api/llm-usage': 'AI model usage history: calls, tokens and cost per day, per agent and per model. ?days=N.',
+  '/api/llm-usage/day': 'AI model usage for one day, call by call. ?day=YYYY-MM-DD.',
+  '/api/scorecard': 'Closed round-trip statistics. ?days=N.',
+  '/api/feed': 'The activity feed. ?tail=N for the newest N, or ?after=SEQ&limit=N.',
+  '/api/commands': 'Slash commands the operator can run.',
+  '/api/agent-commands': 'Every agent request (trader, assistant, researcher) with status and result.',
+  '/api/lessons': 'Saved lessons, active and inactive.',
+  '/api/settings/ai': 'AI daily call limit and how much of it is used.',
+  '/api/strategy': 'The full saved strategy settings and playbook, with its hash.',
+  '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
+  '/api/broker-orders': 'Orders resting at the broker from the last tick.',
+};
+
+/** The readable routes, with what each returns. The live stream is left out: it never ends. */
+export function appEndpoints(): { available: boolean; endpoints: Array<{ path: string; returns: string }> } {
+  if (!liveRoutes) return { available: false, endpoints: [] };
+  const endpoints = liveRoutes.filter(r => r.method === 'GET' && r.path !== '/api/stream')
+    .map(r => ({ path: r.path, returns: ROUTE_DOCS[r.path] ?? 'No description.' }));
+  return { available: true, endpoints };
+}
+
+/** Run one GET route in-process, exactly as the dashboard would get it. */
+export async function readAppEndpoint(pathAndQuery: string): Promise<unknown> {
+  if (!liveRoutes) return { ok: false, error: 'The engine API is not running in this mode, so dashboard data cannot be read.' };
+  const url = new URL(pathAndQuery.startsWith('/') ? pathAndQuery : '/' + pathAndQuery, 'http://localhost');
+  if (url.pathname === '/api/stream') return { ok: false, error: '/api/stream is a live stream; read /api/feed instead.' };
+  const match = matchRoute(liveRoutes, 'GET', url.pathname);
+  if (!match) return { ok: false, error: `No route GET ${url.pathname}. Read get_app_endpoints for the list.` };
+  try {
+    return await match.route.handler({ req: undefined as never, res: undefined as never, url, params: match.params,
+      body: async () => { throw new HttpError(400, 'GET routes take no body'); } });
+  } catch (err: any) {
+    return { ok: false, status: err instanceof HttpError ? err.status : 500, error: err?.message ?? String(err) };
+  }
 }
 
 // ── Routes ───────────────────────────────────────────────────────────────────
@@ -187,7 +248,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
         return '([^/]+)';
       }) + '$',
     );
-    routes.push({ method, pattern, keys, handler });
+    routes.push({ method, path, pattern, keys, handler });
   };
 
   // Read-only projection for the terminal client. The client never opens account storage.
