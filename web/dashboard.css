@@ -307,17 +307,6 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   #live-feed { font-size: 10px; }
   .activity-entry { grid-template-columns: 8ch 9ch 9ch minmax(0, 1fr); gap: 6px; }
 }
-#agent-now .pane-title { margin-bottom: 5px; }
-.current-agent { padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
-.current-agent-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; }
-.current-agent-head strong { font-weight: 550; }
-.agent-state { font-size: 11px; color: var(--ink-3); }
-.agent-state::before { content: '●'; font-size: 8px; margin-right: 6px; }
-.agent-state.thinking { color: var(--up); }
-.agent-state.idle, .agent-state.sleeping { color: var(--ink-2); }
-.agent-state.awaiting { color: var(--warn); }.agent-state.error { color: var(--down); }
-.current-agent p { font-size: 12px; line-height: 1.6; margin: 7px 0 0; overflow-wrap: anywhere; }
-.runtime-footer { display: grid; gap: 5px; padding-top: 12px; font-size: 11px; color: var(--ink-3); }
 .live-aside #chart .chart-caption strong { font-size: 22px; }
 .live-aside #equity-chart { height: 85px; }
 @media (max-width: 1100px) {
@@ -332,13 +321,10 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   .metrics { padding: 0; }
   .live-main, .live-aside { display: contents; }
   #holdings { order: 1; }
-  #agent-now { order: 2; }
   #decisions { order: 3; }
   #live-activity { order: 4; }
   #chart { order: 6; }
   .strategy-context { order: 7; }
-  #current-agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 18px; }
-  .runtime-footer { display: flex; justify-content: space-between; flex-wrap: wrap; }
 }
 @media (max-width: 600px) {
   .sidebar { gap: 8px; padding: 12px 10px; }
@@ -355,7 +341,6 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   #holdings .pane-title { display: block; }
   #holdings .pane-title > span { display: block; text-align: left; max-width: none; margin-top: 5px; }
   #live-feed { height: 290px; }
-  #current-agents { grid-template-columns: 1fr; gap: 0; }
 }
 
 /* TUI proportions: conversation on the left, account data on the right. */
@@ -374,15 +359,6 @@ main { padding: 10px 14px 16px; }
 .live-view .panel { padding: 13px; border-radius: 9px; }
 .live-view .pane-title { margin-bottom: 10px; }
 .live-view .pane-title h2, #holdings h2 { font-size: 14px; }
-#agent-now { grid-column: 1 / -1; display: grid; grid-template-columns: 120px minmax(0, 1fr) 160px; align-items: center; gap: 18px; }
-#agent-now .pane-title { display: block; margin: 0; }
-#agent-now .pane-title > span { display: block; margin-top: 4px; font-size: 10px; }
-#current-agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 20px; }
-.current-agent { padding: 0; border: 0; min-width: 0; }
-.current-agent-head { font-size: 12px; gap: 6px; }
-.agent-state { font-size: 10px; }
-.current-agent p { margin-top: 3px; font-size: 11px; }
-.runtime-footer { padding: 0 0 0 16px; border-left: 1px solid var(--line); font-size: 10px; }
 .live-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; height: var(--live-workspace-height); }
 #holdings { flex: none; }
 #holdings .pane-title > span { max-width: 260px; font-size: 10px; }
@@ -424,8 +400,6 @@ main { padding: 10px 14px 16px; }
 .live-secondary #equity-chart { height: 85px; }
 @media (max-width: 1100px) {
   .live-view { grid-template-columns: minmax(0, 11fr) minmax(320px, 9fr); }
-  #agent-now { grid-template-columns: 95px minmax(0, 1fr); gap: 12px; }
-  .runtime-footer { grid-column: 1 / -1; display: flex; gap: 18px; padding: 7px 0 0; border: 0; border-top: 1px solid var(--line-soft); }
   #holdings .pane-title { display: block; }
   #holdings .pane-title > span { display: block; max-width: none; text-align: left; margin-top: 4px; }
 }
@@ -435,7 +409,6 @@ main { padding: 10px 14px 16px; }
   .metrics { padding: 0; }
   .metrics > div { padding: 9px 12px; }
   .metrics strong { font-size: 20px; }
-  #agent-now { order: 0; grid-column: auto; }
   .live-main { display: contents; }
   #holdings { order: 1; }
   .live-view > .chat { order: 2; height: 480px; }
@@ -448,13 +421,6 @@ main { padding: 10px 14px 16px; }
 }
 @media (max-width: 600px) {
   .topbar { height: 44px; }
-  #agent-now { grid-template-columns: 1fr; gap: 9px; }
-  #agent-now .pane-title { display: flex; margin: 0; }
-  #agent-now .pane-title > span { margin: 0; }
-  #current-agents { gap: 14px; }
-  .current-agent-head { display: block; }
-  .agent-state { display: block; margin-top: 3px; }
-  .runtime-footer { font-size: 9px; gap: 10px; padding-top: 7px; }
   .workspace-intro h1 { font-size: 19px; }
   .metrics strong { font-size: 19px; }
   #holdings .table-wrap { max-height: 165px; }
@@ -497,18 +463,6 @@ main { padding: 10px 14px 16px; }
 .live-statusline .metrics span { display: inline; font-size: 11px; }
 .live-statusline .metrics strong, .live-statusline .metrics #trading { display: inline; font-size: 13px; line-height: 1.4; font-weight: 550; letter-spacing: 0; margin: 0; padding: 0; }
 .live-statusline .metrics small, .live-statusline .metrics > div:last-child > span { display: none; }
-.live-statusline #agent-now { display: flex; flex: none; align-items: center; gap: 14px; padding: 0; border: 0; border-radius: 0; background: none; }
-.live-statusline #agent-now .pane-title { order: 3; display: block; margin: 0; }
-.live-statusline #agent-now h2 { display: none; }
-.live-statusline #agent-now #tick-age { display: inline; margin: 0; font-size: 11px; }
-.live-statusline #current-agents { display: flex; gap: 14px; }
-.live-statusline .current-agent { flex: none; padding: 0; }
-.live-statusline .current-agent-head { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 5px; font-size: 11px; }
-.live-statusline .current-agent p { display: none; }
-.live-statusline .agent-state { display: inline; margin: 0; font-size: 11px; }
-.live-statusline .agent-state::before { display: none; }
-.live-statusline .runtime-footer { display: flex; flex: none; padding: 0; border: 0; font-size: 11px; }
-.live-statusline #buying-power { display: none; }
 
 /* Technical character comes from data typography and compact geometry. */
 .brand { font-family: var(--font-mono); font-size: 20px; letter-spacing: -1px; }
@@ -535,7 +489,7 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .starter-grid button { border-radius: 6px; }
 .live-statusline { padding: 8px 10px; gap: 12px; }
 .live-statusline .metrics strong, .live-statusline .metrics #trading { font-size: 12px; }
-.live-statusline .metrics, .live-statusline #agent-now, .live-statusline #current-agents { gap: 12px; }
+.live-statusline .metrics { gap: 12px; }
 @media (min-width: 801px) {
   .live-view { grid-template-columns: minmax(0, 1.45fr) minmax(340px, 1fr); }
   .live-main { overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
@@ -572,7 +526,8 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .history-panel h1 { font-size: 21px; margin: 0; }
 .history-panel .pane-title p { font-size: 13px; margin-bottom: 0; }
 .history-totals { color: var(--ink-2); font-size: 13px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
-.history-filters { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; }
+.history-filters { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+#history-status:empty { display: none; }
 .history-filters label { font-size: 12px; }
 .history-search { flex: 1; min-width: 200px; }
 #history-status { font-size: 12px; color: var(--ink-3); }
@@ -595,7 +550,6 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
   .history-filters { gap: 10px; }.history-filters label { width: 100%; }.history-search { min-width: 0; }
 }
 
-.live-statusline .agent-tokens { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* Equity history shares the account indicators panel. */
 #account-summary { flex: none; }
@@ -633,26 +587,12 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 
 /* Delimited status groups stay readable as the viewport narrows. */
 .live-statusline { padding: 10px 14px; overflow: visible; white-space: normal; }
-.live-statusline #agent-now { display: flex; flex-wrap: wrap; flex: 1; gap: 12px 0; min-width: 0; }
-.live-statusline #agent-now .pane-title { order: 0; display: flex; align-items: center; gap: 12px; margin: 0; padding-right: 18px; }
 .live-statusline #market-session { font-size: 11px; border: 0; padding: 0; background: none; }
-.live-statusline #agent-now #tick-age { padding-left: 12px; border-left: 1px solid var(--line); }
-.live-statusline #current-agents { display: contents; }
-.live-statusline .current-agent { padding: 0 18px; border-left: 1px solid var(--line); }
-.live-statusline .current-agent-head { gap: 10px; }
-.live-statusline .agent-tokens { margin-left: 4px; color: var(--ink-3); }
-.live-statusline .runtime-footer { padding-left: 18px; border-left: 1px solid var(--line); }
 .record-links { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 12px 0; }
 .record-links button { white-space: normal; overflow-wrap: anywhere; text-align: left; }
 #lesson-list .history-row-reason { max-width: 520px; }
 @media (max-width: 800px) {
   .live-statusline { padding: 10px 12px; }
-  .live-statusline #agent-now { display: grid; grid-template-columns: minmax(0,1fr); gap: 0; }
-  .live-statusline #agent-now .pane-title { padding: 0 0 9px; }
-  .live-statusline .current-agent { padding: 9px 0; border: 0; border-top: 1px solid var(--line-soft); }
-  .live-statusline .current-agent-head { flex-wrap: wrap; gap: 6px 10px; }
-  .live-statusline .runtime-footer { padding: 9px 0 0; border: 0; border-top: 1px solid var(--line-soft); }
-  .live-statusline .agent-tokens { margin-left: auto; }
   #lesson-list .history-row-reason { max-width: 240px; }
 }
 
@@ -766,15 +706,9 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 #status-panel #market-session.open { color: var(--up); }
 #status-panel #market-session.open::before { display: inline-block; animation: market-blink 1.8s ease-in-out infinite; }
 @keyframes market-blink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
-#status-panel .status-panel-heading, #status-panel #agent-now, #status-panel #current-agents { display: contents; }
+#status-panel .status-panel-heading { display: contents; }
 #status-panel .status-panel-heading h2 { flex: none; padding-right: 12px; font-size: 11px; }
 #status-panel #agent-model { flex: none; padding: 0 12px; border-left: 1px solid var(--line); font-size: 12px; }
-#status-panel #agent-now .pane-title { display: flex; flex: none; flex-wrap: nowrap; order: 0; padding: 0 12px; border-left: 1px solid var(--line); gap: 10px; }
-#status-panel #agent-now #tick-age { padding-left: 0; border-left: 0; }
-#status-panel .current-agent { flex: none; padding: 0 12px; border: 0; border-left: 1px solid var(--line); }
-#status-panel .current-agent-head { display: flex; flex-wrap: nowrap; gap: 8px; font-size: 12px; }
-#status-panel .agent-tokens { margin-left: 0; font: 11px/1.5 var(--font-mono); }
-#status-panel .runtime-footer { flex: none; padding: 0 12px; border: 0; border-left: 1px solid var(--line); }
 
 /* Numeric chart events use the available conversation width. */
 .chat .msg.chart { width: 100%; max-width: 100%; min-width: 0; }
@@ -823,7 +757,6 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .exposure { font-size: 12px; line-height: 1.6; }
 .price-grid { stroke: var(--line-soft); }
 .price-trend, #equity-chart .line { stroke-width: 2.25; }
-.live-statusline .agent-state, .live-statusline #agent-now #tick-age, .live-statusline .runtime-footer { font-size: 12px; }
 #status-panel .status-readout:focus-visible { outline-offset: -2px; }
 #holdings .pane-title > span, #watchlist-status { font-size: 12px; }
 #holdings th, #watchlist-panel th, th { font-size: 11px; text-transform: none; letter-spacing: .1px; background: var(--surface-2); }
@@ -1142,31 +1075,6 @@ details[open] > summary > .json-hint { display: none; }
 #prompt-text { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
 
 /* Agents panel: one row per agent (icon, name, current activity, state pill); a row opens for detail and tokens. */
-.live-main #agent-now { flex: none; display: block; padding: 0; overflow: hidden; }
-.live-main #agent-now .pane-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
-.live-main #agent-now h2 { font-size: 11px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; color: var(--ink-3); }
-.live-main #agent-now #tick-age { font-size: 11px; color: var(--ink-3); }
-.live-main #current-agents { display: block; }
-.live-main .current-agent { padding: 0; border: 0; border-bottom: 1px solid var(--line-soft); }
-.live-main .current-agent-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; list-style: none; cursor: pointer; }
-.live-main .current-agent-head::-webkit-details-marker { display: none; }
-.live-main .current-agent-head::after { content: ''; flex: none; width: 6px; height: 6px; margin: 0 2px 3px 4px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s ease; }
-.live-main .current-agent[open] > .current-agent-head::after { transform: rotate(-135deg); margin-bottom: -3px; }
-.live-main .current-agent-head:hover { background: var(--surface-2); }
-.agent-icon { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
-.agent-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.agent-icon.trader { background: var(--trader-soft); color: var(--trader-ink); }
-.agent-icon.researcher { background: var(--warn-soft); color: var(--warn); }
-.agent-label { display: grid; flex: 1; min-width: 0; gap: 2px; }
-.agent-label strong { font-size: 12px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; }
-.agent-detail { overflow: hidden; color: var(--ink-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.live-main .agent-state { flex: none; padding: 2px 9px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--surface-2); font-size: 11px; white-space: nowrap; }
-.live-main .agent-state::before { margin-right: 5px; }
-.current-agent-body { padding: 0 12px 10px 50px; }
-.live-main .current-agent-body p { margin: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.live-main .current-agent-body .agent-token-line { margin-top: 4px; color: var(--ink-3); font-size: 11px; }
-.agent-tokens { font: 11px/1.5 var(--font-mono); }
-.live-main #agent-now .runtime-footer { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; border: 0; font-size: 11px; color: var(--ink-3); }
 
 /* Account indicators as tiles: dot + label, large figure, short note underneath. */
 .live-main #account-summary .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 0; margin-bottom: 10px; border: 1px solid var(--line-soft); border-radius: 4px; overflow: hidden; white-space: normal; }
@@ -1181,10 +1089,3 @@ details[open] > summary > .json-hint { display: none; }
 .live-main #account-summary .metrics strong.up { color: var(--up); }.live-main #account-summary .metrics strong.down { color: var(--down); }
 .live-main #account-summary .metrics small { display: block; min-height: 14px; overflow: hidden; color: var(--ink-3); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .live-main #account-summary .metrics small.up { color: var(--up); }.live-main #account-summary .metrics small.down { color: var(--down); }
-.live-main #current-agents { gap: 0; }
-.live-main .agent-detail { font-weight: 400; }
-.live-main .current-agent-head { padding-top: 8px; padding-bottom: 8px; }
-.live-main .current-agent[open] .agent-detail { white-space: normal; overflow-wrap: anywhere; }
-.live-main .current-agent-body .agent-token-line { margin-top: 0; }
-.live-main .current-agent { margin: 0; }
-.live-main .agent-label strong, .live-main .agent-detail { line-height: 1.4; }

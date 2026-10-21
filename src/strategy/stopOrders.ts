@@ -618,39 +618,39 @@ export async function sweepStops(): Promise<void> {
 
   // An id that names nothing open is cleared, whether or not the position is still held: the
   // stop having filled is one of the ways it stops existing.
-  for (const p of positions) {
-    const recorded = getPositionSnapshot(p.symbol)?.stopOrderId;
-    if (!recorded || isStopLocked(p.symbol)) continue;
-    if (!orders.some(o => o.id === recorded)) {
-      if (recentlyConfirmedIntent(p.symbol)) {
-        // Placed minutes ago and already gone: never clear-and-replace, that loops.
-        flagVanishedProtection(p.symbol, recorded);
-        logger.warn(`[Stops] ${p.symbol} stop order ${recorded} vanished from the venue minutes after it was placed — not re-placing. Trading paused for review.`);
-        continue;
-      }
-      patchPositionSnapshot(p.symbol, { stopOrderId: undefined });
-      logger.warn(
-        `[Stops] ${p.symbol} recorded stop order ${recorded}, which is no longer resting at the `
-          + `venue — cleared. It filled, expired, or was cancelled outside this system.`,
-      );
-    }
-  }
+  //
+  // `orders` was read at the top of this sweep, and the trailing stop runs alongside it: a raise
+  // that lands in between mints a new id (Alpaca replaces rather than amends) which that read
+  // cannot contain. Comparing the fresh id against the old read is what flagged live V and WMT
+  // stops as "vanished" and paused trading (2026-10-20/21). So a missing id is first re-checked
+  // against a fresh read, and is only believed gone once the venue says so for that one order.
+  const stillOpen = async (id: string): Promise<boolean> => {
+    if (orders.some(o => o.id === id)) return true;
+    const order = await broker.getOrder(id);
+    return order?.status === 'open' || order?.status === 'partial';
+  };
+  if (positions.some(p => {
+    const snap = getPositionSnapshot(p.symbol);
+    return [snap?.stopOrderId, snap?.takeProfitOrderId].some(id => id && !orders.some(o => o.id === id));
+  })) orders = await broker.getOpenOrders();
 
-  // Symmetric to the stop-id clearing above, for the take-profit leg of an OCO pair.
-  for (const p of positions) {
-    const recorded = getPositionSnapshot(p.symbol)?.takeProfitOrderId;
-    if (!recorded || isStopLocked(p.symbol)) continue;
-    if (!orders.some(o => o.id === recorded)) {
+  for (const leg of ['stop', 'take-profit'] as const) {
+    const field = leg === 'stop' ? 'stopOrderId' : 'takeProfitOrderId';
+    for (const p of positions) {
+      const recorded = getPositionSnapshot(p.symbol)?.[field];
+      if (!recorded || isStopLocked(p.symbol) || await stillOpen(recorded)) continue;
+      // Re-read after the await: a move may have finished and recorded a new id meanwhile.
+      if (isStopLocked(p.symbol) || getPositionSnapshot(p.symbol)?.[field] !== recorded) continue;
       if (recentlyConfirmedIntent(p.symbol)) {
         // Placed minutes ago and already gone: never clear-and-replace, that loops.
         flagVanishedProtection(p.symbol, recorded);
-        logger.warn(`[Stops] ${p.symbol} take-profit order ${recorded} vanished from the venue minutes after it was placed — not re-placing. Trading paused for review.`);
+        logger.warn(`[Stops] ${p.symbol} ${leg} order ${recorded} vanished from the venue minutes after it was placed — not re-placing. Trading paused for review.`);
         continue;
       }
-      patchPositionSnapshot(p.symbol, { takeProfitOrderId: undefined });
+      patchPositionSnapshot(p.symbol, { [field]: undefined });
       logger.warn(
-        `[Stops] ${p.symbol} recorded take-profit order ${recorded}, which is no longer resting `
-          + `at the venue — cleared. It filled, expired, or was cancelled outside this system.`,
+        `[Stops] ${p.symbol} recorded ${leg} order ${recorded}, which is no longer resting at the `
+          + `venue — cleared. It filled, expired, or was cancelled outside this system.`,
       );
     }
   }

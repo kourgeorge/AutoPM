@@ -175,11 +175,8 @@
 </div>
 <div id="view-activity" class="view" role="tabpanel" aria-labelledby="tab-activity" hidden>
   <div class="view-heading"><h1 id="history-title">Activity history</h1><button id="history-refresh">Refresh history</button></div>
-  <section id="agent-now" class="panel" aria-labelledby="agent-now-title"><div class="pane-title"><h2 id="agent-now-title">Agents</h2><span id="tick-age">Waiting for data</span></div><div id="current-agents" aria-live="polite"></div><div class="runtime-footer"><span id="cycle-status">No completed cycles</span><span id="buying-power">Buying power unavailable</span></div></section>
   <section class="panel history-panel" aria-labelledby="history-title">
-    <p class="section-description">Decisions and events, newest first. Broker fills are on the Broker page. Open a row for details.</p>
-    <div id="history-totals" class="history-totals"></div>
-    <div class="history-filters"><label class="history-search">Search history<input id="history-search" type="search" placeholder="Symbol, event type, reason, status or ID…"></label></div>
+    <div class="history-filters"><label class="history-search"><span class="sr-only">Search history</span><input id="history-search" type="search" placeholder="Search symbol, event type, reason, status or ID…"></label></div>
     <p id="history-status" role="status">Loading saved history…</p>
     <section class="history-section" aria-labelledby="history-decision-title">
       <div class="pane-title"><h2 id="history-decision-title">Decisions</h2><span id="history-decision-count"></span></div>
