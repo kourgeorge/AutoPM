@@ -549,17 +549,23 @@ function renderWatchlist(data) {
   const list=watchMatches(data).map(row=>({...row,trend:watchComposite(row.signals),mr:watchComposite(row.meanReversionSignals)}))
     .sort((a,b)=>(b.trend ?? -Infinity)-(a.trend ?? -Infinity) || a.symbol.localeCompare(b.symbol));
   const scoreCell=(score,signals,summary)=>{
-    const cell=text('span',score==null?'—':`${score>=0?'+':''}${score.toFixed(2)}`,'signal-score');
+    const strength=score==null || Math.abs(score)<0.15 ? '' : Math.abs(score)>=0.5 ? ' strong' : ' mild';
+    const cell=text('span',score==null?'—':`${score>=0?'+':''}${score.toFixed(2)}`,`signal-score${strength && ` ${direction(score)}${strength}`}`);
     cell.title=[summary,...(signals || []).map(signal=>`${signal.name}: ${signal.score} · ${signal.detail}`)].filter(Boolean).join('\n');
     return cell;
   };
-
+  const rsiCell=rsi=>{
+    if(!Number.isFinite(rsi)) return '—';
+    const zone=rsi>=70?'overbought':rsi<=30?'oversold':'';
+    const cell=text('span',rsi.toFixed(0),zone?`rsi-zone ${zone}`:'');cell.title=zone?`RSI ${rsi.toFixed(0)} · ${zone}`:'';
+    return cell;
+  };
   rows('watchlist-rows',list,row=>{
     const stale=outdated || row.stale || row.price==null;
     const symbol=uiButton(row.symbol,()=>openPositionReview(row.symbol));symbol.setAttribute('aria-label',`Open ${row.symbol} details`);symbol.setAttribute('aria-haspopup','dialog');
     const price=text('span',stale?'—':money(row.price),stale?'stale':'');price.title=stale?(row.staleReason || 'Price unavailable or stale'):'';
     return [symbol,price,text('span',stale||row.dayChangePct==null?'—':signedPct(row.dayChangePct),stale?'stale':direction(row.dayChangePct)),
-      scoreCell(row.trend,row.signals,row.signalSummary),scoreCell(row.mr,row.meanReversionSignals,row.meanReversionSummary),Number.isFinite(row.rsi)?row.rsi.toFixed(0):'—'];
+      scoreCell(row.trend,row.signals,row.signalSummary),scoreCell(row.mr,row.meanReversionSignals,row.meanReversionSummary),rsiCell(row.rsi)];
   });
   $('watchlist-status').textContent=data.error || (!data.lastTickAt?'Waiting for data':`${q?`${list.length} of ${total}`:list.length} symbols${outdated?' · stale snapshot':''}`);
   if(!list.length){
