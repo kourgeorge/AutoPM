@@ -14,7 +14,6 @@ const riskLabels = { positionSizePct:'Maximum position size', maxDailyLossPct:'D
   maxPositions:'Maximum positions', stopLossAtrMult:'Stop distance (ATR)', maxSingleWeightPct:'Single-name limit', maxSectorWeightPct:'Sector limit',
   riskPerTradePct:'Risk per trade', targetVolatilityPct:'Annualized portfolio volatility target', minRewardRisk:'Minimum reward:risk', targetInvestedPct:'Investment target', minInvestedPct:'Investment floor',
   maxEntriesPerDay:'New entries per day', lossCooldownHours:'Cooldown after a loss', trailingStopAtrMult:'Trailing stop' };
-const laneLabels = { starting:'Starting', idle:'Idle', thinking:'Thinking', sleeping:'Waiting', awaiting:'Waiting for you', error:'Error' };
 const suggestions = [['Portfolio brief', 'How is my portfolio doing?'], ['Latest decision', 'Why did you make your last trade?'], ['Watchlist', 'What are you watching right now?'], ['Risk check', 'What risks should I know about?']];
 const money = n => n == null ? 'Unavailable' : new Intl.NumberFormat('en-US', {style:'currency',currency:'USD'}).format(n);
 const signedMoney = n => n == null ? '—' : (n > 0 ? '+' : '') + money(n);
@@ -442,7 +441,7 @@ async function refresh() {
     addEntries(f.entries);
     renderStatus(s);
     renderAiBudget(s.aiBudget);
-    renderLanes();
+    renderThinking();
     renderPortfolio(p, s);
     renderWatchlist(w);
     renderChart(e.points, s);
@@ -472,7 +471,6 @@ function renderStatus(s) {
   const marketOpen=s.market.open ?? (s.market.session ? s.market.session==='open' : null);
   $('market-session').textContent = marketOpen===null ? 'Market session unavailable' : marketOpen ? 'Market open' : 'Market closed';
   $('market-session').classList.toggle('open', marketOpen===true);
-  $('buying-power').textContent = `Buying power ${money(s.account?.buyingPower)}`;
   $('cash').textContent = money(s.account?.cash);
   $('invested').textContent = s.account?.invested == null ? '' : `${money(s.account.invested)} invested`;
   $('trading').textContent = s.health.paused ? 'Paused' : s.health.ready ? 'Running' : 'Needs attention';
@@ -493,57 +491,7 @@ function setValue(id, value) {
   if (el.textContent !== value && el.textContent !== '—') { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
   el.textContent = value;
 }
-function laneText(name, lane, cycle) {
-  if (!lane) return `${name}: unknown`;
-  let line = `${name}: ${laneLabels[lane.state] ?? lane.state}`;
-  if (lane.until && lane.until > Date.now()) {
-    const secs = Math.round((lane.until - Date.now()) / 1000);
-    line += ` · ${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`;
-  }
-  if (cycle?.n) line += ` · cycle ${cycle.n}`;
-  return line;
-}
-const openAgents = new Set();
-function renderLanes() {
-  if (!status) return;
-  // One row per agent: icon, name, what it is doing now, state pill; open a row for the full detail and token counts.
-  const icons={trader:'icon-performance',assistant:'icon-chat',researcher:'icon-journal'};
-  const focused=document.activeElement?.closest?.('#current-agents .current-agent')?.dataset.role;
-  $('current-agents').replaceChildren(...[['Trader',status.trader.lane,'trader'],['Assistant',status.assistant.lane,'assistant'],...(status.researcher ? [['Research',status.researcher.lane,'researcher']] : [])].map(([name,lane,role])=>{
-    const card=text('details','','current-agent');card.dataset.role=role;
-    if(openAgents.has(role))card.open=true;
-    card.addEventListener('toggle',()=>card.open?openAgents.add(role):openAgents.delete(role));
-    const head=text('summary','','current-agent-head');
-    const icon=text('span','','agent-icon '+role);icon.setAttribute('aria-hidden','true');
-    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');
-    use.setAttribute('href','#'+icons[role]);svg.append(use);icon.append(svg);
-    const detail=lane?.detail || ({starting:'Agent is starting.',idle:'Waiting for a request.',sleeping:'Waiting for the next scheduled cycle.',thinking:'Processing the current request.',awaiting:'Waiting for your decision.',error:'The agent reported an error.'}[lane?.state] || 'Agent status unavailable.');
-    const label=text('span','','agent-label');label.append(text('strong',name),text('span',detail,'agent-detail'));
-    head.append(icon,label,text('span',laneText(name,lane).slice(name.length+2),'agent-state '+(lane?.state || '')));
-    const usage = status.usage, agent = usage?.byAgent?.[role];
-    const count = value => Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
-    const attributed = Object.values(usage?.byAgent ?? {}).reduce((sum,item)=>sum+item.inputTokens+item.outputTokens,0);
-    const tracking = usage?.byAgent != null || usage?.requests === 0;
-    const partial = usage && attributed < usage.inputTokens+usage.outputTokens;
-    const input = agent?.inputTokens ?? (tracking ? 0 : null), output = agent?.outputTokens ?? (tracking ? 0 : null);
-    const tokens = text('span',`(in ${count(input)} / out ${count(output)}${partial && tracking ? ' tracked' : ''})`,'agent-tokens');
-    tokens.title = `${name} daily tokens · ${usage?.day || 'Today'} UTC · ${agent?.requests ?? 0} tracked requests${agent?.missingUsage ? ` · ${agent.missingUsage} without reported usage` : ''}${partial ? ' · Counts cover separately tracked usage only. Earlier combined usage cannot be attributed to individual agents.' : ''}${!agent && tracking ? ' · No requests by this agent since separate tracking began.' : ''}${!tracking ? ' · Per-agent counts are not available yet.' : ''}`;
-    tokens.setAttribute('aria-label',`${name}: ${count(input)} input tokens, ${count(output)} output tokens ${partial ? 'since separate tracking began today' : 'today'} (UTC)`);
-    const body=text('div','','current-agent-body');
-    const tokenLine=text('p','Tokens today ','agent-token-line');tokenLine.append(tokens);
-    body.append(tokenLine);
-    card.append(head,body);
-    card.title=detail;
-    return card;
-  }));
-  if(focused)$('current-agents').querySelector(`[data-role="${focused}"] summary`)?.focus();
-  const cycle=status.trader.cycle;
-  $('cycle-status').parentElement.title=$('buying-power').textContent;
-  $('cycle-status').textContent=cycle?.n ? `Cycle ${cycle.n}${cycle.lastMs!=null?' · '+(cycle.lastMs/1000).toFixed(1)+'s':''}` : 'No completed cycles';
-  const age=status.lastTickAt?Math.max(0,Math.floor((Date.now()-Date.parse(status.lastTickAt))/1000)):null;
-  $('tick-age').textContent=age==null?'Waiting for data':`Tick ${age<60?age+'s':Math.floor(age/60)+'m'} ago`;
-  renderThinking();
-}
+
 /** How long a holding has been open: "45m", "5h", "3d 4h", "12d". */
 function heldFor(ms) {
   const mins = Math.floor(ms / 60000), hours = Math.floor(mins / 60), days = Math.floor(hours / 24);
@@ -605,6 +553,7 @@ function renderWatchlist(data) {
     cell.title=[summary,...(signals || []).map(signal=>`${signal.name}: ${signal.score} · ${signal.detail}`)].filter(Boolean).join('\n');
     return cell;
   };
+
   rows('watchlist-rows',list,row=>{
     const stale=outdated || row.stale || row.price==null;
     const symbol=uiButton(row.symbol,()=>openPositionReview(row.symbol));symbol.setAttribute('aria-label',`Open ${row.symbol} details`);symbol.setAttribute('aria-haspopup','dialog');
@@ -972,8 +921,6 @@ async function loadHistory(groupName = 'activity') {
       }
     });
     if (resetPage) return loadHistory(groupName);
-    const totals = results.find(Boolean);
-    if (groupName === 'activity') $('history-totals').textContent = types.map(type => totals?.[type+'s'] == null ? `${type}s unavailable` : `${totals[type+'s'].toLocaleString()} ${type}s`).join(' · ');
     results.forEach((result,index) => {
       const type = types[index], offset = historyOffsets[type], body = $(`history-${type}-rows`);
       if (!result) {
@@ -998,7 +945,7 @@ async function loadHistory(groupName = 'activity') {
       $(`history-${type}-prev`).disabled = offset === 0;
       $(`history-${type}-next`).disabled = offset+historyLimit >= result.total;
     });
-    $(group.status).textContent = errors.length ? errors.join(' ') : query && results.every(result=>!result.total) ? 'No records match these filters.' : (groupName === 'fills' ? 'Times shown in your local timezone.' : 'Times shown in your local timezone. Decisions and events show their latest recorded state.');
+    $(group.status).textContent = errors.length ? errors.join(' ') : query && results.every(result=>!result.total) ? 'No records match these filters.' : (groupName === 'fills' ? 'Times shown in your local timezone.' : '');
   } catch (error) {
     if (request === group.request) $(group.status).textContent = error.message.includes('no route') ? 'The running engine needs a restart to load Activity history. Your saved records are intact.' : 'Could not load history. Displayed records may be stale. '+error.message;
   } finally { if (request === group.request) for (const type of types) $(`history-${type}-rows`).setAttribute('aria-busy','false'); }
@@ -1755,4 +1702,4 @@ void connectDashboard();
 // Backstop for anything the stream misses, such as an action expiring with no new activity.
 setInterval(()=>{if(started)refresh().catch(e=>notice('Could not refresh account: '+e.message));},10000);
 // Countdowns on the agent pills move every second without asking the server.
-setInterval(renderLanes,1000);
+setInterval(renderThinking,1000);

@@ -287,14 +287,8 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.goto(base);
     await page.locator('#workspace').waitFor({state:'visible'});
     await expect(page.locator('#live')).toHaveText('Live');
-    await expect(page.locator('#current-agents')).toContainText('Trader');
     await expect(page.locator('.sidebar')).not.toContainText('YOUR AGENTS');
     await expect(page.locator('#agent-usage')).toHaveCount(0);
-    await expect(page.locator('.agent-tokens')).toHaveCount(3);
-    await expect(page.locator('.agent-tokens').first()).toHaveText('(in 1,200 / out 80)');
-    await expect(page.locator('.agent-tokens').nth(1)).toHaveText('(in 200 / out 20)');
-    await expect(page.locator('#current-agents')).toContainText('Research');
-    await expect(page.locator('.agent-tokens').last()).toHaveText('(in 0 / out 0)');
     await expect(page.locator('#account-summary #equity-chart')).toBeVisible();
     await expect(page.locator('#status-panel #agent-model')).toContainText('test · Connecting to account…');
     await expect(page.locator('#status-title')).toHaveText('Status');
@@ -306,13 +300,10 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     assert.ok((await page.locator('#positions').boundingBox()).y < 650,'positions appear near the top of Live');
     ui.setTraderActivity({state:'thinking',detail:'Reviewing MSFT exposure before the next decision.'});
     ui.log('INFO','Checking current positions and broker protection.');
-    await expect(page.locator('#current-agents')).toContainText('Reviewing MSFT exposure');
     await expect(page.locator('#live-feed')).toContainText('Checking current positions and broker protection.');
-    // The agents panel lives on Activity, keeping Live to the account, holdings and conversation.
-    await expect(page.locator('#view-live #agent-now')).toHaveCount(0);
+    // The agents panel was removed to keep Activity to the history itself.
     await page.getByRole('tab',{name:'Activity',exact:true}).click();
-    await expect(page.locator('#view-activity #current-agents')).toBeVisible();
-    await page.locator('#agent-now').screenshot({path:'/tmp/autotrade-agents-activity.png'});
+    await expect(page.locator('#agent-now')).toHaveCount(0);
     await page.getByRole('tab',{name:'Live',exact:true}).click();
     await page.screenshot({path:'/tmp/autotrade-live-after.png'});
     await page.getByRole('button',{name:'Focus conversation'}).click();

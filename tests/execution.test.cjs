@@ -190,6 +190,31 @@ test('pending exits keep their baseline across multiple protection sweeps', asyn
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel,95);
 });
 
+test('a stop moved during a sweep is re-read, not flagged as vanished', async () => {
+  const { sweepStops }=require('../src/strategy/stopOrders');
+  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
+  state.openPositionSnapshot({symbol:'AAPL',stopLevel:96,stopOrderId:'new-stop'});
+  store.saveValue('protectionIntents',{AAPL:{id:'atp-x',symbol:'AAPL',at:new Date().toISOString(),stop:96,status:'confirmed'}});
+  const live={id:'new-stop',symbol:'AAPL',side:'sell',qty:2,filled:0,type:'stop',stopPrice:96};
+  let reads=0;
+  broker.getOpenOrders=async()=>(++reads===1?[]:[live]);
+  await sweepStops();
+  assert.equal(state.getState().paused,false);
+  assert.equal(state.getPositionSnapshot('AAPL').stopOrderId,'new-stop');
+  assert.equal(store.readValue('protectionIntents').AAPL.status,'confirmed');
+});
+
+test('a stop the venue reports cancelled minutes after placement still pauses trading', async () => {
+  const { sweepStops }=require('../src/strategy/stopOrders');
+  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
+  state.openPositionSnapshot({symbol:'AAPL',stopLevel:96,stopOrderId:'gone-stop'});
+  store.saveValue('protectionIntents',{AAPL:{id:'atp-y',symbol:'AAPL',at:new Date().toISOString(),stop:96,status:'confirmed'}});
+  brokerOrder={id:'gone-stop',symbol:'AAPL',side:'sell',qty:2,filledQty:0,filledPrice:null,status:'cancelled'};
+  await sweepStops();
+  assert.equal(state.getState().paused,true);
+  assert.equal(store.readValue('protectionIntents').AAPL.status,'unknown');
+});
+
 test('entry validation requires a fresh quote and caps a valid order at a cent-priced limit', async () => {
   const prices = require('../src/collect/priceSource');
   const bars = require('../src/collect/barSource');
