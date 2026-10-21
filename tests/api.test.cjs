@@ -250,3 +250,18 @@ test('broker exit labels distinguish a reconciled fill from an outcome with no m
   assert.equal(history.entries.find(entry=>entry.record.id===confirmed.id).status,'reconciled fill');
   assert.equal(history.entries.find(entry=>entry.record.id===unmatched.id).status,'recorded outcome');
 });
+
+test('the assistant can read every dashboard page in-process, read-only',async()=>{
+  const {appEndpoints,readAppEndpoint}=require('../src/server/api');
+  const list=appEndpoints();
+  assert.equal(list.available,true);
+  const paths=list.endpoints.map(e=>e.path);
+  assert.ok(paths.includes('/api/llm-usage')&&paths.includes('/api/broker-orders'));
+  assert.ok(!paths.includes('/api/stream'),'the live stream never ends, so it is not offered');
+  assert.ok(list.endpoints.every(e=>e.returns!=='No description.'),'every readable page says what it returns');
+  const usage=await readAppEndpoint('/api/llm-usage?days=7');
+  assert.deepEqual(usage,(await request('/api/llm-usage?days=7')).body);
+  assert.equal((await readAppEndpoint('/api/llm-usage?days=0')).status,400);
+  assert.match((await readAppEndpoint('/api/nothing')).error,/No route GET/);
+  assert.match((await readAppEndpoint('/api/stream')).error,/live stream/);
+});

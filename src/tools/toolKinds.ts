@@ -19,7 +19,7 @@ const KINDS: Record<Exclude<ToolKind, 'read'>, string[]> = {
   housekeeping: ['ack_event', 'sleep'],
 };
 /** Reads not named get_… */
-const OTHER_READS = ['read_source', 'compare_position_actions', 'web_search', 'show_price_history', 'show_performance_comparison'];
+const OTHER_READS = ['read_source', 'read_app', 'compare_position_actions', 'web_search', 'show_price_history', 'show_performance_comparison'];
 
 /** The kind of a tool, or null for a name no agent has. Every `get_…` tool is a read. */
 export function toolKind(name: string): ToolKind | null {

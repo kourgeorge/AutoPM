@@ -6,6 +6,7 @@ import { pendingOrders } from '../core/orders';
 import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
 import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
+import { appEndpoints, readAppEndpoint } from '../server/api';
 /**
  * Assistant Agent — the user-facing conversational layer.
  *
@@ -48,6 +49,20 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: { requestId: { type: 'string', description: 'The request id, verbatim.' } },
       required: ['requestId'],
+    },
+  },
+  {
+    name: 'get_app_endpoints',
+    description: "List every read-only page of AutoTrade's own engine API — the same data the dashboard shows (AI model usage and token counts, service health, broker book, feed, saved prompts, agent requests, and more) — with what each returns. Read this when no other tool covers what the operator asks about the app itself.",
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'read_app',
+    description: "Read one engine API page in-process and return its JSON exactly as the dashboard gets it. Pass the path with any query string, e.g. /api/llm-usage?days=7 or /api/llm-usage/day?day=2026-10-20. Read-only: only GET pages; nothing is changed. Take paths from get_app_endpoints.",
+    input_schema: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Path starting with /api/, with an optional query string.' } },
+      required: ['path'],
     },
   },
   {
@@ -153,7 +168,7 @@ export const ASSISTANT_TOOL_NAMES = [
   'get_market_status', 'get_pending_events', 'get_journal', 'get_scorecard', 'get_benchmark',
   'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan', 'get_correlation',
   'get_exposure', 'get_calendar', 'get_fundamentals', 'get_strategy_settings', 'get_state',
-  'get_request_trace', 'send_to_trader', 'request_research', 'get_policy_playbook',
+  'get_request_trace', 'get_app_endpoints', 'read_app', 'send_to_trader', 'request_research', 'get_policy_playbook',
   'update_trading_settings', 'get_stock_bars', 'get_stock_snapshot', 'get_stock_latest_quote',
   'get_most_active_stocks', 'get_market_movers', 'get_news', 'get_portfolio_history', 'web_search',
   'show_price_history', 'show_performance_comparison',
@@ -172,6 +187,7 @@ const CHART_TOOL_NAMES = new Set(CHART_TOOL_DEFINITIONS.map((t) => t.name));
  */
 const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
+You can read everything the app itself shows: get_app_endpoints lists the engine's pages and read_app reads one. Use them for questions about the app — AI model usage, tokens and cost (/api/llm-usage), service health, the broker book, saved prompts, agent requests — before saying you cannot see something. Never say data is out of reach without checking get_app_endpoints first.
 When the operator asks you to research or assess a stock, call request_research; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
 Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_orders for the outcome.
 You cannot place trades, approve orders or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
@@ -268,6 +284,13 @@ export class AssistantAgent {
       } catch (err: any) {
         return JSON.stringify({ error: `The trader prompt failed to render: ${err.message}` });
       }
+    }
+
+    if (name === 'get_app_endpoints') return JSON.stringify(appEndpoints());
+    if (name === 'read_app') {
+      const path = String(input.path ?? '').trim();
+      if (!path.startsWith('/api/')) return JSON.stringify({ ok: false, error: 'path must start with /api/' });
+      return JSON.stringify(await readAppEndpoint(path));
     }
 
     if (name === 'get_request_trace') return requestTrace(String(input.requestId ?? ''));
