@@ -10,6 +10,7 @@
   <symbol id="icon-review" viewBox="0 0 24 24"><path d="M4 20V10m8 10V4m8 16v-7M2 20h20"/></symbol>
   <symbol id="icon-performance" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></symbol>
   <symbol id="icon-usage" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="icon-broker" viewBox="0 0 24 24"><path d="M3 10 12 4l9 6M5 10v8m4-8v8m6-8v8m4-8v8M3 20h18"/></symbol>
   <symbol id="icon-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="icon-journal" viewBox="0 0 24 24"><path d="M5 3h14v18H5zM9 3v18M12 8h4M12 12h4M12 16h3"/></symbol>
   <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
@@ -21,6 +22,7 @@
   <nav class="views" role="tablist" aria-label="Views" aria-orientation="vertical">
     <button role="tab" id="tab-live" aria-controls="view-live" data-view="live"><svg><use href="#icon-review"/></svg><span>Live</span><span class="nav-dot"></span></button>
     <button role="tab" id="tab-activity" aria-controls="view-activity" data-view="activity"><svg><use href="#icon-history"/></svg><span>Activity</span></button>
+    <button role="tab" id="tab-broker" aria-controls="view-broker" data-view="broker"><svg><use href="#icon-broker"/></svg><span>Broker</span></button>
     <button role="tab" id="tab-strategy" aria-controls="view-strategy" data-view="strategy"><svg><use href="#icon-strategy"/></svg><span>Settings</span></button>
     <button role="tab" id="tab-performance" aria-controls="view-performance" data-view="performance"><svg><use href="#icon-performance"/></svg><span>Performance</span></button>
     <button role="tab" id="tab-usage" aria-controls="view-usage" data-view="usage"><svg><use href="#icon-usage"/></svg><span>AI usage</span></button>
@@ -43,7 +45,6 @@
   <div id="status-panel" class="live-statusline" role="region" aria-labelledby="status-title" tabindex="0">
     <div class="status-readout" tabindex="0" role="group" aria-label="Account and agent status">
     <div class="status-panel-heading"><h2 id="status-title">Status</h2><span id="agent-model">Connecting to your account…</span></div>
-    <section id="agent-now" class="panel"><div class="pane-title"><h2>Happening now</h2><span id="tick-age">Waiting for data</span></div><div id="current-agents" aria-live="polite"></div><div class="runtime-footer"><span id="cycle-status">No completed cycles</span><span id="buying-power">Buying power unavailable</span></div></section>
     </div>
     <span id="market-session" class="session-pill">Waiting for market data</span>
   </div>
@@ -87,20 +88,28 @@
     </section>
     <section id="holdings" class="panel">
       <div class="pane-title"><div><h2>Current positions</h2></div><span id="positions-status"></span></div>
-      <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Shares</th><th>Cost</th><th>Price</th><th>P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Shares</th><th>Cost</th><th>Price</th><th>P&amp;L</th><th>Held</th></tr></thead><tbody id="positions"></tbody></table></div>
     </section>
     <section id="watchlist-panel" class="panel" aria-label="Watchlist indicators"><div class="pane-title"><h2>Watchlist</h2><span id="watchlist-status">Waiting for data</span></div><form id="watchlist-search" class="watchlist-search" role="search"><input id="watchlist-filter" type="search" placeholder="Search ticker" aria-label="Search ticker" title="Type to filter the watchlist · Enter opens the ticker" autocomplete="off" spellcheck="false" maxlength="20"></form><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Price</th><th>Day %</th><th title="Mean trend signal score, from -1 to +1">Trend</th><th title="Mean-reversion signal score, from -1 to +1">MR</th><th title="Relative strength index">RSI</th></tr></thead><tbody id="watchlist-rows"></tbody></table></div><p class="watchlist-legend">Trend / MR: −1 to +1 · select a ticker for its details, chart and saved assessment</p></section>
   </div>
   <div class="live-secondary">
     <section id="live-activity" class="panel"><div class="pane-title"><h2>Activity stream</h2><button id="open-conversation" class="text-button">Focus conversation ↗</button></div><div id="live-feed" role="log" aria-label="Live activity" aria-live="polite" tabindex="0"><p id="live-feed-empty" class="activity-empty">Waiting for events…</p></div></section>
-<section id="broker-panel" class="panel">      <div class="pane-title"><h2>Broker orders</h2><button id="reconcile" class="text-button">Check broker outcomes ↗</button></div><p id="orders-status"></p><div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Side / type</th><th>Quantity</th><th>Filled</th><th>Price</th><th>Broker status</th><th>Order ID</th></tr></thead><tbody id="orders"></tbody></table></div>
-      <details><summary>Recover an interrupted protection request</summary><p>Inspect the orders at your broker, then provide the IDs of the stop and target matching the saved request. The account remains paused until you resume it.</p><form id="protection"><label>Symbol<input name="symbol" required></label><label>Stop order ID<input name="stopOrderId" required></label><label>Target order ID (if applicable)<input name="targetOrderId"></label><button>Verify protection</button></form></details>
-</section>
     <section id="decisions" class="panel">
       <div class="pane-title"><h2>Decision desk</h2><span id="action-count" class="count-pill">0 pending</span></div><p class="section-description">Agent proposals, with you in the loop.</p>
       <div id="actions"></div><p class="action-footnote">Approval authorizes an attempt. Fills confirm a trade.</p>
     </section>
   </div>
+</div>
+<div id="view-broker" class="view" role="tabpanel" aria-labelledby="tab-broker" hidden>
+<div class="view-heading"><h1>Broker orders</h1><span id="broker-book-updated"></span></div>
+<section id="broker-book" class="panel"><div class="pane-title"><h2 id="broker-book-title">Orders resting at the broker</h2><button type="button" id="broker-book-reconcile" class="text-button">Check broker outcomes ↗</button></div><p class="section-description">What the broker is holding right now, from the latest account check. Open an order to see the holding it protects, the agent decision behind it, and what happens if it fills. Orders placed outside this app are shown too.</p><p id="broker-book-status" class="section-description"></p><div id="broker-book-summary" class="score-grid"></div><div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Broker orders"><table class="history-table" aria-labelledby="broker-book-title"><thead><tr><th scope="col">Details</th><th scope="col">Symbol</th><th scope="col">Purpose</th><th scope="col">Side / type</th><th scope="col">Shares left</th><th scope="col">Trigger</th><th scope="col">Price now</th><th scope="col">Distance</th><th scope="col">If filled</th><th scope="col">Broker status</th></tr></thead><tbody id="broker-book-rows"></tbody></table></div></section>
+<section id="broker-coverage" class="panel"><div class="pane-title"><h2 id="broker-coverage-title">Holdings protection</h2></div><p class="section-description">Whether each holding has a stop resting at the broker, so it stays protected when this app is not running.</p><div class="table-wrap" tabindex="0" role="region" aria-label="Holdings protection"><table class="history-table" aria-labelledby="broker-coverage-title"><thead><tr><th scope="col">Symbol</th><th scope="col">Shares</th><th scope="col">Managed by agent</th><th scope="col">Stop shares at broker</th><th scope="col">Stop that fires first</th><th scope="col">Saved stop / target</th><th scope="col">Status</th></tr></thead><tbody id="broker-coverage-rows"></tbody></table></div></section>
+<section id="broker-fills" class="panel history-section" aria-labelledby="history-fill-title">
+      <div class="pane-title"><h2 id="history-fill-title">Fills</h2><span id="history-fill-count"></span></div><p class="section-description">Every execution the broker has reported, newest first. These are the real prices paid and received.</p><div class="history-filters"><label class="history-search">Search fills<input id="fill-search" type="search" placeholder="Symbol, side or order ID…"></label></div><p id="fill-status" class="section-description" role="status"></p>
+      <div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Fills history"><table class="history-table" aria-labelledby="history-fill-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Symbol</th><th scope="col">Side</th><th scope="col">Quantity</th><th scope="col">Price</th><th scope="col">Value</th><th scope="col">Fees</th></tr></thead><tbody id="history-fill-rows"></tbody></table></div>
+      <div class="history-pagination"><button id="history-fill-prev" aria-label="Previous fills" disabled>Previous</button><span id="history-fill-page"></span><button id="history-fill-next" aria-label="Next fills" disabled>Next</button></div>
+    </section>
+<section id="broker-recover" class="panel"><details><summary>Recover an interrupted protection request</summary><p>Inspect the orders at your broker, then provide the IDs of the stop and target matching the saved request. The account remains paused until you resume it.</p><form id="protection"><label>Symbol<input name="symbol" required></label><label>Stop order ID<input name="stopOrderId" required></label><label>Target order ID (if applicable)<input name="targetOrderId"></label><button>Verify protection</button></form></details></section>
 </div>
 <div id="view-strategy" class="view" role="tabpanel" aria-labelledby="tab-strategy" hidden>
 <div class="view-heading"><h1>Settings</h1><span id="revision"></span></div>
@@ -166,8 +175,9 @@
 </div>
 <div id="view-activity" class="view" role="tabpanel" aria-labelledby="tab-activity" hidden>
   <div class="view-heading"><h1 id="history-title">Activity history</h1><button id="history-refresh">Refresh history</button></div>
+  <section id="agent-now" class="panel" aria-labelledby="agent-now-title"><div class="pane-title"><h2 id="agent-now-title">Agents</h2><span id="tick-age">Waiting for data</span></div><div id="current-agents" aria-live="polite"></div><div class="runtime-footer"><span id="cycle-status">No completed cycles</span><span id="buying-power">Buying power unavailable</span></div></section>
   <section class="panel history-panel" aria-labelledby="history-title">
-    <p class="section-description">Decisions, broker fills and events, newest first. Open a row for details.</p>
+    <p class="section-description">Decisions and events, newest first. Broker fills are on the Broker page. Open a row for details.</p>
     <div id="history-totals" class="history-totals"></div>
     <div class="history-filters"><label class="history-search">Search history<input id="history-search" type="search" placeholder="Symbol, event type, reason, status or ID…"></label></div>
     <p id="history-status" role="status">Loading saved history…</p>
@@ -175,11 +185,6 @@
       <div class="pane-title"><h2 id="history-decision-title">Decisions</h2><span id="history-decision-count"></span></div>
       <div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Decisions history"><table class="history-table" aria-labelledby="history-decision-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Symbol</th><th scope="col">Event type</th><th scope="col">Decision</th><th scope="col">Status</th><th scope="col">Requested</th><th scope="col">Filled</th><th scope="col">Reason</th></tr></thead><tbody id="history-decision-rows"></tbody></table></div>
       <div class="history-pagination"><button id="history-decision-prev" aria-label="Previous decisions" disabled>Previous</button><span id="history-decision-page"></span><button id="history-decision-next" aria-label="Next decisions" disabled>Next</button></div>
-    </section>
-    <section class="history-section" aria-labelledby="history-fill-title">
-      <div class="pane-title"><h2 id="history-fill-title">Fills</h2><span id="history-fill-count"></span></div>
-      <div class="table-wrap history-table-wrap" tabindex="0" role="region" aria-label="Fills history"><table class="history-table" aria-labelledby="history-fill-title"><thead><tr><th scope="col">Details</th><th scope="col">Time</th><th scope="col">Symbol</th><th scope="col">Side</th><th scope="col">Quantity</th><th scope="col">Price</th><th scope="col">Value</th><th scope="col">Fees</th></tr></thead><tbody id="history-fill-rows"></tbody></table></div>
-      <div class="history-pagination"><button id="history-fill-prev" aria-label="Previous fills" disabled>Previous</button><span id="history-fill-page"></span><button id="history-fill-next" aria-label="Next fills" disabled>Next</button></div>
     </section>
     <section class="history-section" aria-labelledby="history-event-title">
       <div class="pane-title"><h2 id="history-event-title">Events</h2><span id="history-event-count"></span></div>

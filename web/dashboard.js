@@ -41,7 +41,7 @@ function attempt(fn) { return async event => { event?.preventDefault(); try { aw
 // ── Start-up and live updates ──────────────────────────────────────────────
 async function start() {
   started = true;
-  showView(['activity','strategy','performance','usage','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
+  showView(['activity','broker','strategy','performance','usage','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
   $('suggestions').replaceChildren(...suggestions.map(([label, question]) => {
     const chip = text('button', label, 'chip'); chip.type = 'button'; chip.title = question;
     chip.onclick = attempt(() => sendMessage(question));
@@ -86,7 +86,7 @@ async function loadCommands() {
 // ── Views ──────────────────────────────────────────────────────────────────
 function showView(name, load = true) {
   view = name;
-  $('view-label').textContent = {live:'Live trading', activity:'Activity history', strategy:'Settings', performance:'Performance', usage:'AI usage', review:'Review'}[name];
+  $('view-label').textContent = {live:'Live trading', activity:'Activity history', broker:'Broker orders', strategy:'Settings', performance:'Performance', usage:'AI usage', review:'Review'}[name];
   for (const tab of document.querySelectorAll('[role=tab]')) {
     const selected = tab.dataset.view === name;
     tab.setAttribute('aria-selected', String(selected)); tab.tabIndex = selected ? 0 : -1;
@@ -98,6 +98,7 @@ function showView(name, load = true) {
   if (load && (name === 'review' || name === 'performance')) refresh().catch(e => notice(e.message));
   if (load && name === 'activity') loadHistory();
   if (load && name === 'usage') loadUsage().catch(e => notice(e.message));
+  if (load && name === 'broker') { loadBrokerBook().catch(e => notice(e.message)); loadHistory('fills'); }
 }
 for (const tab of document.querySelectorAll('[role=tab]')) {
   tab.onclick = () => showView(tab.dataset.view);
@@ -283,7 +284,7 @@ function toolCallEntry(entry) {
 }
 function renderWelcome() {
   const feed=$('feed');
-  const hidden=!!feed.querySelector('.msg.operator, .msg.reply, .msg.chart, .msg.alert, .msg.tool') || ($('show-log').checked && !!feed.querySelector('.msg.log'));
+  const hidden=!!feed.querySelector('.msg.operator, .msg.reply, .msg.chart, .msg.alert, .msg.tool[data-source="assistant"]') || ($('show-log').checked && !!feed.querySelector('.msg.log, .msg.tool'));
   if ($('welcome').hidden !== hidden) $('welcome').hidden=hidden;
 }
 
@@ -326,7 +327,8 @@ function liveEntry(entry, body) {
     ? (/^\s*(?:\/\S+|(?:approve|reject)\b)/i.test(entry.text) ? 'COMMAND' : 'MESSAGE')
     : ({reply:'REPLY',chart:'CHART',alert:'ALERT'}[entry.kind] || entry.kind.toUpperCase());
   const label=text('span',`[${kind}]`,'activity-kind');
-  const content=text('p',body);
+  // A tool call, by any agent, opens to its full input and output, as in the chat.
+  const content=entry.kind==='log' && entry.level==='TOOL' ? toolCallEntry(entry) : text('p',body);
   row.append(time,entity,label,content);
   return row;
 }
@@ -346,16 +348,16 @@ function appendLiveEntries(fragment) {
 }
 $('open-conversation').onclick=()=>{showView('live');messageInput.focus();};
 
-function addEntries(entries) {
 // While the conversation follows new rows it glides to the bottom instead of jumping a row at a
 // time, which flickers during a burst of tool calls. Any scroll by the reader stops the following.
 let feedFollowing = false;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 for (const type of ['wheel','touchstart','keydown','pointerdown']) $('feed').addEventListener(type, () => { feedFollowing = false; }, {passive: true});
+function addEntries(entries) {
   const feed = $('feed'), atBottom = feedFollowing || feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
   const liveRows = document.createDocumentFragment();
-  for (const entry of entries) {
   if (!entries.some(entry => entry.seq > cursor)) { renderThinking(); return; }
+  for (const entry of entries) {
     if (entry.seq <= cursor) continue;
     cursor = entry.seq;
     if (entry.kind === 'reply' || entry.kind === 'chart') awaitingReply = 0;
@@ -431,7 +433,7 @@ async function refresh() {
   refreshing = true;
   try {
     const review = view === 'review', performance = view === 'performance';
-    const [s,p,o,a,e,f,c,l,sc,w] = await Promise.all([api('status'),api('positions'),api('broker-orders'),api('orders?status=all'),api('equity-history'),api(`feed?after=${cursor}&limit=200`),
+    const [s,p,a,e,f,c,l,sc,w] = await Promise.all([api('status'),api('positions'),api('orders?status=all'),api('equity-history'),api(`feed?after=${cursor}&limit=200`),
       review ? api('agent-commands') : null, review ? api('lessons') : null, performance ? api('scorecard' + ($('score-days').value ? '?days=' + $('score-days').value : '')) : null,
       api('watchlist').catch(()=>({watchlist:[],lastTickAt:null,error:'Watchlist unavailable'}))]);
     status = s;
@@ -448,13 +450,12 @@ async function refresh() {
       metric.title = [...metric.children].map(el=>el.textContent).filter(Boolean).join(' · ');
       metric.setAttribute('aria-label', metric.title);
     }
-    rows('orders',o.orders||[],v=>[v.symbol,`${v.side} / ${v.type}`,v.qty,v.filled,v.stopPrice||v.limitPrice||'Market',v.status,v.id]);
-    $('orders-status').textContent=o.available?(o.orders.length?'Orders reported by the broker.':'No open broker orders.'):'Broker orders are unavailable.';
     renderOrders(a.orders);
     if (review) { renderRequests(c.commands); renderLessons(l.lessons); }
     if (performance) renderScorecard(sc);
     if (view === 'activity') await loadHistory();
     if (view === 'usage') await loadUsage();
+    if (view === 'broker') { await loadBrokerBook(); await loadHistory('fills'); }
   } finally {
     refreshing = false;
     if (refreshAgain) { refreshAgain = false; scheduleRefresh(); }
@@ -502,12 +503,23 @@ function laneText(name, lane, cycle) {
   if (cycle?.n) line += ` · cycle ${cycle.n}`;
   return line;
 }
+const openAgents = new Set();
 function renderLanes() {
   if (!status) return;
+  // One row per agent: icon, name, what it is doing now, state pill; open a row for the full detail and token counts.
+  const icons={trader:'icon-performance',assistant:'icon-chat',researcher:'icon-journal'};
+  const focused=document.activeElement?.closest?.('#current-agents .current-agent')?.dataset.role;
   $('current-agents').replaceChildren(...[['Trader',status.trader.lane,'trader'],['Assistant',status.assistant.lane,'assistant'],...(status.researcher ? [['Research',status.researcher.lane,'researcher']] : [])].map(([name,lane,role])=>{
-    const card=text('div','','current-agent');
-    const head=text('div','','current-agent-head');
-    head.append(text('strong',name),text('span',laneText(name,lane).slice(name.length+2),'agent-state '+(lane?.state || '')));
+    const card=text('details','','current-agent');card.dataset.role=role;
+    if(openAgents.has(role))card.open=true;
+    card.addEventListener('toggle',()=>card.open?openAgents.add(role):openAgents.delete(role));
+    const head=text('summary','','current-agent-head');
+    const icon=text('span','','agent-icon '+role);icon.setAttribute('aria-hidden','true');
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');
+    use.setAttribute('href','#'+icons[role]);svg.append(use);icon.append(svg);
+    const detail=lane?.detail || ({starting:'Agent is starting.',idle:'Waiting for a request.',sleeping:'Waiting for the next scheduled cycle.',thinking:'Processing the current request.',awaiting:'Waiting for your decision.',error:'The agent reported an error.'}[lane?.state] || 'Agent status unavailable.');
+    const label=text('span','','agent-label');label.append(text('strong',name),text('span',detail,'agent-detail'));
+    head.append(icon,label,text('span',laneText(name,lane).slice(name.length+2),'agent-state '+(lane?.state || '')));
     const usage = status.usage, agent = usage?.byAgent?.[role];
     const count = value => Number.isFinite(value) ? value.toLocaleString('en-US') : '—';
     const attributed = Object.values(usage?.byAgent ?? {}).reduce((sum,item)=>sum+item.inputTokens+item.outputTokens,0);
@@ -517,18 +529,27 @@ function renderLanes() {
     const tokens = text('span',`(in ${count(input)} / out ${count(output)}${partial && tracking ? ' tracked' : ''})`,'agent-tokens');
     tokens.title = `${name} daily tokens · ${usage?.day || 'Today'} UTC · ${agent?.requests ?? 0} tracked requests${agent?.missingUsage ? ` · ${agent.missingUsage} without reported usage` : ''}${partial ? ' · Counts cover separately tracked usage only. Earlier combined usage cannot be attributed to individual agents.' : ''}${!agent && tracking ? ' · No requests by this agent since separate tracking began.' : ''}${!tracking ? ' · Per-agent counts are not available yet.' : ''}`;
     tokens.setAttribute('aria-label',`${name}: ${count(input)} input tokens, ${count(output)} output tokens ${partial ? 'since separate tracking began today' : 'today'} (UTC)`);
-    head.append(tokens);
-    card.append(head,text('p',lane?.detail || ({starting:'Agent is starting.',idle:'Waiting for a request.',sleeping:'Waiting for the next scheduled cycle.',thinking:'Processing the current request.',awaiting:'Waiting for your decision.',error:'The agent reported an error.'}[lane?.state] || 'Agent status unavailable.')));
-    card.title=card.querySelector('p').textContent;
-    card.setAttribute('aria-label',`${head.textContent}. ${card.title}`);
+    const body=text('div','','current-agent-body');
+    const tokenLine=text('p','Tokens today ','agent-token-line');tokenLine.append(tokens);
+    body.append(tokenLine);
+    card.append(head,body);
+    card.title=detail;
     return card;
   }));
+  if(focused)$('current-agents').querySelector(`[data-role="${focused}"] summary`)?.focus();
   const cycle=status.trader.cycle;
   $('cycle-status').parentElement.title=$('buying-power').textContent;
   $('cycle-status').textContent=cycle?.n ? `Cycle ${cycle.n}${cycle.lastMs!=null?' · '+(cycle.lastMs/1000).toFixed(1)+'s':''}` : 'No completed cycles';
   const age=status.lastTickAt?Math.max(0,Math.floor((Date.now()-Date.parse(status.lastTickAt))/1000)):null;
   $('tick-age').textContent=age==null?'Waiting for data':`Tick ${age<60?age+'s':Math.floor(age/60)+'m'} ago`;
   renderThinking();
+}
+/** How long a holding has been open: "45m", "5h", "3d 4h", "12d". */
+function heldFor(ms) {
+  const mins = Math.floor(ms / 60000), hours = Math.floor(mins / 60), days = Math.floor(hours / 24);
+  if (mins < 60) return `${mins}m`;
+  if (hours < 24) return `${hours}h`;
+  return days < 10 && hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
 }
 function renderPortfolio(p, s) {
   const positions = p.positions || [];
@@ -544,9 +565,12 @@ function renderPortfolio(p, s) {
     if (before != null && v.price != null && before !== v.price) price.classList.add(v.price > before ? 'tick-up' : 'tick-down');
     lastPrices.set(v.symbol, v.price);
     const change = text('span', pnl == null ? '—' : `${signedMoney(pnl)} ${signedPct(pct)}`, direction(pnl));
-    return [symbol, v.qty, money(v.entryPrice), price, change];
+    // Unknown when no opening time is recorded — never shown as "just opened".
+    const held = text('span', v.heldForMs == null ? '—' : heldFor(v.heldForMs));
+    if (v.heldForMs == null) held.title = 'No opening time is recorded for this holding';
+    return [symbol, v.qty, money(v.entryPrice), price, change, held];
   });
-  if (!positions.length) { const row=text('tr',''), cell=text('td',p.available?'No open positions. Your next holding will appear here.':'Holdings unavailable. Waiting for broker data.','table-empty');cell.colSpan=5;row.append(cell);$('positions').append(row); }
+  if (!positions.length) { const row=text('tr',''), cell=text('td',p.available?'No open positions. Your next holding will appear here.':'Holdings unavailable. Waiting for broker data.','table-empty');cell.colSpan=6;row.append(cell);$('positions').append(row); }
   $('positions-status').textContent = p.available ? (positions.length ? `${positions.length} holding${positions.length === 1 ? '' : 's'} · select a ticker for details` : 'No open holdings.') : p.error;
   setValue('open-pnl', priced ? signedMoney(openPnl) : '—');
   $('open-pnl').className = direction(openPnl);
@@ -806,8 +830,11 @@ function renderOrders(actions) {
   if (!actions.length) { const empty=text('div','','empty-state');empty.append(text('strong','Room for the right opportunity'),text('p','New trade proposals will appear here for review.'));$('actions').append(empty); }
 }
 // Saved decisions and executions remain available across sessions.
-let historyRequest = 0, historySearchTimer;
+let historySearchTimer;
 const historyTypes = ['decision','fill','event'];
+// Fills live on the Broker page with their own search; decisions and events on Activity.
+const historyGroups = { activity:{types:['decision','event'],search:'history-search',status:'history-status',request:0}, fills:{types:['fill'],search:'fill-search',status:'fill-status',request:0} };
+const historyGroupOf = type => type === 'fill' ? 'fills' : 'activity';
 const historyOffsets = {decision:0, fill:0, event:0}, historySignatures = {};
 const historyLimit = 25, openHistoryDetails = new Set();
 const historyDate = at => at == null ? 'Not recorded' : new Date(at).toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit',timeZoneName:'short'});
@@ -924,17 +951,17 @@ function historyRows(entry) {
   return expandableRows(entry.id,`Details for ${entry.symbol || 'portfolio'} ${entry.kind} on ${historyDate(entry.at)}`,cells,()=>historyDetail(entry));
 }
 
-async function loadHistory() {
-  const request = ++historyRequest, query = $('history-search').value.trim();
-  const types = historyTypes;
+async function loadHistory(groupName = 'activity') {
+  const group = historyGroups[groupName], request = ++group.request, query = $(group.search).value.trim();
+  const types = group.types;
   for (const type of types) $(`history-${type}-rows`).setAttribute('aria-busy','true');
   try {
     const responses = await Promise.allSettled(types.map(type => api('activity-history?'+new URLSearchParams({type,q:query,offset:String(historyOffsets[type]),limit:String(historyLimit)}))));
-    if (request !== historyRequest) return;
+    if (request !== group.request) return;
     const results = responses.map(response => response.status === 'fulfilled' ? response.value : null);
     const errors = responses.map((response,index) => response.status === 'rejected'
       ? types[index] === 'event' && /type must be|no route/.test(response.reason.message)
-        ? 'Restart the engine to load saved Events. Decisions and fills remain available.'
+        ? 'Restart the engine to load saved Events. Decisions remain available.'
         : `Could not load ${types[index]}s. Displayed records may be stale. ${response.reason.message}`
       : '').filter(Boolean);
     let resetPage = false;
@@ -944,9 +971,9 @@ async function loadHistory() {
         historyOffsets[type] = Math.max(0,Math.floor((result.total-1)/historyLimit)*historyLimit);resetPage = true;
       }
     });
-    if (resetPage) return loadHistory();
+    if (resetPage) return loadHistory(groupName);
     const totals = results.find(Boolean);
-    $('history-totals').textContent = types.map(type => totals?.[type+'s'] == null ? `${type}s unavailable` : `${totals[type+'s'].toLocaleString()} ${type}s`).join(' · ');
+    if (groupName === 'activity') $('history-totals').textContent = types.map(type => totals?.[type+'s'] == null ? `${type}s unavailable` : `${totals[type+'s'].toLocaleString()} ${type}s`).join(' · ');
     results.forEach((result,index) => {
       const type = types[index], offset = historyOffsets[type], body = $(`history-${type}-rows`);
       if (!result) {
@@ -971,17 +998,17 @@ async function loadHistory() {
       $(`history-${type}-prev`).disabled = offset === 0;
       $(`history-${type}-next`).disabled = offset+historyLimit >= result.total;
     });
-    $('history-status').textContent = errors.length ? errors.join(' ') : query && results.every(result=>!result.total) ? 'No records match these filters.' : 'Times shown in your local timezone. Decisions and events show their latest recorded state.';
+    $(group.status).textContent = errors.length ? errors.join(' ') : query && results.every(result=>!result.total) ? 'No records match these filters.' : (groupName === 'fills' ? 'Times shown in your local timezone.' : 'Times shown in your local timezone. Decisions and events show their latest recorded state.');
   } catch (error) {
-    if (request === historyRequest) $('history-status').textContent = error.message.includes('no route') ? 'The running engine needs a restart to load Activity history. Your saved records are intact.' : 'Could not load history. Displayed records may be stale. '+error.message;
-  } finally { if (request === historyRequest) for (const type of types) $(`history-${type}-rows`).setAttribute('aria-busy','false'); }
+    if (request === group.request) $(group.status).textContent = error.message.includes('no route') ? 'The running engine needs a restart to load Activity history. Your saved records are intact.' : 'Could not load history. Displayed records may be stale. '+error.message;
+  } finally { if (request === group.request) for (const type of types) $(`history-${type}-rows`).setAttribute('aria-busy','false'); }
 }
-function resetHistory() { for (const type of historyTypes) historyOffsets[type] = 0; loadHistory(); }
-$('history-search').oninput = () => { ++historyRequest; clearTimeout(historySearchTimer); historySearchTimer = setTimeout(resetHistory,250); };
+function resetHistory(groupName = 'activity') { for (const type of historyGroups[groupName].types) historyOffsets[type] = 0; loadHistory(groupName); }
+for (const [groupName, group] of Object.entries(historyGroups)) $(group.search).oninput = () => { ++group.request; clearTimeout(historySearchTimer); historySearchTimer = setTimeout(() => resetHistory(groupName),250); };
 $('history-refresh').onclick = () => loadHistory();
 for (const type of historyTypes) {
-  $(`history-${type}-prev`).onclick = () => { historyOffsets[type] = Math.max(0,historyOffsets[type]-historyLimit); loadHistory(); };
-  $(`history-${type}-next`).onclick = () => { historyOffsets[type] += historyLimit; loadHistory(); };
+  $(`history-${type}-prev`).onclick = () => { historyOffsets[type] = Math.max(0,historyOffsets[type]-historyLimit); loadHistory(historyGroupOf(type)); };
+  $(`history-${type}-next`).onclick = () => { historyOffsets[type] += historyLimit; loadHistory(historyGroupOf(type)); };
 }
 
 const reviewSignatures = {}, dirtyLessons = new Set();
@@ -999,7 +1026,7 @@ function renderReviewTable(target, list, columnCount, render) {
 }
 function historyReference(id) {
   const button = text('button',id,'link');button.type = 'button';
-  button.onclick = () => { $('history-search').value = id;for (const type of historyTypes) historyOffsets[type] = 0;showView('activity'); };
+  button.onclick = () => { $('history-search').value = $('fill-search').value = id;for (const type of historyTypes) historyOffsets[type] = 0;showView('activity'); };
   return button;
 }
 // Agents write their outcome in Markdown; render it like a chat reply instead of one flat paragraph.
@@ -1020,6 +1047,76 @@ function renderRequests(list) {
       detail.append(references);return detail;
     }));
 }
+// ── Broker page ────────────────────────────────────────────────────────────
+const brokerRoleLabels = { stop:'Protective stop', target:'Profit target', entry:'Agent entry', exit:'Agent exit', protection:'Agent protection', external:'Placed outside this app' };
+const brokerPrice = n => n == null ? '—' : money(n);
+async function loadBrokerBook() {
+  const book = await api('broker-book');
+  $('broker-book-updated').textContent = book.lastTickAt ? `Checked ${clock(book.lastTickAt)} · ${book.broker} ${book.venue}` : 'Waiting for account data';
+  if (!book.available) {
+    $('broker-book-status').textContent = 'Broker orders could not be read in the latest account check. Nothing below is known to be current.';
+    $('broker-book-summary').replaceChildren(); $('broker-book-rows').replaceChildren(); $('broker-coverage-rows').replaceChildren();
+    reviewSignatures['broker-book-rows'] = reviewSignatures['broker-coverage-rows'] = null;
+    return;
+  }
+  const sum = book.summary;
+  $('broker-book-status').textContent = [!book.positionsAvailable && 'Holdings could not be read, so orders are not matched to positions.',
+    sum.unprotected.length && `No full stop at the broker: ${sum.unprotected.join(', ')}.`,
+    sum.mismatches.length && `Broker level differs from the saved level: ${sum.mismatches.join(', ')}.`].filter(Boolean).join(' ');
+  $('broker-book-summary').replaceChildren(...[['Resting orders',sum.count],['Placed by this app',sum.byThisSystem],['Placed elsewhere',sum.external],['Without a holding',sum.withoutPosition]]
+    .map(([label,value]) => { const d = text('div',''); d.append(text('span',label),text('strong',String(value))); return d; }));
+  const signature = JSON.stringify(book.orders);
+  if (reviewSignatures['broker-book-rows'] !== signature) {
+    $('broker-book-rows').replaceChildren(...book.orders.flatMap(o => expandableRows(`broker:${o.id}`, `Details for ${o.symbol} ${o.side} ${o.type} order`,
+      [o.symbol, text('span',brokerRoleLabels[o.role],'badge '+(o.role==='external'?'':'executed')), `${o.side} / ${o.rawType}`, String(o.remaining),
+       brokerPrice(o.triggerPrice), o.currentPrice == null ? '—' : money(o.currentPrice) + (o.priceStale ? ' (stale)' : ''),
+       o.distancePct == null ? '—' : `${Math.abs(o.distancePct).toFixed(2)}% ${o.distancePct > 0 ? 'below' : 'above'}`,
+       o.resultIfFilled == null ? '—' : signedMoney(o.resultIfFilled), o.status], () => brokerOrderDetail(o))));
+    if (!book.orders.length) { const row = text('tr',''), cell = text('td','No orders are resting at the broker.','table-empty'); cell.colSpan = 11; row.append(cell); $('broker-book-rows').append(row); }
+    reviewSignatures['broker-book-rows'] = signature;
+  }
+  rows('broker-coverage-rows', book.coverage, c => [c.symbol, String(c.qty), c.managed ? 'Yes' : 'No', String(c.stopShares), brokerPrice(c.firstStop),
+    `${brokerPrice(c.recordedStop)} / ${brokerPrice(c.recordedTarget)}`,
+    text('span', {protected:'Protected', partial:'Partly protected', none:'No broker stop'}[c.status], 'badge '+(c.status==='protected'?'executed':'failed'))]);
+  if (!book.coverage.length) { const row = text('tr',''), cell = text('td',book.positionsAvailable ? 'No holdings.' : 'Holdings unavailable.','table-empty'); cell.colSpan = 7; row.append(cell); $('broker-coverage-rows').append(row); }
+}
+function brokerOrderDetail(o) {
+  const detail = text('div','','history-detail');
+  detail.append(text('h3','At the broker'), historyFacts([
+    ['Order ID', o.id], ['Client order ID', o.clientOrderId || '—'], ['Type', `${o.side} ${o.rawType}`],
+    ['Quantity', `${o.qty} (filled ${o.filled}, ${o.remaining} left)`], ['Limit price', brokerPrice(o.limitPrice)], ['Stop price', brokerPrice(o.stopPrice)],
+    ...(o.trailPercent != null ? [['Trail', o.trailPercent + '%']] : []), ...(o.trailAmount != null ? [['Trail', money(o.trailAmount)]] : []),
+    ['Time in force', o.tif || '—'], ['Broker status', o.status + (o.status === 'held' && o.pairedWith ? ' — normal for the stop half of a stop/target pair; it triggers at its stop price' : '')],
+    ['Linked order', o.pairedWith ? `${o.pairedWith.type} at ${brokerPrice(o.pairedWith.price)} — one cancels the other (${o.pairedWith.id})` : 'None']]));
+  detail.append(text('h3','What this app knows'));
+  const facts = [['Purpose', brokerRoleLabels[o.role]]];
+  if (o.recordedLevel != null) facts.push(['Saved level', brokerPrice(o.recordedLevel) + (o.levelMismatch ? ' — differs from the broker; the broker level is the one that fires' : '')]);
+  if (o.position) facts.push(['Holding', `${o.position.qty} shares, bought at ${brokerPrice(o.position.entryPrice)}, now ${brokerPrice(o.position.price)}${o.position.pnlPct == null ? '' : ' (' + signedPct(o.position.pnlPct) + ')'}`],
+    ['Covers the whole holding', o.position.covers ? 'Yes' : 'No']);
+  else facts.push(['Holding', 'No holding in this symbol']);
+  if (o.notional != null) facts.push(['Value at trigger', money(o.notional)]);
+  if (o.resultIfFilled != null) facts.push(['Gain or loss if filled', signedMoney(o.resultIfFilled) + ' vs. purchase price, before fees']);
+  if (o.protectionRequest) facts.push(['Protection request', `${o.protectionRequest.status} · ${historyDate(o.protectionRequest.at)}${o.protectionRequest.error ? ' · ' + o.protectionRequest.error : ''}`]);
+  detail.append(historyFacts(facts));
+  if (o.agentOrder) {
+    detail.append(text('h3','Agent order'), historyFacts([['Kind', o.agentOrder.kind], ['Status', o.agentOrder.status], ['Created', historyDate(o.agentOrder.createdAt)],
+      ['Approved by', o.agentOrder.automatic ? 'Automatic' : o.agentOrder.decidedBy || 'Not decided']]), text('p', o.agentOrder.reason));
+    const links = text('div','','record-links'); links.append(text('span','Order'), historyReference(o.agentOrder.id)); detail.append(links);
+  }
+  if (o.entryDecision) {
+    detail.append(text('h3','Why the position was opened'), text('p', o.entryDecision.rationale));
+    if (o.entryDecision.invalidation) detail.append(text('p', 'Invalidation: ' + o.entryDecision.invalidation, 'review-meta'));
+    detail.append(text('p', `Planned stop ${brokerPrice(o.entryDecision.intendedStop)} · planned target ${brokerPrice(o.entryDecision.intendedTarget)} · ${historyDate(o.entryDecision.at)}`, 'review-meta'));
+    const links = text('div','','record-links'); links.append(text('span','Decision'), historyReference(o.entryDecision.id)); detail.append(links);
+  }
+  if (o.managementDecision) {
+    detail.append(text('h3','Latest management decision'), text('p', o.managementDecision.rationale));
+    const links = text('div','','record-links'); links.append(text('span','Decision'), historyReference(o.managementDecision.id)); detail.append(links);
+  }
+  if (o.role === 'external') detail.append(text('p','This order was not placed by this app. The agent can see it but does not manage it.','review-warning'));
+  return detail;
+}
+$('broker-book-reconcile').onclick=attempt(async()=>{await api('reconcile',{});notice('Broker outcomes checked.',true);await refresh();});
 function renderLessons(list) {
   // Keep unsaved edits intact even if focus moves away during a background refresh.
   if (dirtyLessons.size || $('lesson-list').contains(document.activeElement)) return;
@@ -1312,7 +1409,6 @@ $('settings').onsubmit=attempt(async()=>{
 $('review').onclose=attempt(async()=>{if($('review').returnValue!=='save')return;await api('strategy',pendingStrategy);await loadStrategy();loadPrompts().catch(()=>{});notice('Strategy saved. Older approved orders will require a fresh order.',true);});
 
 $('pause').onclick=attempt(async()=>{await api('commands/'+(status.health.paused?'resume':'pause'),{});await refresh();});
-$('reconcile').onclick=attempt(async()=>{await api('reconcile',{});notice('Broker outcomes checked.',true);await refresh();});
 $('message').onsubmit=attempt(async()=>{
   const value=messageInput.value;
   await sendMessage(value);

@@ -139,6 +139,8 @@ h1 { font-size: clamp(25px, 2.4vw, 36px); line-height: 1.2; font-weight: 500; le
 .msg.chart pre { background: var(--surface-2); border: 1px solid var(--line); padding: 12px; border-radius: 8px; font: 12px/1.3 ui-monospace, monospace; overflow-x: auto; white-space: pre; }
 .msg.alert { max-width: 100%; border: 1px solid color-mix(in srgb, var(--down) 30%, transparent); background: var(--down-soft); padding: 12px; border-radius: 8px; }.msg.alert p { font-size: 13px; }
 .msg.log { max-width: 100%; display: flex; gap: 10px; border-left: 1px solid var(--line); padding-left: 11px; font: 11px/1.7 ui-monospace, monospace; }.msg.log time { flex: none; margin: 0; font-size: 10px; }.msg.log p { color: var(--ink-3); }.msg.log.level-warn p { color: var(--warn); }.msg.log.level-error p { color: var(--down); }#feed.hide-log .msg.log { display: none; }
+/* With logs off the chat keeps only the assistant's own tool calls; the trader's and researcher's are noise there. */
+#feed.hide-log .msg.tool:not([data-source="assistant"]) { display: none; }
 #thinking { display: flex; align-items: center; gap: 8px; margin: 8px 24px; font-size: 12px; color: var(--accent); }.dots { display: inline-flex; gap: 3px; }.dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: pulse 1.2s infinite; }.dots i:nth-child(2) { animation-delay: .2s; }.dots i:nth-child(3) { animation-delay: .4s; }
 @keyframes pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }@keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 .composer { margin: 0 18px 14px; }.suggestions { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }.chip { font-size: 11px; font-weight: 400; padding: 5px 9px; border-radius: 6px; color: var(--ink-2); background: transparent; }
@@ -150,7 +152,7 @@ h1 { font-size: clamp(25px, 2.4vw, 36px); line-height: 1.2; font-weight: 500; le
 #equity-chart { display: block; width: 100%; height: 130px; border-bottom: 1px solid var(--line); background: repeating-linear-gradient(to top, transparent 0, transparent calc(33.333% - 1px), var(--line-soft) calc(33.333% - 1px), var(--line-soft) 33.333%); }#equity-chart.empty { height: 100px; }#equity-chart .line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }#equity-chart .line.up { stroke: var(--chart-up); }#equity-chart .line.down { stroke: var(--chart-down); }#equity-chart .area { opacity: .1; }#equity-chart .area.up { fill: var(--chart-up); }#equity-chart .area.down { fill: var(--chart-down); }.chart-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); margin-top: 8px; }.exposure { margin: 13px 0 0; font-size: 11px; color: var(--ink-3); line-height: 1.8; }
 .section-description { font-size: 12px; color: var(--ink-3); margin: -7px 0 17px; }.count-pill { border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; }.count-pill.has-pending { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent); background: var(--warn-soft); }.action-footnote { font-size: 10px; margin: 16px 0 0; color: var(--ink-3); }.empty-state { text-align: center; padding: 22px 10px; border: 1px dashed var(--line); border-radius: 8px; }.empty-state strong { display: block; color: var(--ink-2); font-size: 13px; font-weight: 500; margin-bottom: 5px; }.empty-state p { margin: 0; font-size: 12px; color: var(--ink-3); }
 .context-row { display: flex; justify-content: space-between; align-items: center; margin: 12px 0; font-size: 12px; }.context-row > span { color: var(--ink-3); }.context-row strong { font-weight: 500; }.watchlist-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; }.watchlist-chips button { font: 11px ui-monospace, monospace; padding: 5px 8px; border-radius: 5px; color: var(--ink-2); background: var(--surface-2); }
-#holdings { grid-column: 1 / -1; }#holdings .eyebrow { font-size: 9px; }#holdings h2 { font-size: 20px; margin-top: 4px; }.orders-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 16px; }#orders-status { font-size: 12px; color: var(--ink-3); }
+#holdings { grid-column: 1 / -1; }#holdings .eyebrow { font-size: 9px; }#holdings h2 { font-size: 20px; margin-top: 4px; }.orders-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .badge { display: inline-block; background: var(--surface-2); color: var(--ink-2); border-radius: 4px; font-size: 12px; font-weight: 700; letter-spacing: .5px; padding: 3px 7px; text-transform: uppercase; white-space: nowrap; }
 .badge.live, .badge.unknown, .badge.failed, .badge.rejected, .badge.expired { background: var(--down-soft); color: var(--down); }
 .badge.pending, .badge.partial, .badge.approved { background: var(--warn-soft); color: var(--warn); }
@@ -272,9 +274,8 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
 #holdings th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 #holdings td:last-child { max-width: none; }
 #holdings td:nth-child(5) { white-space: normal; min-width: 90px; }
-#broker-panel details { margin: 16px 0 0; }
-#broker-panel summary { font-size: 12px; color: var(--ink-3); }
-#broker-panel details p { font-size: 13px; }
+#broker-recover summary { font-size: 13px; color: var(--ink-2); }
+#broker-recover details p { font-size: 13px; }
 #live-activity { padding: 0; overflow: hidden; background: var(--chat-bg); border-color: var(--chat-line); }
 #live-activity .pane-title { flex: none; gap: 8px; padding: 8px 10px; margin: 0; background: var(--chat-chrome); border-bottom: 1px solid var(--chat-line); }
 #live-activity h2 { font: 600 12px/1.5 var(--font-mono); }
@@ -291,6 +292,13 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
 .activity-entry[data-source="trader"] .activity-entity { color: var(--trader-ink); }
 .activity-kind { color: var(--ink-3); font: inherit; white-space: nowrap; }
 .activity-entry p { color: var(--ink-2); margin: 0; font: inherit; white-space: pre-wrap; }
+/* Tool calls in the stream: one plain line until opened. The row already shows time and agent. */
+#live-feed .tool-call { min-width: 0; border: 0; border-radius: 0; background: none; }
+#live-feed .tool-call > summary { min-height: 0; padding: 0; gap: 6px; font: inherit; cursor: pointer; }
+#live-feed .tool-call > summary:hover, #live-feed .tool-call[open] > summary { background: none; }
+#live-feed .tool-call > summary .tool-call-agent, #live-feed .tool-call > summary time { display: none; }
+#live-feed .tool-call-signature, #live-feed .tool-call-type { font: inherit; }
+#live-feed .tool-call-body { margin: 4px 0 6px; border: 1px solid var(--line-soft); border-radius: 4px; background: var(--chat-chrome); }
 .activity-entry.reply .activity-kind, .activity-entry.trade .activity-kind { color: var(--accent); }
 .activity-entry.operator .activity-kind { color: var(--ink); }
 .activity-entry.warn p, .activity-entry.warn .activity-kind { color: var(--warn); }
@@ -327,7 +335,6 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
   #agent-now { order: 2; }
   #decisions { order: 3; }
   #live-activity { order: 4; }
-  #broker-panel { order: 5; }
   #chart { order: 6; }
   .strategy-context { order: 7; }
   #current-agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 18px; }
@@ -410,8 +417,7 @@ main { padding: 10px 14px 16px; }
 .starter-grid span { font-size: 10px; }
 .live-secondary { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 8px; min-width: 0; }
 .live-secondary #live-activity { grid-column: 1; grid-row: 1; height: 280px; order: 0; }
-.live-secondary #broker-panel { grid-column: 1; grid-row: 2; }
-.live-secondary #decisions { grid-column: 2; grid-row: 1 / span 2; }
+.live-secondary #decisions { grid-column: 2; grid-row: 1; }
 .live-secondary #chart { grid-column: 1; }
 .live-secondary .strategy-context { grid-column: 2; }
 .live-secondary .chart-caption strong { font-size: 20px; }
@@ -435,8 +441,7 @@ main { padding: 10px 14px 16px; }
   .live-view > .chat { order: 2; height: 480px; }
   #live-activity { order: 3; height: 220px; }
   .live-secondary { order: 4; grid-template-columns: minmax(0, 1fr); }
-  .live-secondary #live-activity, .live-secondary #broker-panel, .live-secondary #decisions, .live-secondary #chart, .live-secondary .strategy-context { grid-column: auto; grid-row: auto; }
-  .live-secondary #broker-panel { order: 1; }
+  .live-secondary #live-activity, .live-secondary #decisions, .live-secondary #chart, .live-secondary .strategy-context { grid-column: auto; grid-row: auto; }
   .live-secondary #decisions { order: 2; }
   .live-secondary #chart { order: 2; }
   .live-secondary .strategy-context { order: 3; }
@@ -829,11 +834,10 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .table-wrap { border-radius: 4px; }
 .table-wrap tbody > tr:not(.history-expanded):hover { background: var(--surface-2); }
 #holdings :is(th, td):nth-child(n+2):nth-child(-n+5),
-#broker-panel :is(th, td):nth-child(n+3):nth-child(-n+5),
 .history-table[aria-labelledby="history-decision-title"] tr > :nth-child(n+7):nth-child(-n+8),
 .history-table[aria-labelledby="history-fill-title"] tr > :nth-child(n+5) { text-align: right; }
-#positions td:nth-child(n+2):nth-child(-n+6), #orders td:nth-child(n+3):nth-child(-n+5),
-#orders td:last-child, #watchlist-rows td:not(:first-child),
+#positions td:nth-child(n+2):nth-child(-n+6),
+#watchlist-rows td:not(:first-child),
 #history-decision-rows .history-row > td:nth-child(n+7):nth-child(-n+8),
 #history-fill-rows .history-row > td:nth-child(n+5) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .watchlist-legend { font-size: 11px; }
@@ -878,8 +882,6 @@ dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .history-detail textarea { min-height: 80px; margin: 8px 0; }
 .recorded-fields > div { padding: 4px 0; }
 .history-transitions li { padding: 4px 0; }
-#broker-panel th, #broker-panel td { padding: 4px 6px; font-size: 12px; }
-#broker-panel details { margin-top: 8px; }
 .section-description { margin: 0 0 8px; }
 .action-footnote { margin-top: 8px; }
 .card { padding: 10px; }
@@ -1138,3 +1140,51 @@ details[open] > summary > .json-hint { display: none; }
 #agent-prompts .prompt-tabs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 #agent-prompts .prompt-tabs button[aria-pressed="true"] { border-color: var(--ink-3); font-weight: 600; }
 #prompt-text { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
+
+/* Agents panel: one row per agent (icon, name, current activity, state pill); a row opens for detail and tokens. */
+.live-main #agent-now { flex: none; display: block; padding: 0; overflow: hidden; }
+.live-main #agent-now .pane-title { display: flex; align-items: baseline; justify-content: space-between; margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+.live-main #agent-now h2 { font-size: 11px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; color: var(--ink-3); }
+.live-main #agent-now #tick-age { font-size: 11px; color: var(--ink-3); }
+.live-main #current-agents { display: block; }
+.live-main .current-agent { padding: 0; border: 0; border-bottom: 1px solid var(--line-soft); }
+.live-main .current-agent-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; list-style: none; cursor: pointer; }
+.live-main .current-agent-head::-webkit-details-marker { display: none; }
+.live-main .current-agent-head::after { content: ''; flex: none; width: 6px; height: 6px; margin: 0 2px 3px 4px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: rotate(45deg); transition: transform .15s ease; }
+.live-main .current-agent[open] > .current-agent-head::after { transform: rotate(-135deg); margin-bottom: -3px; }
+.live-main .current-agent-head:hover { background: var(--surface-2); }
+.agent-icon { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.agent-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.agent-icon.trader { background: var(--trader-soft); color: var(--trader-ink); }
+.agent-icon.researcher { background: var(--warn-soft); color: var(--warn); }
+.agent-label { display: grid; flex: 1; min-width: 0; gap: 2px; }
+.agent-label strong { font-size: 12px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; }
+.agent-detail { overflow: hidden; color: var(--ink-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.live-main .agent-state { flex: none; padding: 2px 9px; border: 1px solid var(--line-soft); border-radius: 999px; background: var(--surface-2); font-size: 11px; white-space: nowrap; }
+.live-main .agent-state::before { margin-right: 5px; }
+.current-agent-body { padding: 0 12px 10px 50px; }
+.live-main .current-agent-body p { margin: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.live-main .current-agent-body .agent-token-line { margin-top: 4px; color: var(--ink-3); font-size: 11px; }
+.agent-tokens { font: 11px/1.5 var(--font-mono); }
+.live-main #agent-now .runtime-footer { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; border: 0; font-size: 11px; color: var(--ink-3); }
+
+/* Account indicators as tiles: dot + label, large figure, short note underneath. */
+.live-main #account-summary .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 0; margin-bottom: 10px; border: 1px solid var(--line-soft); border-radius: 4px; overflow: hidden; white-space: normal; }
+.live-main #account-summary .metrics > div { display: block; padding: 8px 12px; border-right: 1px solid var(--line-soft); min-width: 0; }
+.live-main #account-summary .metrics > div:last-child { border-right: 0; }
+.live-main #account-summary .metrics span { display: flex; align-items: center; gap: 5px; font: 500 10px/1.4 var(--font-ui); letter-spacing: .5px; text-transform: uppercase; color: var(--ink-3); }
+.live-main #account-summary .metrics span::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); }
+.live-main #account-summary .metrics > div:first-child span::before { background: var(--accent); }
+.live-main #account-summary .metrics > div:has(strong.up) span::before { background: var(--up); }
+.live-main #account-summary .metrics > div:has(strong.down) span::before { background: var(--down); }
+.live-main #account-summary .metrics strong { display: block; margin: 3px 0 1px; font: 600 17px/1.3 var(--font-mono); letter-spacing: -.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-main #account-summary .metrics strong.up { color: var(--up); }.live-main #account-summary .metrics strong.down { color: var(--down); }
+.live-main #account-summary .metrics small { display: block; min-height: 14px; overflow: hidden; color: var(--ink-3); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.live-main #account-summary .metrics small.up { color: var(--up); }.live-main #account-summary .metrics small.down { color: var(--down); }
+.live-main #current-agents { gap: 0; }
+.live-main .agent-detail { font-weight: 400; }
+.live-main .current-agent-head { padding-top: 8px; padding-bottom: 8px; }
+.live-main .current-agent[open] .agent-detail { white-space: normal; overflow-wrap: anywhere; }
+.live-main .current-agent-body .agent-token-line { margin-top: 0; }
+.live-main .current-agent { margin: 0; }
+.live-main .agent-label strong, .live-main .agent-detail { line-height: 1.4; }
