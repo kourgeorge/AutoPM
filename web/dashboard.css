@@ -503,6 +503,9 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 #watchlist-panel td { font-size: 11px; }
 #watchlist-panel button.link { font-size: 11px; }
 .signal-score { color: var(--ink-2); }
+.signal-score.up { color: var(--up); } .signal-score.down { color: var(--down); }
+.signal-score.mild { opacity: .7; } .signal-score.strong { font-weight: 650; }
+.rsi-zone { color: var(--warn); font-weight: 650; }
 .watchlist-legend { font-size: 9px; color: var(--ink-3); margin: 9px 0 0; }
 #watchlist-status { font-size: 10px; }
 .watchlist-search { margin: 0 0 8px; }
