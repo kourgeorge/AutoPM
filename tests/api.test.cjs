@@ -256,7 +256,7 @@ test('the assistant can read every dashboard page in-process, read-only',async()
   const list=appEndpoints();
   assert.equal(list.available,true);
   const paths=list.endpoints.map(e=>e.path);
-  assert.ok(paths.includes('/api/llm-usage')&&paths.includes('/api/broker-orders'));
+  assert.ok(paths.includes('/api/llm-usage')&&paths.includes('/api/broker-book'));
   assert.ok(!paths.includes('/api/stream'),'the live stream never ends, so it is not offered');
   assert.ok(list.endpoints.every(e=>e.returns!=='No description.'),'every readable page says what it returns');
   const usage=await readAppEndpoint('/api/llm-usage?days=7');

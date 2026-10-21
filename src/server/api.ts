@@ -16,7 +16,9 @@ import { canonicalSymbol } from '../core/symbols';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
 import type { Timeframe } from '../collect/yahoo';
-import { confirmProtection, clearUnplacedProtection } from '../strategy/protectionIntent';
+import { confirmProtection, clearUnplacedProtection, protectionIntents } from '../strategy/protectionIntent';
+import { brokerBook } from '../review/brokerBook';
+import { readDecision } from '../journal/journal';
 import { adoptHolding, AdoptRefused } from '../strategy/adopt';
 import { sweepOrders } from '../strategy/orderExecutor';
 import http from 'http';
@@ -209,6 +211,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/strategy': 'The full saved strategy settings and playbook, with its hash.',
   '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
   '/api/broker-orders': 'Orders resting at the broker from the last tick.',
+  '/api/broker-book': 'Broker page: each resting order joined to its holding, agent order and decision; protection coverage.',
 };
 
 /** The readable routes, with what each returns. The live stream is left out: it never ends. */
@@ -514,6 +517,15 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('GET', '/api/broker-orders', () => {
     const tick = getLastTick();
     return { available: !!tick && !tick.ordersStale, lastTickAt: tick?.tickAt, orders: tick && !tick.ordersStale ? tick.orders : null };
+  });
+  // The broker page: each resting order joined to its holding, the agent order and decision behind it.
+  add('GET', '/api/broker-book', () => {
+    const tick = getLastTick();
+    const available = !!tick && !tick.ordersStale;
+    const book = available ? brokerBook({ orders: tick!.orders ?? [], positions: tick!.positionsStale ? [] : Object.values(tick!.positions),
+      snapshots: getState().positionSnapshots, agentOrders: listOrders(), protection: protectionIntents(), decision: readDecision }) : null;
+    return { available, positionsAvailable: !!tick && !tick.positionsStale, lastTickAt: tick?.tickAt ?? null,
+      broker: config.broker, venue: config.venue, ...(book ?? { orders: null, coverage: null, summary: null }) };
   });
   add('POST', '/api/positions/:symbol/adopt', async ({ params, body }) => {
     const input = await body(), target = input.target == null ? undefined : Number(input.target);

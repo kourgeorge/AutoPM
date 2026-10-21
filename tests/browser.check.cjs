@@ -92,7 +92,21 @@ test('conversation tool calls expand complete inputs and outputs without losing 
     await expect(calls.last().locator('summary .tool-call-agent')).toHaveText('Trader');
     await expect(calls.last()).toHaveAttribute('data-source', 'trader');
     await expect(page.locator('#live-feed .activity-entry.tool').last().locator('.activity-entity')).toHaveText('Trader');
+    // The stream shows every agent's calls, each opening to its full input and output.
+    const streamCall = page.locator('#live-feed .activity-entry.tool').last().locator('details.tool-call');
+    await expect(streamCall.locator('.tool-call-name')).toHaveText('inspect_order');
+    await expect(streamCall.locator('.tool-call-type')).toHaveText('Error');
+    await streamCall.locator('summary').click();
+    await expect(streamCall.locator('pre').last()).toContainText('Order unavailable');
+    await streamCall.scrollIntoViewIfNeeded();await streamCall.screenshot({ path: '/tmp/autotrade-stream-tool.png' });
+    await streamCall.locator('summary').click();
     await expect(calls.last().locator('summary .tool-call-params')).toHaveText('()');
+    // With logs off, only the assistant's own calls show in the chat; the trader's come back with Logs.
+    await expect(calls.last()).toBeHidden();
+    await expect(first).toBeVisible();
+    await page.locator('#show-log').check();
+    await expect(calls.last()).toBeVisible();
+    await page.locator('#show-log').uncheck();
     assert.equal(await first.evaluate(el => el.open), true, 'new live tool calls preserve expanded calls');
     ui.log('TOOL', '[assistant] text_tool() → plain text', { agent: 'assistant', name: 'text_tool', input: null, output: 'Plain text\n<output> is literal' });
     await expect(calls).toHaveCount(3);await calls.last().locator('summary').click();
@@ -252,7 +266,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
   require('../src/core/storage').saveValue('eventRegistry',{pending:[event],live:[event]});
   const usageDay=new Date().toISOString().slice(0,10);
   require('../src/core/storage').saveValue('modelUsage',{day:usageDay,requests:3,inputTokens:1400,outputTokens:100,missingUsage:0,byAgent:{trader:{requests:2,inputTokens:1200,outputTokens:80,missingUsage:0},assistant:{requests:1,inputTokens:200,outputTokens:20,missingUsage:0}}});
-  const tick=(equity,price)=>recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,positions:{MSFT:{symbol:'MSFT',qty:3,entryPrice:410,price,stopLevel:null}},orders:[],watchlist:{AAPL:{symbol:'AAPL',price:100}},account:{equity,cash:98000},portfolio:{},session:'open'});
+  const tick=(equity,price)=>recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,positions:{MSFT:{symbol:'MSFT',qty:3,entryPrice:410,price,stopLevel:null,heldForMs:(3*24+4)*3600000},NVDA:{symbol:'NVDA',qty:1,entryPrice:100,price:100,stopLevel:null,heldForMs:null}},orders:[],watchlist:{AAPL:{symbol:'AAPL',price:100}},account:{equity,cash:98000},portfolio:{},session:'open'});
   tick(100000,415);
 
   const lessons=require('../src/journal/lessons');lessons.recordLesson('Review concentration before adding exposure.');
@@ -294,6 +308,13 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     ui.log('INFO','Checking current positions and broker protection.');
     await expect(page.locator('#current-agents')).toContainText('Reviewing MSFT exposure');
     await expect(page.locator('#live-feed')).toContainText('Checking current positions and broker protection.');
+    // The agents panel lives on Activity, keeping Live to the account, holdings and conversation.
+    await expect(page.locator('#view-live #agent-now')).toHaveCount(0);
+    await page.getByRole('tab',{name:'Activity',exact:true}).click();
+    await expect(page.locator('#view-activity #current-agents')).toBeVisible();
+    await page.locator('#agent-now').screenshot({path:'/tmp/autotrade-agents-activity.png'});
+    await page.getByRole('tab',{name:'Live',exact:true}).click();
+    await page.screenshot({path:'/tmp/autotrade-live-after.png'});
     await page.getByRole('button',{name:'Focus conversation'}).click();
     await expect(page.locator('#welcome')).toBeVisible();
     assert.equal(await page.locator('#activity').evaluate(el=>getComputedStyle(el).position),'static');
@@ -346,6 +367,8 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('#account-mode')).toHaveText('paper');
     await page.getByRole('tab',{name:'Live',exact:true}).click();
     await expect(page.locator('#positions')).toContainText('+$15.00');
+    await expect(page.locator('#positions tr',{hasText:'MSFT'})).toContainText('3d 4h');
+    await expect(page.locator('#positions tr',{hasText:'NVDA'}).locator('td').last()).toHaveText('—');
     // A new tick reaches the page through the event stream and extends the equity chart.
     await new Promise(resolve=>setTimeout(resolve,5));tick(100250,420);ui.setTick({});
     await expect(page.locator('#equity-change')).toContainText('+$250.00');
@@ -363,15 +386,30 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.evaluate(() => refresh());
     await expect(orderRow).toHaveAttribute('open', '');
     assert.equal(require('../src/core/orders').getOrder(p.id).actorId,'operator');
+    // Broker page: a resting stop is joined to its holding and explains itself.
+    recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,positions:{MSFT:{symbol:'MSFT',qty:3,entryPrice:410,price:415,stale:false,stopLevel:null,pnlPct:1.2}},
+      orders:[{id:'broker-stop-1',symbol:'MSFT',side:'sell',qty:3,filled:0,type:'stop',rawType:'stop',stopPrice:400,tif:'gtc',status:'new'}],watchlist:{AAPL:{symbol:'AAPL',price:100}},account:{equity:100000,cash:98000},portfolio:{},session:'open'});
+    await page.getByRole('tab',{name:'Broker',exact:true}).click();
+    const brokerRow=page.locator('#broker-book-rows .history-row');
+    await expect(brokerRow).toHaveCount(1);
+    await expect(brokerRow).toContainText('Placed outside this app');
+    await expect(brokerRow).toContainText('−$30.00'.replace('−','-'));
+    await expect(page.locator('#broker-coverage-rows')).toContainText('Protected');
+    await brokerRow.locator('.history-row-toggle').click();
+    await expect(page.locator('#broker-book-rows .history-expanded')).toContainText('broker-stop-1');
+    await expect(page.locator('#broker-book-rows .history-expanded')).toContainText('not placed by this app');
+    await expect(page.locator('#broker-fills #history-fill-rows')).toContainText('Not reported');
+    await expect(page.locator('#broker-recover')).toContainText('Recover an interrupted protection request');
+    await expect(page.locator('#view-live #broker-panel')).toHaveCount(0);
     await page.getByRole('tab',{name:'Activity',exact:true}).click();
-    await expect(page.locator('#view-activity .history-row')).toHaveCount(4);
+    await expect(page.locator('#view-activity .history-row')).toHaveCount(3);
+    await expect(page.locator('#view-activity #history-fill-rows')).toHaveCount(0);
     await expect(page.locator('#history-decision-rows')).toContainText('approved');
-    await expect(page.locator('#history-fill-rows')).toContainText('Not reported');
     await expect(page.locator('#history-event-rows .history-row')).toHaveCount(2);
     await expect(page.locator('#history-event-rows .history-row').first()).toContainText('Queued');
     await expect(page.locator('#history-event-rows .history-row').first()).toContainText('observed');
     await expect(page.locator('#history-event-rows .history-row').last()).toContainText('resolved');
-    assert.ok((await page.locator('#history-event-title').boundingBox()).y > (await page.locator('#history-fill-title').boundingBox()).y);
+    assert.ok((await page.locator('#history-event-title').boundingBox()).y > (await page.locator('#history-decision-title').boundingBox()).y);
     await page.locator('#history-event-rows .history-row-toggle').first().click();
     await expect(page.locator('#history-event-rows .history-expanded').first()).toContainText('The plan is below the required reward:risk.');
     await expect(page.locator('#history-event-rows .history-expanded').first()).toContainText('109.78');
@@ -393,7 +431,7 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('#history-status')).toHaveText('No records match these filters.');
     await page.reload();
     await expect(page.getByRole('tab',{name:'Activity',exact:true})).toHaveAttribute('aria-selected','true');
-    await expect(page.locator('#view-activity .history-row')).toHaveCount(4);
+    await expect(page.locator('#view-activity .history-row')).toHaveCount(3);
     await page.getByRole('tab',{name:'Live',exact:true}).click();
     await page.getByRole('button',{name:'Pause trading',exact:true}).click();
     await page.getByRole('button',{name:'Resume trading',exact:true}).waitFor();assert.equal(getState().paused,true);
@@ -545,9 +583,13 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await mobile.getByRole('button',{name:'Close position details'}).click();
     await mobile.getByRole('tab',{name:'Activity',exact:true}).click();
-    // The four seeded rows plus the /pause, /lessons and /positions commands run above.
-    await expect(mobile.locator('#view-activity .history-row')).toHaveCount(7);
+    // The three seeded rows (the fill is on Broker) plus the /pause, /lessons and /positions commands run above.
+    await expect(mobile.locator('#view-activity .history-row')).toHaveCount(6);
     await mobile.screenshot({path:'/tmp/autotrade-activity-mobile.png',fullPage:true});
+    assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    await mobile.getByRole('tab',{name:'Broker',exact:true}).click();
+    await expect(mobile.locator('#broker-fills #history-fill-rows .history-row')).toHaveCount(1);
+    await mobile.screenshot({path:'/tmp/autotrade-broker-mobile.png',fullPage:true});
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await mobile.getByRole('tab',{name:'Live',exact:true}).click();
     await mobile.locator('#holdings').screenshot({path:'/tmp/autotrade-mobile-holdings.png'});
