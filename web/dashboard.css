@@ -1137,3 +1137,7 @@ details[open] > summary > .json-hint { display: none; }
 @media (max-width: 800px) { .agent-floor { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .agent-desk, .agent-desk *, .desk-handoff { animation: none !important; transition: none !important; } }
 @media (max-width: 600px) { .agent-floor { gap: 6px; }.agent-desk { padding: 6px 10px; }.desk-avatar, .desk-ring { width: 36px; height: 36px; }.desk-core { inset: 5px; }.desk-core svg { width: 14px; height: 14px; }.desk-meta { display: none; } }
+/* Market session sits in the top bar, beside the account badge. */
+.topbar-right #market-session { padding: 2px 8px; font-size: 11px; }
+.topbar-right #market-session.open { color: var(--up); border-color: color-mix(in srgb, var(--up) 45%, var(--line)); }
+@media (max-width: 600px) { .topbar-right #market-session { font-size: 9px; padding: 1px 5px; } }

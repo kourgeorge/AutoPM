@@ -37,18 +37,12 @@
 <div class="app-shell">
 <header class="topbar">
   <div class="breadcrumb"><span class="breadcrumb-root">Workspace</span> <span class="breadcrumb-slash">/</span> <strong id="view-label">Live trading</strong></div>
-  <div class="topbar-right"><span id="account-mode" class="badge">Connecting</span><span id="live" class="live-dot" role="status">Connecting…</span><span class="topbar-divider"></span><button id="pause">Pause trading</button></div>
+  <div class="topbar-right"><span id="market-session" class="session-pill">Waiting for market data</span><span id="account-mode" class="badge">Connecting</span><span id="live" class="live-dot" role="status">Connecting…</span><span class="topbar-divider"></span><button id="pause">Pause trading</button></div>
 </header>
 <p id="notice" role="status" hidden></p>
 <div id="health" role="status"></div>
 <main id="workspace">
 <div id="view-live" class="view live-view" role="tabpanel" aria-labelledby="tab-live">
-  <div id="status-panel" class="live-statusline" role="region" aria-labelledby="status-title" tabindex="0">
-    <div class="status-readout" tabindex="0" role="group" aria-label="Account and agent status">
-    <div class="status-panel-heading"><h2 id="status-title">Status</h2><span id="agent-model">Connecting to your account…</span></div>
-    </div>
-    <span id="market-session" class="session-pill">Waiting for market data</span>
-  </div>
   <section id="agent-floor" class="agent-floor" aria-label="What each agent is doing">
     <article class="agent-desk" data-agent="assistant" data-state="starting" tabindex="0"><div class="desk-avatar" aria-hidden="true"><svg class="desk-ring" viewBox="0 0 64 64"><circle class="desk-ring-track" cx="32" cy="32" r="28"/><circle class="desk-ring-progress" cx="32" cy="32" r="28"/></svg><span class="desk-core"><svg><use href="#icon-chat"/></svg></span></div><div class="desk-who"><h2>Assistant</h2><span class="desk-pill">starting</span></div><p class="desk-doing" aria-live="polite">Connecting…</p><p class="desk-meta"></p></article>
     <article class="agent-desk" data-agent="trader" data-state="starting" tabindex="0"><div class="desk-avatar" aria-hidden="true"><svg class="desk-ring" viewBox="0 0 64 64"><circle class="desk-ring-track" cx="32" cy="32" r="28"/><circle class="desk-ring-progress" cx="32" cy="32" r="28"/></svg><span class="desk-core"><svg><use href="#icon-review"/></svg></span></div><div class="desk-who"><h2>Trader</h2><span class="desk-pill">starting</span></div><p class="desk-doing" aria-live="polite">Connecting…</p><p class="desk-meta"></p></article>
