@@ -359,6 +359,7 @@ function addEntries(entries) {
   for (const entry of entries) {
     if (entry.seq <= cursor) continue;
     cursor = entry.seq;
+    if (entry.kind === 'log' && entry.level === 'TOOL' && entry.tool) noteAgentTool(entry);
     if (entry.kind === 'reply' || entry.kind === 'chart') awaitingReply = 0;
     // Older stored replies include a request label; keep it out of the conversation too.
     const body = entry.kind === 'reply' ? entry.text.replace(/^(?:assistant|trader) request [A-Za-z0-9:_-]+: /, '') : entry.text;
@@ -424,6 +425,147 @@ function askAbout(question) {
   messageInput.setSelectionRange(question.length, question.length);
 }
 
+// ── Agent floor: one card per agent with its state, a plain sentence of what it is doing,
+// and a dot that travels between cards when one agent hands work to another. ──────────────
+const DESK_AGENTS = ['assistant','trader','researcher'];
+const deskWho = { assistant:'Assistant', trader:'Trader', researcher:'Research' };
+// What each tool call means to a person watching. Unknown tools fall back to their name.
+const toolPhrases = {
+  get_account:'Checking cash and equity', get_positions:'Looking at your positions', get_open_orders:'Checking open orders',
+  get_orders:'Reading recent orders', get_market_status:'Checking the market session', get_market_context:'Reading the market backdrop',
+  get_macro_regime:'Reading the economic backdrop', get_watchlist_scan:'Scanning the watchlist', get_signals:s=>`Reading ${s||'the'} trend signals`,
+  get_entry_plan:s=>`Working out an entry plan for ${s||'a stock'}`, get_correlation:s=>s?`Comparing ${s} with what you hold`:'Comparing holdings',
+  get_exposure:'Checking how much is invested where', get_calendar:'Checking the trading calendar', get_economic_calendar:'Checking upcoming economic events',
+  get_fundamentals:s=>`Checking ${s||'company'} fundamentals`, get_company_filings:s=>`Reading ${s||'company'} filings`,
+  get_news:s=>s?`Reading ${s} news`:'Reading market news', web_search:(s,q)=>q?`Searching the web: ${q}`:'Searching the web', read_source:'Reading a source',
+  get_stock_bars:s=>`Looking at the ${s||'price'} chart`, get_stock_snapshot:s=>`Checking the ${s||''} price`.replace('  ',' '), get_stock_latest_quote:s=>`Checking the ${s||''} quote`.replace('  ',' '),
+  get_price_stats:s=>`Measuring ${s||'price'} moves`, get_intraday_volume:s=>`Checking ${s||'today’s'} volume`, get_most_active_stocks:'Looking at the most active stocks',
+  get_market_movers:'Looking at today’s biggest movers', get_portfolio_history:'Reading the equity history', get_journal:'Reading past decisions',
+  get_scorecard:'Reviewing the track record', get_benchmark:'Comparing with the market', get_lessons:'Reading saved lessons', write_lesson:'Writing down a lesson',
+  get_pending_events:'Reading new alerts', ack_event:'Marking an alert as handled', get_position_review:s=>`Reviewing the ${s||''} holding`.replace('  ',' '),
+  get_thesis_status:s=>`Checking the ${s||''} investment case`.replace('  ',' '), compare_position_actions:s=>`Weighing keep, trim or sell for ${s||'a holding'}`,
+  get_decision_followup:'Following up on an earlier decision', get_evidence:'Reading saved evidence', get_research_updates:s=>s?`Reading the ${s} research`:'Reading research results',
+  record_position_review:s=>`Saving the ${s||''} holding review`.replace('  ',' '), record_candidate_review:s=>`Saving the ${s||''} verdict`.replace('  ',' '), record_research_review:s=>`Saving the ${s||''} research`.replace('  ',' '),
+  execute_entry:s=>`Sending a ${s||''} buy order`.replace('  ',' '), execute_exit:s=>`Sending a ${s||''} sell order`.replace('  ',' '), annotate_position:s=>`Adding a note to ${s||'a holding'}`,
+  request_research:s=>`Asking Research to study ${s||'a stock'}`, send_to_trader:'Passing your request to the Trader', sleep:'Finishing this check',
+  get_requests:'Checking requests between agents', get_request_trace:'Tracing an earlier request', get_state:'Reading the engine state',
+  get_policy_playbook:'Reading the trading playbook', get_strategy_settings:'Reading your settings', update_trading_settings:'Changing your settings',
+  get_app_endpoints:'Looking at the dashboard pages', read_app:'Reading a dashboard page', get_saved_context:'Reading saved notes', get_tool_result:'Reading an earlier result',
+  show_price_history:s=>`Drawing a ${s||'price'} chart`, show_performance_comparison:'Drawing a performance chart',
+};
+function toolPhrase(tool) {
+  const input = tool?.input && typeof tool.input === 'object' ? tool.input : {};
+  const symbol = typeof input.symbol === 'string' ? input.symbol.toUpperCase() : Array.isArray(input.symbols) ? input.symbols.slice(0,3).join(', ') : '';
+  const phrase = toolPhrases[tool?.name];
+  return typeof phrase === 'function' ? phrase(symbol, typeof input.query === 'string' ? input.query : '') : phrase || (tool?.name ? tool.name.replace(/_/g,' ') : '');
+}
+const desks = {};
+for (const agent of DESK_AGENTS) desks[agent] = { lastTool: null, toolsSinceStart: 0, startedAt: null, state: null };
+/** Called for every new tool-call line, so the card says what the agent is doing now. */
+function noteAgentTool(entry) {
+  const desk = desks[entry.tool?.agent];
+  if (!desk) return;
+  desk.lastTool = { name: entry.tool.name, input: entry.tool.input, at: Date.parse(entry.at) };
+  // History loaded on start-up says what the agent last did, not that it is working now.
+  if (Date.now() - desk.lastTool.at > 120000) return;
+  // A call can land before the status that says the agent started; count it from then.
+  if (desk.state !== 'thinking') { desk.state = 'thinking'; desk.startedAt = desk.lastTool.at; desk.toolsSinceStart = 0; }
+  desk.toolsSinceStart++;
+}
+const shortDuration = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s/60)}m ${String(s%60).padStart(2,'0')}s` : `${Math.floor(s/3600)}h ${Math.floor(s/60)%60}m`; };
+const roughDuration = ms => { const m = Math.max(0, Math.round(ms / 60000)); return m < 1 ? 'under a minute' : m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; };
+function deskView(agent, s, approvals) {
+  const lane = deskLane(agent, s), desk = desks[agent], now = Date.now();
+  let state = lane?.state || 'starting', doing = lane?.detail || '', meta = [], progress = null;
+  if (agent === 'trader' && approvals && state !== 'thinking') { state = 'awaiting'; doing = `Waiting for you: ${approvals} order${approvals > 1 ? 's' : ''} to approve`; meta = ['See the Decision desk']; }
+  else if (state === 'thinking') {
+    const fresh = desk.lastTool && desk.startedAt && desk.lastTool.at >= desk.startedAt - 1000;
+    doing = fresh ? toolPhrase(desk.lastTool) : agent === 'trader' ? 'Starting a check' : agent === 'researcher' ? (lane.detail || 'Researching') : 'Reading your message';
+    if (agent === 'trader' && s.trader?.cycle?.n) meta.push(`cycle ${s.trader.cycle.n}`);
+    if (fresh) meta.push({ code: desk.lastTool.name });
+    if (desk.startedAt) meta.push(`${desk.toolsSinceStart} tool call${desk.toolsSinceStart === 1 ? '' : 's'} · ${shortDuration(now - desk.startedAt)}`);
+    if (agent === 'researcher' && s.researcher?.queued > 1) meta.push(`${s.researcher.queued - 1} more queued`);
+  } else if (agent === 'trader') {
+    if (s.health?.paused) { state = 'idle'; doing = 'Paused · trading is off'; meta = ['Protection checks continue']; }
+    else if (state === 'sleeping') {
+      const next = Date.parse(s.trader?.nextCheckAt), every = s.trader?.checkEveryMs, last = s.trader?.cycle?.lastMs;
+      doing = Number.isFinite(next) ? (next > now ? `Resting · next check in ${roughDuration(next - now)}` : 'Resting · next check is due') : 'Resting until the next check or alert';
+      meta = [s.trader?.cycle?.n ? `cycle ${s.trader.cycle.n}` : '', last ? `last check took ${shortDuration(last)}` : '', 'an alert wakes it sooner'].filter(Boolean);
+      if (Number.isFinite(next) && every) progress = Math.max(0, Math.min(1, (next - now) / every));
+    }
+  } else if (agent === 'researcher') {
+    if (!s.researcher?.queued) doing = 'No research running';
+    if (desk.lastTool && /^record_/.test(desk.lastTool.name)) meta.push(`last: ${toolPhrase(desk.lastTool).replace(/^Saving the /, '')}`);
+  } else if (agent === 'assistant' && state === 'idle') doing = 'Ready for your question';
+  if (state === 'starting' && !doing) doing = 'Starting…';
+  if (state === 'error' && !doing) doing = 'Something went wrong';
+  return { state, doing, meta, progress };
+}
+const deskLane = (agent, s) => agent === 'trader' ? s.trader?.lane : agent === 'assistant' ? s.assistant?.lane : s.researcher?.lane;
+const deskPill = { thinking:'working', sleeping:'resting', awaiting:'needs you', idle:'ready', starting:'starting', error:'error' };
+let floorApprovals = 0;
+function renderAgentFloor(s = status) {
+  if (!s) return;
+  for (const agent of DESK_AGENTS) {
+    const el = document.querySelector(`.agent-desk[data-agent="${agent}"]`), desk = desks[agent];
+    if (!el) continue;
+    const laneState = deskLane(agent, s)?.state;
+    if (laneState === 'thinking' && desk.state !== 'thinking') { desk.startedAt = Date.now(); desk.toolsSinceStart = 0; }
+    if (laneState !== 'thinking') desk.startedAt = null;
+    desk.state = laneState;
+    const view = deskView(agent, s, agent === 'trader' ? floorApprovals : 0);
+    if (el.dataset.state !== view.state) {
+      el.dataset.state = view.state;
+      el.classList.remove('changed'); void el.offsetWidth; el.classList.add('changed');
+    }
+    const pill = el.querySelector('.desk-pill'), doing = el.querySelector('.desk-doing'), meta = el.querySelector('.desk-meta');
+    if (pill.textContent !== deskPill[view.state]) pill.textContent = deskPill[view.state] || view.state;
+    if (doing.textContent !== view.doing) { doing.textContent = view.doing; doing.title = view.doing; doing.classList.remove('swap'); void doing.offsetWidth; doing.classList.add('swap'); }
+    const metaKey = JSON.stringify(view.meta);
+    if (meta.dataset.key !== metaKey) {
+      meta.dataset.key = metaKey;
+      meta.replaceChildren(...view.meta.flatMap((part, i) => [...(i ? [' · '] : []), typeof part === 'string' ? part : text('code', part.code)]));
+    }
+    el.setAttribute('aria-label', `${deskWho[agent]}: ${deskPill[view.state] || view.state}. ${view.doing}`);
+    const ring = el.querySelector('.desk-ring-progress');
+    ring.style.strokeDashoffset = view.state === 'sleeping' && view.progress != null ? String(176 * (1 - view.progress)) : '';
+  }
+}
+// Handoffs: each request one agent made of another. A new one flies from asker to worker; a
+// finished one flies back with "done". The first load only remembers what it sees.
+let seenHandoffs = null;
+function renderHandoffs(list = []) {
+  const known = seenHandoffs;
+  seenHandoffs = new Map(list.map(h => [h.id, h.status]));
+  if (!known || $('view-live').hidden) return;
+  for (const h of list.slice().reverse()) {
+    const label = h.symbol || (h.to === 'trader' ? 'your request' : 'a task');
+    const before = known.get(h.id), finished = ['completed','failed','interrupted'].includes(h.status);
+    if (before === undefined && !finished) flyHandoff(h.from, h.to, h.to === 'researcher' ? `Research ${label}` : `${deskWho[h.to]}: ${label}`);
+    else if (before !== undefined && !['completed','failed','interrupted'].includes(before) && finished) flyHandoff(h.to, h.from, h.status === 'completed' ? `${label} done` : `${label} stopped`);
+  }
+}
+function flyHandoff(from, to, label) {
+  const floor = $('agent-floor'), a = floor.querySelector(`[data-agent="${from}"] .desk-avatar`), b = floor.querySelector(`[data-agent="${to}"] .desk-avatar`);
+  if (!a || !b || reducedMotion.matches) return;
+  const box = floor.getBoundingClientRect(), ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+  // The page can be zoomed by the text-size control; positions are in unzoomed layout pixels.
+  const zoom = floor.offsetWidth ? box.width / floor.offsetWidth : 1;
+  const p = { x: (ra.left - box.left + ra.width/2 - 5) / zoom, y: (ra.top - box.top + ra.height/2 - 5) / zoom };
+  const q = { x: (rb.left - box.left + rb.width/2 - 5) / zoom, y: (rb.top - box.top + rb.height/2 - 5) / zoom };
+  const dot = text('div', '', 'desk-handoff');
+  dot.style.setProperty('--c', getComputedStyle(floor.querySelector(`[data-agent="${from}"]`)).getPropertyValue('--c'));
+  dot.append(document.createElement('i'), text('span', label));
+  floor.append(dot);
+  const stacked = Math.abs(q.x - p.x) < 40, mid = { x: (p.x + q.x) / 2 + (stacked ? 60 : 0), y: (p.y + q.y) / 2 - (stacked ? 0 : 34) };
+  dot.animate([
+    { transform: `translate(${p.x}px,${p.y}px)`, opacity: 0 },
+    { transform: `translate(${mid.x}px,${mid.y}px)`, opacity: 1, offset: .5 },
+    { transform: `translate(${q.x}px,${q.y}px)`, opacity: 1, offset: .9 },
+    { transform: `translate(${q.x}px,${q.y}px)`, opacity: 0 },
+  ], { duration: 1800, easing: 'cubic-bezier(.45,.05,.35,1)' }).onfinish = () => dot.remove();
+}
+
 // ── Dashboard ──────────────────────────────────────────────────────────────
 function rows(target, list, cells) { $(target).replaceChildren(...list.map(item => { const tr=document.createElement('tr'); for(const value of cells(item)){const td=document.createElement('td'); if(value instanceof Node)td.append(value); else td.textContent=value; tr.append(td);} return tr;})); }
 async function refresh() {
@@ -450,6 +592,9 @@ async function refresh() {
       metric.setAttribute('aria-label', metric.title);
     }
     renderOrders(a.orders);
+    floorApprovals = a.orders.filter(o => o.status === 'pending').length;
+    renderAgentFloor(s);
+    renderHandoffs(s.handoffs);
     if (review) { renderRequests(c.commands); renderLessons(l.lessons); }
     if (performance) renderScorecard(sc);
     if (view === 'activity') await loadHistory();
@@ -499,6 +644,14 @@ function heldFor(ms) {
   if (hours < 24) return `${hours}h`;
   return days < 10 && hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
 }
+/** A recorded stop or target with its distance from the current price; "—" when none is set. */
+function levelCell(level, distancePct, kind) {
+  if (level == null) { const none=text('span','—','muted');none.title=`No ${kind} on record`;return none; }
+  const cell=text('span',money(level));
+  if (distancePct != null) { cell.append(' ', text('small', `${distancePct.toFixed(1)}%`, distancePct < 0 ? 'down' : 'muted')); }
+  cell.title=distancePct == null ? `${kind} on record` : distancePct < 0 ? `Price is already through the ${kind}` : `${Math.abs(distancePct).toFixed(1)}% ${kind==='stop'?'above the stop':'below the target'}`;
+  return cell;
+}
 function renderPortfolio(p, s) {
   const positions = p.positions || [];
   let openPnl = 0, cost = 0, priced = 0;
@@ -516,9 +669,9 @@ function renderPortfolio(p, s) {
     // Unknown when no opening time is recorded — never shown as "just opened".
     const held = text('span', v.heldForMs == null ? '—' : heldFor(v.heldForMs));
     if (v.heldForMs == null) held.title = 'No opening time is recorded for this holding';
-    return [symbol, v.qty, money(v.entryPrice), price, change, held];
+    return [symbol, v.qty, money(v.entryPrice), price, levelCell(v.stopLevel, v.distanceToStopPct, 'stop'), levelCell(v.takeProfitLevel, v.distanceToTargetPct, 'target'), change, held];
   });
-  if (!positions.length) { const row=text('tr',''), cell=text('td',p.available?'No open positions. Your next holding will appear here.':'Holdings unavailable. Waiting for broker data.','table-empty');cell.colSpan=6;row.append(cell);$('positions').append(row); }
+  if (!positions.length) { const row=text('tr',''), cell=text('td',p.available?'No open positions. Your next holding will appear here.':'Holdings unavailable. Waiting for broker data.','table-empty');cell.colSpan=8;row.append(cell);$('positions').append(row); }
   $('positions-status').textContent = p.available ? (positions.length ? `${positions.length} holding${positions.length === 1 ? '' : 's'} · select a ticker for details` : 'No open holdings.') : p.error;
   setValue('open-pnl', priced ? signedMoney(openPnl) : '—');
   $('open-pnl').className = direction(openPnl);
@@ -1708,4 +1861,4 @@ void connectDashboard();
 // Backstop for anything the stream misses, such as an action expiring with no new activity.
 setInterval(()=>{if(started)refresh().catch(e=>notice('Could not refresh account: '+e.message));},10000);
 // Countdowns on the agent pills move every second without asking the server.
-setInterval(renderThinking,1000);
+setInterval(()=>{renderThinking();renderAgentFloor();},1000);
