@@ -290,8 +290,8 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await expect(page.locator('.sidebar')).not.toContainText('YOUR AGENTS');
     await expect(page.locator('#agent-usage')).toHaveCount(0);
     await expect(page.locator('#account-summary #equity-chart')).toBeVisible();
-    await expect(page.locator('#status-panel #agent-model')).toContainText('test · Connecting to account…');
-    await expect(page.locator('#status-title')).toHaveText('Status');
+    await expect(page.locator('#status-panel')).toHaveCount(0);
+    await expect(page.locator('.topbar-right #market-session')).toBeVisible();
     await expect(page.locator('.chat-heading')).not.toContainText('Account connected');
     await expect(page.locator('#holdings')).toBeVisible();
     await expect(page.locator('#activity')).toBeVisible();

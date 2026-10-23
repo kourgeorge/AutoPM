@@ -611,8 +611,6 @@ function renderStatus(s) {
   $('account-mode').textContent = s.env.venue; $('account-mode').className = 'badge ' + s.env.venue;
   setValue('equity', money(s.account?.equity));
   $('chart-value').textContent = money(s.account?.equity);
-  $('agent-model').textContent = `${s.env.model ? s.env.model+' · ' : ''}${s.health.runtime.ready ? 'Account connected' : 'Connecting to account…'}`;
-  $('agent-model').title = s.env.model ? `Model: ${s.env.model}` : '';
   const marketOpen=s.market.open ?? (s.market.session ? s.market.session==='open' : null);
   $('market-session').textContent = marketOpen===null ? 'Market session unavailable' : marketOpen ? 'Market open' : 'Market closed';
   $('market-session').classList.toggle('open', marketOpen===true);
