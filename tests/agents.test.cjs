@@ -23,6 +23,7 @@ const model = from('core/modelProvider');
 model.createModelProvider = () => ({ chat: async () => { throw new Error('Set audit provider'); } });
 const traderTools = from('tools/traderTools');
 const chartTools = from('tools/chartTools');
+const { benchmark } = from('review/benchmark');
 const orders = from('strategy/orderManager');
 const actions = from('core/orders');
 const journal = from('journal/journal');
@@ -557,6 +558,33 @@ test('account comparisons with deposits or unverifiable cash flows withhold perf
       assert.equal(result.changePctA, null); assert.equal(result.excessPct, null);
     }
   } finally { http.get = realGet; bars.collectBars = realBars; }
+});
+
+test('the deposit that funded the account is its starting balance, not a flow that hides performance', async () => {
+  const http = from('core/alpacaHttp').alpacaTrading, bars = from('collect/barSource');
+  const realGet = http.get, realBars = bars.collectBars;
+  const days = ['2025-09-01', '2025-09-02', '2025-09-03', '2025-09-04'].map(d => d + 'T16:00:00Z');
+  const opening = { date: '2025-09-05', activity_type: 'JNLC', net_amount: '100000' };
+  let activities;
+  http.get = async url => ({ data: url.includes('activities') ? activities : { timestamp: days.map(d => Date.parse(d)/1000), equity: [0, 100000, 100000, 101000] } });
+  bars.collectBars = async () => ({ value: days.map((t, i) => ({ t, c: 100 + i })), source: 'audit', stale: false });
+  const compare = async () => JSON.parse(await chartTools.executeChartTool('show_performance_comparison', { a: 'ACCOUNT', b: 'SPY', days: 3650 }));
+  try {
+    // Booked days after the balance first shows, as Alpaca does.
+    activities = [opening];
+    assert.equal((await compare()).changePctA, 1);
+    assert.equal((await benchmark()).portfolioReturnPct, 1);
+    for (activities of [
+      [opening, { date: '2025-09-04', activity_type: 'CSD', net_amount: '5000' }],  // a later top-up still counts
+      [{ ...opening, net_amount: '90000' }],                                        // not the opening balance
+      [{ ...opening, activity_type: 'CSW', net_amount: '-100000' }],               // money out
+      [{ ...opening, date: '2025-10-01' }],                                         // too far from the funded day
+    ]) assert.equal((await compare()).changePctA, null, JSON.stringify(activities));
+  } finally { http.get = realGet; bars.collectBars = realBars; }
+  // A window that starts after funding has no opening day to match, so a flow inside it still withholds.
+  http.get = async url => ({ data: url.includes('activities') ? [opening] : { timestamp: days.slice(1).map(d => Date.parse(d)/1000), equity: [100000, 100000, 101000] } });
+  bars.collectBars = async () => ({ value: days.map((t, i) => ({ t, c: 100 + i })), source: 'audit', stale: false });
+  try { assert.equal((await compare()).changePctA, null); } finally { http.get = realGet; bars.collectBars = realBars; }
 });
 
 test('lessons require evidence for model writes and can be retired without deleting history', () => {
