@@ -168,6 +168,12 @@ interface Leg {
   /** ET date → level. Empty when the leg could not be fetched. */
   series: Map<string, number>;
   error: string | null;
+  /**
+   * The account's first funded day, set only when the window reaches back to before it (the
+   * history shows unfunded sessions first). Its level is the starting balance, which lets the
+   * cash-flow check recognise the funding that created it.
+   */
+  opening?: { date: string; value: number };
 }
 
 /**
@@ -196,17 +202,21 @@ async function fetchEquityCurve(days: number): Promise<Leg> {
     const equity: unknown[] = Array.isArray(res.data?.equity) ? res.data.equity : [];
 
     const series = new Map<string, number>();
+    let unfunded = false, opening: Leg['opening'];
     for (let i = 0; i < Math.min(stamps.length, equity.length); i++) {
       const value = Number(equity[i]);
       // Zero equity is what Alpaca reports for sessions before the account was funded. It is
       // not a $0 portfolio, and treating it as a level would manufacture a −100 % day.
-      if (!Number.isFinite(value) || value <= 0) continue;
+      if (!Number.isFinite(value) || value <= 0) { if (series.size === 0) unfunded = true; continue; }
       const date = etDate(Number(stamps[i]) * 1000);
-      if (date) series.set(date, value);
+      if (!date) continue;
+      if (series.size === 0 && unfunded) opening = { date, value };
+      series.set(date, value);
     }
 
     return {
       series,
+      ...(opening ? { opening } : {}),
       error: series.size === 0 ? 'portfolio history returned no usable equity points' : null,
     };
   } catch (err: any) {
@@ -246,7 +256,7 @@ async function fetchSymbolCurve(symbol: string, days: number): Promise<Leg & { s
  * `after` is re-checked locally because Alpaca filters activities on their CREATION time,
  * which is not the day the cash moved.
  */
-async function cashFlowsInWindow(from: string): Promise<{ count: number | null }> {
+async function cashFlowsInWindow(from: string, opening?: Leg['opening']): Promise<{ count: number | null }> {
   if (config.broker !== 'alpaca') return { count: null };
 
   try {
@@ -259,11 +269,27 @@ async function cashFlowsInWindow(from: string): Promise<{ count: number | null }
       const stamp = String(a?.date ?? a?.transaction_time ?? '').slice(0, 10);
       return stamp !== '' && stamp >= from;
     });
-    return { count: inWindow.length };
+    return { count: inWindow.length - (openingFunding(inWindow, opening) ? 1 : 0) };
   } catch (err: any) {
     logger.warn(`[benchmark] activities lookup failed: ${err?.message ?? err}`);
     return { count: null };
   }
+}
+
+/**
+ * True when the earliest flow is the deposit that funded the account, so it is the starting
+ * balance rather than money added along the way. It must be money in, match the first funded
+ * balance to the dollar, and be dated within a week of it: Alpaca books the funding journal
+ * days AFTER the balance first shows (2026: balance from Aug 7, JNLC dated Aug 10), so the
+ * date alone cannot tell it apart from a later deposit.
+ */
+function openingFunding(rows: any[], opening?: Leg['opening']): boolean {
+  if (!opening) return false;
+  const first = [...rows].sort((a, b) => String(a?.date ?? '').localeCompare(String(b?.date ?? '')))[0];
+  const amount = Number(first?.net_amount), date = String(first?.date ?? '').slice(0, 10);
+  const lagDays = (Date.parse(date) - Date.parse(opening.date)) / 86_400_000;
+  return ['CSD', 'JNLC'].includes(first?.activity_type) && amount > 0 && Math.abs(amount - opening.value) <= 1
+    && lagDays >= -7 && lagDays <= 7;
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────────────
@@ -322,7 +348,7 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
     caveats.push(`only ${equityReturns.length} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so the Sharpe figures are null rather than noisy`);
   }
 
-  const accountingIssue = from ? await accountPerformanceIssue(from) : null;
+  const accountingIssue = from ? await accountPerformanceIssue(from, equityLeg.opening) : null;
   if (accountingIssue) { portfolioReturnPct = null; equityReturns = []; caveats.push(accountingIssue); }
 
   if (equityReturns.length >= MIN_RETURNS_FOR_SHARPE) {
@@ -398,8 +424,8 @@ export async function symbolStats(symbol: string, opts: { days?: number } = {}):
 }
 
 /** Shared accounting gate for every tool that labels account equity movement as performance. */
-async function accountPerformanceIssue(from: string): Promise<string | null> {
-  const flows = await cashFlowsInWindow(from);
+async function accountPerformanceIssue(from: string, opening?: Leg['opening']): Promise<string | null> {
+  const flows = await cashFlowsInWindow(from, opening);
   if (flows.count == null) return 'Cash-flow history could not be verified; account performance is unavailable.';
   return flows.count > 0 ? 'Deposits, withdrawals or journals affect this window; adjusted account performance is unavailable.' : null;
 }
@@ -409,7 +435,8 @@ export async function comparePerformance(a: string, b: string, days: number) {
   const dates = [...first.series.keys()].filter(d => second.series.has(d)).sort();
   const valuesA = dates.map(d => first.series.get(d)!), valuesB = dates.map(d => second.series.get(d)!);
   const caveats = [first.error, second.error].filter((s): s is string => !!s);
-  const issue = dates.length && [a,b].includes('ACCOUNT') ? await accountPerformanceIssue(dates[0]) : null;
+  const account = a === 'ACCOUNT' ? first : b === 'ACCOUNT' ? second : null;
+  const issue = dates.length && account ? await accountPerformanceIssue(dates[0], account.opening) : null;
   if (issue) caveats.push(issue);
   if (dates.length < 2) caveats.push('Fewer than two common sessions are available.');
   const changePctA = issue && a === 'ACCOUNT' ? null : r(totalReturnPct(valuesA));
