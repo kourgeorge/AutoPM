@@ -11,8 +11,22 @@
  */
 
 import type { Detector, DetectorHit } from '../eventBus';
+import type { TickData } from '../compute';
+import type { Policy } from '../../policy/types';
 import { pctText } from './util';
 import { describeGap, investmentGap } from '../../strategy/investment';
+
+/**
+ * How long the beat waits between periodic checks for this tick. Also read by the dashboard
+ * to count down the trader's next check, so both show the same cadence.
+ */
+export function heartbeatCadenceMs(data: Pick<TickData, 'account' | 'session' | 'portfolio'>, policy: Policy): number {
+  const open = data.session !== 'closed';
+  const underInvested = open && !!investmentGap(policy, data.portfolio?.grossDeployedPct)?.belowTarget;
+  return (data.account.positionCount > 0 || underInvested) && open
+    ? policy.triggers.heartbeatWithPositionsMs
+    : policy.triggers.heartbeatFlatMs;
+}
 
 export const heartbeatDetector: Detector = {
   kind: 'heartbeat',
@@ -56,9 +70,7 @@ export const heartbeatDetector: Detector = {
       suggestedAction: 'review',
       // `heartbeatFlatMs` already means "the slow cadence"; outside market hours that is
       // what a holding heartbeat wants too, so the two regimes reuse the two existing keys.
-      cooldownMs: (holding || underInvested) && open
-        ? policy.triggers.heartbeatWithPositionsMs
-        : policy.triggers.heartbeatFlatMs,
+      cooldownMs: heartbeatCadenceMs(data, policy),
     };
 
     return [hit];

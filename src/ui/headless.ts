@@ -176,12 +176,15 @@ export class HeadlessUI implements OperatorUI {
     this.state.venueOpen = open;
   }
 
+  // A lane change is news for the Live page's agent cards; the tick signal makes it refetch status.
   setTraderActivity(lane: Lane): void {
     this.state.traderLane = lane;
+    for (const l of this.tickListeners) l();
   }
 
   setAssistantActivity(lane: Lane): void {
     this.state.assistantLane = lane;
+    for (const l of this.tickListeners) l();
   }
 
   setCycle(cycle: Cycle): void {

@@ -270,10 +270,11 @@ dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(
 #holdings th, #holdings td { padding: 12px 7px; }
 #holdings th { font-size: 10px; }
 #holdings td { font-size: 12px; }
+#holdings td small { font-size: 10px; margin-left: 2px; }#holdings td small.muted, #holdings td .muted { color: var(--ink-3); }
 #holdings .table-wrap { max-height: 340px; overflow: auto; }
 #holdings th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
 #holdings td:last-child { max-width: none; }
-#holdings td:nth-child(5) { white-space: normal; min-width: 90px; }
+#holdings td:nth-child(7) { white-space: normal; min-width: 90px; }#holdings td:is(:nth-child(5),:nth-child(6)) { white-space: nowrap; }
 #broker-recover summary { font-size: 13px; color: var(--ink-2); }
 #broker-recover details p { font-size: 13px; }
 #live-activity { padding: 0; overflow: hidden; background: var(--chat-bg); border-color: var(--chat-line); }
@@ -365,7 +366,7 @@ main { padding: 10px 14px 16px; }
 #holdings .table-wrap { max-height: 190px; }
 #holdings th, #holdings td { padding: 8px 6px; }
 #holdings td { font-size: 12px; }
-#holdings td:nth-child(5) { min-width: 86px; }
+#holdings td:nth-child(7) { min-width: 86px; }
 #holdings button { padding: 5px 7px; }
 #holdings button.link { padding: 0; }
 #live-activity { flex: 1; min-height: 120px; display: flex; flex-direction: column; padding-bottom: 0; }
@@ -506,10 +507,11 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .signal-score.up { color: var(--up); } .signal-score.down { color: var(--down); }
 .signal-score.mild { opacity: .7; } .signal-score.strong { font-weight: 650; }
 .rsi-zone { color: var(--warn); font-weight: 650; }
-.watchlist-legend { font-size: 9px; color: var(--ink-3); margin: 9px 0 0; }
+.watchlist-meta { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }.watchlist-legend { font-size: 13px; line-height: 1; color: var(--ink-3); cursor: help; }.watchlist-legend:hover, .watchlist-legend:focus-visible { color: var(--accent); }
 #watchlist-status { font-size: 10px; }
-.watchlist-search { margin: 0 0 8px; }
-.watchlist-search input { max-width: 180px; padding: 3px 8px; font: 12px/1.5 var(--font-mono); text-transform: uppercase; }
+#watchlist-panel .pane-title { align-items: center; gap: 10px; }#watchlist-panel .pane-title h2 { white-space: nowrap; }#watchlist-status { white-space: nowrap; }
+.watchlist-search { flex: 1 1 auto; min-width: 0; margin: 0; display: flex; justify-content: center; }
+.watchlist-search input { width: 100%; max-width: 180px; min-width: 0; padding: 3px 8px; font: 12px/1.5 var(--font-mono); text-transform: uppercase; }
 .watchlist-search input::placeholder { font-family: inherit; text-transform: none; }
 .watchlist-search input[aria-invalid="true"] { border-color: var(--down); }
 @media (max-width: 800px) { #watchlist-panel { order: 3; }#live-activity { order: 4; }.live-secondary { order: 5; } }
@@ -769,14 +771,13 @@ button, input, select, textarea, .live-view .panel, .live-view > .chat, .live-st
 .table-wrap button.link:hover { color: var(--accent); text-decoration: underline; }
 .table-wrap { border-radius: 4px; }
 .table-wrap tbody > tr:not(.history-expanded):hover { background: var(--surface-2); }
-#holdings :is(th, td):nth-child(n+2):nth-child(-n+5),
+#holdings :is(th, td):nth-child(n+2):nth-child(-n+7),
 .history-table[aria-labelledby="history-decision-title"] tr > :nth-child(n+7):nth-child(-n+8),
 .history-table[aria-labelledby="history-fill-title"] tr > :nth-child(n+5) { text-align: right; }
-#positions td:nth-child(n+2):nth-child(-n+6),
+#positions td:nth-child(n+2):nth-child(-n+8),
 #watchlist-rows td:not(:first-child),
 #history-decision-rows .history-row > td:nth-child(n+7):nth-child(-n+8),
 #history-fill-rows .history-row > td:nth-child(n+5) { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.watchlist-legend { font-size: 11px; }
 .history-table time, .request-references { font: 11px/1.5 var(--font-mono); }
 .history-row:focus-within, .history-row:has([aria-expanded="true"]) { background: var(--surface-2); }
 .history-row-toggle[aria-expanded="true"] { color: var(--accent); }
@@ -827,7 +828,6 @@ dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .timeline .reason { padding-left: 0; }
 .card p { margin-bottom: 8px; }
 .card pre { line-height: 1.5; }
-.watchlist-legend { margin-top: 5px; }
 .exposure { margin-top: 7px; }
 .chat .reply-body p { margin-bottom: 5px; }
 .chat .reply-body h3 { margin: 8px 0 3px; }
@@ -1092,3 +1092,48 @@ details[open] > summary > .json-hint { display: none; }
 .live-main #account-summary .metrics strong.up { color: var(--up); }.live-main #account-summary .metrics strong.down { color: var(--down); }
 .live-main #account-summary .metrics small { display: block; min-height: 14px; overflow: hidden; color: var(--ink-3); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .live-main #account-summary .metrics small.up { color: var(--up); }.live-main #account-summary .metrics small.down { color: var(--down); }
+
+/* Agent floor: one desk per agent across the top of Live. State is shown by the ring and pill:
+   working spins, resting counts down to the next check, waiting-for-you is amber. */
+:root { --assistant-ink: #78e5b0; --assistant-soft: #19362d; --research-ink: #8fc1ff; --research-soft: #1a2a40; --live-workspace-height: clamp(430px, calc(100dvh - 300px), 700px); }
+:root[data-theme="light"] { --assistant-ink: #16734c; --assistant-soft: #e3f3eb; --research-ink: #1f5fae; --research-soft: #e4eefb; }
+.agent-floor { grid-column: 1 / -1; position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.agent-desk { --c: var(--ink-3); --soft: var(--surface-2); display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto auto; column-gap: 12px; align-items: center; padding: 8px 12px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--panel-radius); transition: border-color .4s; min-width: 0; }
+.agent-desk[data-agent="assistant"] { --c: var(--assistant-ink); --soft: var(--assistant-soft); }
+.agent-desk[data-agent="trader"] { --c: var(--trader-ink); --soft: var(--trader-soft); }
+.agent-desk[data-agent="researcher"] { --c: var(--research-ink); --soft: var(--research-soft); }
+.agent-desk[data-state="thinking"] { border-color: color-mix(in srgb, var(--c) 55%, var(--line-soft)); }
+.agent-desk[data-state="awaiting"] { border-color: var(--warn); }
+.agent-desk[data-state="error"] { border-color: var(--down); }
+.agent-desk.changed { animation: desk-changed .9s ease-out; }
+@keyframes desk-changed { from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 45%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
+.desk-avatar { grid-row: 1 / -1; position: relative; width: 48px; height: 48px; }
+.desk-ring { position: absolute; inset: 0; width: 48px; height: 48px; transform: rotate(-90deg); stroke-width: 3; }
+.desk-ring circle { fill: none; }
+.desk-ring-track { stroke: var(--line-soft); }
+.desk-ring-progress { stroke: var(--c); stroke-linecap: round; stroke-dasharray: 176; stroke-dashoffset: 176; transition: stroke-dashoffset .9s linear; }
+.desk-core { position: absolute; inset: 7px; border-radius: 50%; background: var(--soft); color: var(--c); display: grid; place-items: center; }
+.desk-core svg { width: 17px; height: 17px; }
+.agent-desk[data-state="thinking"] .desk-ring-progress { stroke-dasharray: 40 136; stroke-dashoffset: 0; transform-origin: 32px 32px; animation: desk-spin 1.4s linear infinite; transition: none; }
+.agent-desk[data-state="thinking"] .desk-core { animation: desk-breathe 1.8s ease-in-out infinite; }
+.agent-desk[data-state="awaiting"] .desk-ring-progress { stroke: var(--warn); stroke-dashoffset: 0; animation: market-blink 1.6s ease-in-out infinite; }
+.agent-desk[data-state="error"] .desk-ring-progress { stroke: var(--down); stroke-dashoffset: 0; }
+@keyframes desk-spin { to { transform: rotate(360deg); } }
+@keyframes desk-breathe { 50% { transform: scale(1.08); box-shadow: 0 0 14px color-mix(in srgb, var(--c) 45%, transparent); } }
+.desk-who { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.desk-who h2 { margin: 0; font-size: 12px; font-weight: 650; }
+.desk-pill { font-size: 10px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; padding: 0 6px; border-radius: 3px; color: var(--c); background: var(--soft); white-space: nowrap; }
+.agent-desk[data-state="awaiting"] .desk-pill { color: var(--warn); background: var(--warn-soft); }
+.agent-desk[data-state="error"] .desk-pill { color: var(--down); background: var(--down-soft); }
+.agent-desk[data-state="sleeping"] .desk-pill, .agent-desk[data-state="idle"] .desk-pill, .agent-desk[data-state="starting"] .desk-pill { color: var(--ink-3); background: var(--surface-2); }
+.desk-doing { margin: 0; font-size: 13px; font-weight: 550; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desk-doing.swap { animation: arrive .35s ease-out; }
+.desk-meta { margin: 0; min-height: 1.4em; font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desk-meta code { font-family: var(--font-mono); font-size: 10px; opacity: .85; }
+.desk-handoff { position: absolute; left: 0; top: 0; z-index: 5; display: flex; align-items: center; gap: 6px; pointer-events: none; }
+.desk-handoff i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); flex: none; }
+.desk-handoff span { font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--c); background: var(--surface); border: 1px solid var(--c); border-radius: 10px; padding: 0 8px; }
+.activity-entry[data-source="researcher"] .activity-entity, .tool-call .tool-call-agent[data-agent="researcher"] { color: var(--research-ink); }
+@media (max-width: 800px) { .agent-floor { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .agent-desk, .agent-desk *, .desk-handoff { animation: none !important; transition: none !important; } }
+@media (max-width: 600px) { .agent-floor { gap: 6px; }.agent-desk { padding: 6px 10px; }.desk-avatar, .desk-ring { width: 36px; height: 36px; }.desk-core { inset: 5px; }.desk-core svg { width: 14px; height: 14px; }.desk-meta { display: none; } }

@@ -1,4 +1,4 @@
-import { enqueueRequest, listRequests, type AgentRequest } from '../core/requests';
+import { enqueueRequest, getRequest, listRequests, type AgentRequest } from '../core/requests';
 import { recordOperatorCommand } from '../features/alertLog';
 import { listLessons, reviewLesson } from '../journal/lessons';
 /** Local dashboard and operator API. Listens on this computer only; there is one user, so no login. */
@@ -28,6 +28,8 @@ import { logger } from '../core/logger';
 import { automationSummary } from '../core/automation';
 import { listOrders, pendingOrders } from '../core/orders';
 import { getLastTick } from '../features/lastTick';
+import { heartbeatCadenceMs } from '../features/detectors/heartbeat';
+import { getPolicy } from '../policy/load';
 import { scorecard } from '../review/metrics';
 import { activityHistory, savedPositionContext, savedRequestDetails } from '../review/activity';
 import { textPage } from '../agents/savedResults';
@@ -254,6 +256,18 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     routes.push({ method, path, pattern, keys, handler });
   };
 
+  /** When the heartbeat next wakes the trader: the last beat plus the cadence for this tick. */
+  const nextCheck = (tick: ReturnType<typeof getLastTick>) => {
+    const last = getState().eventCooldowns.heartbeat, everyMs = tick ? heartbeatCadenceMs(tick, getPolicy()) : null;
+    return { nextCheckAt: last && everyMs ? new Date(Date.parse(last) + everyMs).toISOString() : null, checkEveryMs: everyMs };
+  };
+  /** Work one agent asked another for, newest first; the Live page animates each one between agent cards. */
+  const recentHandoffs = () => listRequests(30).filter(r => r.parentId).slice(0, 10).map(r => {
+    const parent = getRequest(r.parentId!);
+    return { id: r.id, from: parent?.role ?? null, to: r.role, status: r.status, symbol: r.symbol ?? null,
+      text: r.text.slice(0, 200), createdAt: r.createdAt };
+  }).filter(h => h.from && h.from !== h.to);
+
   // Read-only projection for the terminal client. The client never opens account storage.
   add('GET', '/api/terminal', ({ url }) => {
     const after = url.searchParams.has('after') ? parseNonNegativeInt(url.searchParams.get('after'), 0, 'after') : null;
@@ -273,9 +287,10 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       aiBudget: modelBudgetStatus(),
       env: snap.env,
       automation: automationSummary(),
-      trader: { ...trader.status, lane: snap.traderLane, cycle: snap.cycle },
+      trader: { ...trader.status, lane: snap.traderLane, cycle: snap.cycle, ...nextCheck(tick) },
       assistant: { lane: snap.assistantLane },
       researcher: researchStatus(),
+      handoffs: recentHandoffs(),
       market: { open: snap.venueOpen, session: tick?.session ?? null },
       account: tick?.account ?? null,
       portfolio: tick?.portfolio ?? null,
