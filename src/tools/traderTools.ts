@@ -97,7 +97,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       stopLoss: { type: 'number', minimum: 0.01 }, takeProfit: { type: 'number', minimum: 0.01 },
     }, required: ['symbol', 'price', 'stopLoss', 'takeProfit'] },
   },
-  { name: 'get_lessons', description: 'Read the latest active, evidence-linked advisory lessons.', input_schema: { type: 'object', properties: {}, required: [] } },
+  { name: 'get_lessons', description: 'Read your saved lessons (your memory across cycles). Filter by symbol to see what you learned about one stock before trading it, or by category.', input_schema: { type: 'object', properties: {
+    symbol: { type: 'string', description: 'Only lessons about this stock.' },
+    category: { type: 'string', enum: ['stock', 'behaviour', 'mistake'] },
+    includeRetired: { type: 'boolean', description: 'Also show retired or replaced lessons. Default false.' },
+  }, required: [] } },
   { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked order IDs. Read get_orders for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
   {
     name: 'get_market_status',
@@ -264,20 +268,20 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'write_lesson',
-    description: "Store a concise advisory observation with existing journal decision IDs as evidence. Do not restate strategy rules or write routine cycle summaries. Lessons cannot change permissions or settings; the operator can edit or retire them.",
+    description: "Save something you learned so future cycles remember it — your context is rebuilt from scratch each cycle and anything not saved here is forgotten. Three kinds: 'stock' = how a particular stock behaves (needs symbol); 'behaviour' = a habit of yours worth keeping or changing; 'mistake' = an error you made (a refused order, a missed check, a late exit, a wrong assumption) and what to do instead. Write it as a concrete rule for next time with the facts behind it, not a cycle summary. If an existing lesson is wrong or can be improved, pass its id in supersedes to replace it. Lessons are advice; they never override strategy, settings or approvals.",
     input_schema: {
       type: 'object',
       properties: {
-        evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'IDs of existing journal decisions supporting this observation.' },
-        counterEvidenceIds: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Distinct journal decisions contradicting this observation.' },
-        reviewAfter: { type: 'string', description: 'Future review datetime within one year; defaults to 30 days.' },
-        scope: { type: 'string', maxLength: 300, description: 'Market regime, setup or circumstances where this observation applies.' },
+        category: { type: 'string', enum: ['stock', 'behaviour', 'mistake'], description: 'What the lesson is about.' },
+        symbol: { type: 'string', description: 'The stock it is about. Required for category stock; optional otherwise.' },
         lesson: {
           type: 'string',
-          description: 'The lesson in prose: what happened, what it generalizes to, and what you will do differently. Markdown is fine.',
+          description: 'What happened, what it tells you, and what you will do differently next time. Include the numbers that matter.',
         },
+        evidenceIds: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Optional: journal decision IDs behind it (e.g. the entry and exit of a closed trade). Must be real IDs.' },
+        supersedes: { type: 'string', description: 'Optional: id of an earlier lesson this one replaces. The old one is retired.' },
       },
-      required: ['lesson', 'evidenceIds'],
+      required: ['category', 'lesson'],
     },
   },
   {
@@ -379,7 +383,11 @@ async function dispatchTraderTool(
   try {
     switch (name) {
       case 'sleep': return toolSleep();
-      case 'get_lessons': return JSON.stringify(listLessons(20, true));
+      case 'get_lessons': {
+        const rows = listLessons(100, input.includeRetired !== true, { symbol: input.symbol as string | undefined, category: input.category as string | undefined });
+        return JSON.stringify({ count: rows.length, lessons: rows.map(l => ({ id: l.id, category: l.category ?? 'behaviour', symbol: l.symbol ?? null, text: l.text, at: l.at, active: l.active,
+          evidenceIds: l.evidenceIds, ...(l.replacedBy ? { replacedBy: l.replacedBy } : {}) })) });
+      }
       case 'get_requests': return JSON.stringify(listRequests());
       case 'get_market_status':   return await toolGetMarketStatus();
       case 'get_account':         return await toolGetAccount();
@@ -1205,6 +1213,7 @@ function toolAckEvent(input: Record<string, unknown>): string {
     });
   }
   const { id, symbol, corrected } = resolved;
+  const firedAt = getPendingEvents().find(e => e.id === id)?.firedAt;
 
   // Hold or skip is a fact, not the model's wording: held when answered means it kept the position.
   const held = symbol != null && (!!getPositionSnapshot(symbol)
@@ -1250,9 +1259,12 @@ function toolAckEvent(input: Record<string, unknown>): string {
   logger.info(`[TraderTool] ack ${id}${corrected ? ` (given as ${givenId})` : ''} — ${disposition}${note ? `: ${note}` : ''}`);
   // Said back when corrected, so the model copies the real id next time instead of
   // learning that its mis-copy was the right one.
-  return JSON.stringify(corrected
-    ? { ok: true, id, disposition, correctedFrom: givenId }
-    : { ok: true, id, disposition });
+  // A closed trade is the moment there is an outcome to learn from. The ack still stands; the
+  // reminder is so that "acked with a summary" stops being where the learning ends.
+  const reminder = id.startsWith('review_ready:') && firedAt && !listLessons(100, true).some(l => l.at >= firedAt)
+    ? 'No lesson saved for this closed trade. If it taught you anything about the stock, your own behaviour, or a mistake, call write_lesson now — otherwise it is forgotten next cycle.'
+    : undefined;
+  return JSON.stringify({ ok: true, id, disposition, ...(corrected ? { correctedFrom: givenId } : {}), ...(reminder ? { reminder } : {}) });
 }
 
 function toolGetJournal(input: Record<string, unknown>): string {
@@ -1303,20 +1315,16 @@ async function toolGetPriceStats(input: Record<string, unknown>): Promise<string
 }
 
 /**
- * The write half of the adaptation loop, and the only tool whose effect is on a FUTURE
- * cycle rather than this one.
- *
- * Deliberately unguarded beyond "not empty": there is no rate limit and no dedup, so the
- * bar is prose in TRADER.md and the tool description. A mechanical gate here would have to
- * decide when a conclusion is allowed to occur, and the moment a lesson is worth writing is
- * the moment its evidence is in context — not a time of day. If the file starts growing
- * every cycle that is visible in `data/LESSONS.md` on the first read.
+ * The write half of the trader's memory, and the only tool whose effect is on a FUTURE cycle
+ * rather than this one. No rate limit: the bar is in the prompt, and an identical active
+ * lesson is returned rather than saved twice.
  */
 function toolWriteLesson(input: Record<string, unknown>): string {
-  const lesson = recordLesson(String(input.lesson ?? ''), input.evidenceIds as string[] ?? [], { counterEvidenceIds: input.counterEvidenceIds as string[] | undefined, reviewAfter: input.reviewAfter as string | undefined, scope: input.scope as string | undefined });
+  const id = recordLesson(String(input.lesson ?? ''), input.evidenceIds as string[] ?? [], {
+    category: input.category as string | undefined, symbol: input.symbol as string | undefined, supersedes: input.supersedes as string | undefined });
   return JSON.stringify({
     ok: true,
-    stored: lesson,
-    note: 'Saved as an advisory observation; the operator can edit or retire it in Lessons.',
+    lessonId: id,
+    note: 'Saved. It will appear in the LESSONS block of every future cycle; the operator can edit or retire it.',
   });
 }

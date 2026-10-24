@@ -56,6 +56,9 @@ function describe(o: TradeOutcome): EvidenceValue {
     intendedStop: o.intendedStop ?? 'not recorded',
     policyVersion: o.policyVersion ?? 'unknown',
     unexplained: o.unexplained,
+    // Ready to cite as write_lesson evidence.
+    entryDecisionId: o.entryDecisionId ?? 'not recorded',
+    exitDecisionId: o.exitDecisionId ?? 'not recorded',
   };
 }
 
@@ -152,6 +155,7 @@ export function publishReviewReady(policy: Policy): TriggerEvent[] {
           ...(fresh.length > shown.length
             ? { omitted: fresh.length - shown.length, omittedNote: 'get_scorecard covers every round trip.' }
             : {}),
+          askYourself: 'What did this trade teach you? About the stock (how it moved vs. your thesis, stop and target), about your own behaviour (entry timing, sizing, patience), or a mistake to avoid. Save each real insight with write_lesson, citing entryDecisionId/exitDecisionId, before you ack.',
         },
         suggestedAction: 'reflect',
       },
