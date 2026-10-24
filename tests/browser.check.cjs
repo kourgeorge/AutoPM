@@ -284,6 +284,14 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.route('**/*',route=>route.request().url().startsWith(base)?route.continue():route.abort());
     const chartRoute=route=>{const url=new URL(route.request().url());return route.fulfill({json:{symbol:url.searchParams.get('symbol'),timeframe:url.searchParams.get('timeframe'),available:true,source:'alpaca',stale:false,asOf:'2026-10-07T14:00:00Z',bars:[{t:'2026-10-05T14:00:00Z',o:100,h:104,l:99,c:103,v:2000},{t:'2026-10-06T14:00:00Z',o:103,h:105,l:100,c:101,v:2400},{t:'2026-10-07T14:00:00Z',o:101,h:107,l:100,c:106,v:3000}]}});};
     await page.route('**/api/price-history?**',chartRoute);
+    await page.route('**/api/ticker-metrics?**',route=>route.fulfill({json:{symbol:'AAPL',price:150,priceSource:'tick',priceStale:false,dayChangePct:1.2,
+      range52w:{high:200,low:100,positionPct:50,fromHighPct:-25,fromLowPct:50,sessions:252,source:'bars'},returns:{'1W':1,'1M':-2,'3M':5,'6M':8,YTD:10,'1Y':20},
+      movingAverages:{sma50:140,sma200:130,vsSma50Pct:7.1,vsSma200Pct:15.4,emaFast:148,emaSlow:142,emaFastPeriod:9,emaSlowPeriod:21},
+      momentum:{rsi:62,rsiPeriod:14,rsiEntryMin:50,rsiExitMax:80,macdHistogram:0.4,adx:27,atr:3,atrPct:2,volatilityPct:28,relativeVolume:1.3},
+      trend:{composite:0.42,compositeMin:0.3,signals:[{name:'EMA Momentum',score:0.6,detail:'fast above slow'}]},meanReversion:{composite:-0.2,signals:[]},
+      reversal:{oneMonthReturnPct:-2,chasing:false,chaseThresholdPct:15},indicatorSource:'tick',fundamentals:null,
+      analysts:{recommendationMean:2,recommendationKey:'buy',analystCount:30,targetLow:120,targetMean:180,targetMedian:178,targetHigh:230,ratings:{strongBuy:5,buy:12,hold:10,sell:2,strongSell:1},valuation:{trailingPE:30}},
+      barsAsOf:'2026-10-07T00:00:00Z',errors:[]}}));
     await page.goto(base);
     await page.locator('#workspace').waitFor({state:'visible'});
     await expect(page.locator('#live')).toHaveText('Live');
@@ -338,6 +346,12 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.locator('#watchlist-rows button').first().click();
     await expect(page.locator('#position-review-dialog')).toBeVisible();
     await expect(page.locator('#position-review-title')).toHaveText('AAPL');
+    await expect(page.getByRole('tab',{name:'Metrics',exact:true})).toHaveAttribute('aria-selected','true');
+    await expect(page.locator('#position-panel-metrics')).toContainText('In 52-week range');
+    await expect(page.locator('#position-panel-metrics .metric-tile').nth(2).locator('strong')).toHaveText('50%');
+    await expect(page.locator('#position-panel-metrics')).toContainText('$180.00');
+    await expect(page.locator('#position-panel-metrics .signal-row')).toHaveCount(1);
+    await page.locator('#position-review-dialog').screenshot({path:'/tmp/autotrade-ticker-metrics.png'});
     await expect(page.locator('#ticker-chart .price-candle')).toHaveCount(3);
     await page.getByRole('button',{name:'Trend',exact:true}).click();
     await expect(page.locator('#ticker-chart .price-trend')).toHaveCount(1);

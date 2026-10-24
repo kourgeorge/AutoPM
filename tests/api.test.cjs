@@ -265,3 +265,22 @@ test('the assistant can read every dashboard page in-process, read-only',async()
   assert.match((await readAppEndpoint('/api/nothing')).error,/No route GET/);
   assert.match((await readAppEndpoint('/api/stream')).error,/live stream/);
 });
+test('ticker metrics place the price in its 52-week range and keep each data source independent',async()=>{
+  const collector=require('../src/collect/barSource'),yahoo=require('../src/collect/yahoo'),fundamentals=require('../src/collect/fundamentals');
+  const original=[collector.collectBars,yahoo.getAnalystRaw,fundamentals.getFundamentals];
+  const day=Date.parse('2025-10-01T00:00:00Z'),bars=Array.from({length:260},(_,i)=>{const c=100+i*0.2;return{t:new Date(day+i*86400000).toISOString(),o:c,h:c+1,l:c-1,c,v:1000+i};});
+  try {
+    collector.collectBars=async()=>({value:bars,source:'alpaca',stale:false,fetchedAt:new Date().toISOString(),asOf:bars.at(-1).t});
+    yahoo.getAnalystRaw=async()=>({financialData:{targetMeanPrice:180,targetLowPrice:120,targetHighPrice:220,recommendationMean:2.1,recommendationKey:'buy',numberOfAnalystOpinions:12},recommendationTrend:{trend:[{period:'0m',strongBuy:3,buy:5,hold:3,sell:1,strongSell:0}]},summaryDetail:{trailingPE:25,dividendYield:0.012},defaultKeyStatistics:{}});
+    fundamentals.getFundamentals=async()=>{throw new Error('yahoo down');};
+    assert.equal((await request('/api/ticker-metrics?symbol=%3Cx%3E')).res.status,400);
+    const m=(await request('/api/ticker-metrics?symbol=metricstest')).body;
+    assert.equal(m.symbol,'METRICSTEST');assert.equal(m.price,151.8);assert.equal(m.priceSource,'close');
+    assert.equal(m.range52w.sessions,252);assert.equal(m.range52w.source,'bars');
+    assert.ok(m.range52w.positionPct>98 && m.range52w.positionPct<=100,'a steady climb sits near the top of its range');
+    assert.ok(m.returns['1M']>0 && m.returns['1Y']>0);
+    assert.equal(m.indicatorSource,'bars');assert.equal(m.trend.signals.length,5);assert.ok(m.momentum.rsi>50);
+    assert.equal(m.analysts.targetMean,180);assert.equal(m.analysts.ratings.buy,5);assert.equal(m.analysts.valuation.dividendYieldPct,1.2);
+    assert.equal(m.fundamentals,null);assert.deepEqual(m.errors,['Company fundamentals are unavailable.']);
+  } finally {[collector.collectBars,yahoo.getAnalystRaw,fundamentals.getFundamentals]=original;}
+});
