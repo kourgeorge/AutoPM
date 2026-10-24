@@ -15,7 +15,9 @@ import { broker } from '../broker';
 import { canonicalSymbol } from '../core/symbols';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
-import type { Timeframe } from '../collect/yahoo';
+import { getAnalystRaw, type Timeframe } from '../collect/yahoo';
+import { getFundamentals } from '../collect/fundamentals';
+import { mapAnalystView, tickerMetrics, type AnalystView } from '../collect/tickerMetrics';
 import { confirmProtection, clearUnplacedProtection, protectionIntents } from '../strategy/protectionIntent';
 import { brokerBook } from '../review/brokerBook';
 import { readDecision } from '../journal/journal';
@@ -197,6 +199,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/source-text/:id': 'Saved original text of a research source, paged.',
   '/api/agent-requests/:id': 'One agent request with its saved details.',
   '/api/price-history': 'Price bars. ?symbol=AAPL&timeframe=5Min|15Min|1Hour|1Day.',
+  '/api/ticker-metrics': 'Where one ticker stands: 52-week range, returns, moving averages, the trader\'s indicators, fundamentals, analyst ratings and targets. ?symbol=AAPL.',
   '/api/equity-history': 'Account equity points recorded since the engine started.',
   '/api/watchlist': 'Watchlist rows from the last tick.',
   '/api/orders': "The agent's orders. ?status=open|all.",
@@ -245,6 +248,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   const routes: Route[] = [];
   const instanceId = crypto.randomUUID();
   const priceHistoryCache = new Map<string, { until: number; result: Promise<unknown> }>();
+  const tickerMetricsCache = new Map<string, { until: number; result: Promise<unknown> }>();
   const add = (method: string, path: string, handler: Handler): void => {
     const keys: string[] = [];
     const pattern = new RegExp(
@@ -387,6 +391,32 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     })();
     if (priceHistoryCache.size >= 64) priceHistoryCache.delete(priceHistoryCache.keys().next().value!);
     priceHistoryCache.set(key, { until: Date.now() + 60_000, result });
+    return result;
+  });
+
+  // The stock page's numbers. Bars, fundamentals and analyst data fail independently: one
+  // missing source costs its own section, never the page.
+  add('GET', '/api/ticker-metrics', ({ url }) => {
+    const symbol = (url.searchParams.get('symbol') ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(symbol)) throw new HttpError(400, 'A valid ticker is required');
+    const cached = tickerMetricsCache.get(symbol);
+    if (cached && cached.until > Date.now()) return cached.result;
+    const result = (async () => {
+      const errors: string[] = [];
+      const [bars, fundamentals, analysts] = await Promise.all([
+        collectBars(symbol, 260, '1Day', undefined, 'split').then(o => isPresent(o) ? o.value : (errors.push('Price history is unavailable.'), []))
+          .catch(() => (errors.push('Price history could not be loaded.'), [])),
+        getFundamentals(symbol).catch(() => (errors.push('Company fundamentals are unavailable.'), null)),
+        getAnalystRaw(symbol).then(mapAnalystView).catch((): AnalystView | null => (errors.push('Analyst coverage is unavailable.'), null)),
+      ]);
+      const tick = getLastTick(), key = canonicalSymbol(symbol);
+      const row = tick ? Object.values(tick.watchlist).find(r => canonicalSymbol(r.symbol) === key) ?? null : null;
+      const held = tick ? Object.values(tick.positions).find(p => canonicalSymbol(p.symbol) === key) ?? null : null;
+      const quote = row?.price != null ? { price: row.price, stale: row.stale } : held?.price != null ? { price: held.price, stale: held.stale } : null;
+      return { ...tickerMetrics({ symbol, bars, policy: getPolicy(), row, quote, fundamentals, analysts }), errors };
+    })();
+    if (tickerMetricsCache.size >= 64) tickerMetricsCache.delete(tickerMetricsCache.keys().next().value!);
+    tickerMetricsCache.set(symbol, { until: Date.now() + 60_000, result });
     return result;
   });
 

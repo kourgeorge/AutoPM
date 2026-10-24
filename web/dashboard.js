@@ -1518,7 +1518,7 @@ $('cancel-adopt').onclick=()=>$('adopt').close();
 $('adopt-form').onsubmit=attempt(async()=>{const f=$('adopt-form').elements;await api(`positions/${encodeURIComponent(f.symbol.value)}/adopt`,{stop:Number(f.stop.value),...(f.target.value?{target:Number(f.target.value)}:{})});$('adopt').close();await refresh();});
 $('protection').onsubmit=attempt(async()=>{const f=$('protection').elements;await api(`positions/${encodeURIComponent(f.symbol.value)}/confirm-protection`,{stopOrderId:f.stopOrderId.value,...(f.targetOrderId.value?{targetOrderId:f.targetOrderId.value}:{})});await refresh();});
 // Research comes from saved records. Opening details also loads its price chart.
-let reviewSymbol = '', reviewLoad = 0, inspectorLoad = 0, reviewSubmitting = false, reviewLoading = false, positionTab = 'assessment';
+let reviewSymbol = '', reviewLoad = 0, inspectorLoad = 0, reviewSubmitting = false, reviewLoading = false, positionTab = 'metrics';
 const savedTime = at => at != null && at !== '' && Number.isFinite(new Date(at).getTime()) ? historyDate(at) : 'Not recorded';
 const taskProgress = value => ({queued:'Queued',running:'Working',waiting:'Waiting for orders',completed:'Finished',failed:'Failed',interrupted:'Interrupted · awaiting retry',cancelled:'Cancelled'})[value] || value;
 function uiButton(label, onClick, cls = 'link') {
@@ -1539,7 +1539,7 @@ function reviewSection(parent,title) {
 function positionTabs(data) {
   const parent=$('position-review-content'),tabs=text('div','','position-tablist'),panels={};
   tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Position information');
-  const groups=[['assessment','Assessment'],['thesis',data.held===false?'Buy case':'Entry thesis'],['protection','Protection'],['context','Market context'],['research',`Research (${data.researchTotal})`]];
+  const groups=[['metrics','Metrics'],['assessment','Assessment'],['thesis',data.held===false?'Buy case':'Entry thesis'],['protection','Protection'],['context','Market context'],['research',`Research (${data.researchTotal})`]];
   const buttons=[];
   function select(key,focus=false) {
     positionTab=key;
@@ -1561,7 +1561,7 @@ function positionTabs(data) {
     event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;
     select(groups[next][0],true);
   };
-  parent.append(tabs,...Object.values(panels));select(positionTab);return panels;
+  parent.append(tabs,...Object.values(panels));select(positionTab);renderTickerMetrics();return panels;
 }
 function evidenceLinks(parent, ids, label='Saved observations', taskId=null) {
   const unique=[...new Set((ids || []).filter(Boolean))];
@@ -1596,7 +1596,7 @@ async function openPositionReview(symbol, retainTask=false) {
   $('position-review-overview').replaceChildren();$('position-review-flags').replaceChildren();$('position-review-controls').replaceChildren();
   $('position-review-content').replaceChildren();
   if(changed || !retainTask){
-    positionTab='assessment';tickerChart.symbol=symbol;$('ticker-chart-title').textContent='Price history';
+    positionTab='metrics';tickerChart.symbol=symbol;void loadTickerMetrics(symbol);$('ticker-chart-title').textContent='Price history';
     void loadTickerChart();dialog.querySelector('.position-window-body').scrollTop=0;
   }
   if(changed || !retainTask)$('position-review-task').replaceChildren();
@@ -1606,8 +1606,148 @@ async function openPositionReview(symbol, retainTask=false) {
     if(token!==reviewLoad || !dialog.open)return;
     $('position-review-status').textContent=`${data.held === true ? 'Held position' : data.held === false ? 'Candidate · not held' : 'Current holdings unknown'} · saved view loaded ${savedTime(data.savedAt)}`;
     renderPositionReview(data);
-  } catch(error) { if(token===reviewLoad)$('position-review-status').textContent=`Could not load saved review: ${error.message}`; }
+  } catch(error) { if(token===reviewLoad){$('position-review-status').textContent=`Could not load saved review: ${error.message}`;positionTabs({held:null,researchTotal:0});} }
   finally { if(token===reviewLoad){reviewLoading=false;$('ask-position-review').disabled=reviewSubmitting;} }
+}
+// ── Metrics tab: where the ticker stands, in numbers ──────────────────────
+const tickerMetricsState={symbol:'',data:null,error:'',request:0};
+async function loadTickerMetrics(symbol) {
+  const request=++tickerMetricsState.request;
+  Object.assign(tickerMetricsState,{symbol,data:null,error:''});renderTickerMetrics();
+  try{const data=await api(`ticker-metrics?symbol=${encodeURIComponent(symbol)}`);if(request===tickerMetricsState.request)tickerMetricsState.data=data;}
+  catch(error){if(request===tickerMetricsState.request)tickerMetricsState.error=error.message;}
+  if(request===tickerMetricsState.request)renderTickerMetrics();
+}
+const fixed = (n,dp=2) => n==null ? '—' : n.toFixed(dp);
+const pctCell = (n,dp=1) => n==null ? '—' : `${n>0?'+':''}${n.toFixed(dp)}%`;
+const bigNumber = n => n==null ? '—' : new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:2}).format(n);
+const scoreTone = n => n==null ? '' : n>=0.1 ? 'up' : n<=-0.1 ? 'down' : '';
+function metricTile(label, value, note='', tone='', title='') {
+  const tile=text('div','','metric-tile');tile.append(text('span',label),text('strong',value,tone));
+  if(note)tile.append(text('small',note));if(title)tile.title=title;return tile;
+}
+/** A low→high bar with a marker; extra ticks mark reference levels on the same scale. */
+function rangeBar(low, high, value, {ticks=[],lowLabel,highLabel,label}={}) {
+  const wrap=text('div','','range-bar'),track=text('div','','range-track');
+  const at=v=>Math.max(0,Math.min(100,(v-low)/(high-low)*100));
+  for(const t of ticks){if(t.value==null)continue;const tick=text('span','','range-tick'+(t.cls?' '+t.cls:''));tick.style.left=at(t.value)+'%';tick.title=`${t.label}: ${t.text ?? fixed(t.value)}`;track.append(tick);}
+  if(value!=null){const marker=text('span','','range-marker');marker.style.left=at(value)+'%';marker.title=`${label || 'Now'}: ${money(value)}`;track.append(marker);}
+  const ends=text('div','','range-ends');ends.append(text('span',lowLabel ?? money(low)),text('span',highLabel ?? money(high)));
+  wrap.append(track,ends);wrap.setAttribute('role','img');
+  wrap.setAttribute('aria-label',`${label || 'Price'} ${value==null?'unknown':money(value)} between ${lowLabel ?? money(low)} and ${highLabel ?? money(high)}`);
+  return wrap;
+}
+/** −1…+1 scale with zero in the middle. */
+function scoreBar(score) {
+  const bar=text('div','','score-bar'),fill=text('span','',score>=0?'up':'down');
+  fill.style.left=(score>=0?50:50+score*50)+'%';fill.style.width=Math.abs(score)*50+'%';bar.append(fill);return bar;
+}
+function signalList(signals) {
+  const list=text('div','','signal-list');
+  for(const sig of signals){const row=text('div','','signal-row');row.append(text('span',sig.name),scoreBar(sig.score),text('strong',`${sig.score>0?'+':''}${sig.score.toFixed(2)}`,scoreTone(sig.score)),text('small',sig.detail));list.append(row);}
+  return list;
+}
+function renderTickerMetrics() {
+  const panel=$('position-panel-metrics');if(!panel)return;
+  const st=tickerMetricsState,m=st.data;panel.replaceChildren();
+  if(st.symbol!==reviewSymbol)return;
+  if(st.error){panel.append(text('p',`Could not load metrics: ${st.error}`,'review-warning'));return;}
+  if(!m){panel.append(text('p','Loading metrics…','review-meta'));return;}
+  const r=m.range52w,mo=m.momentum,ma=m.movingAverages,f=m.fundamentals,a=m.analysts;
+
+  // Headline: price, today, place in the 52-week range.
+  const head=reviewSection(panel,'Where it stands');
+  const tiles=text('div','','metric-tiles');
+  tiles.append(metricTile('Price',money(m.price),m.priceSource==='close'?'Last daily close':m.priceStale?'Stale quote':'Latest quote',m.priceStale?'warn':''),
+    metricTile('Today',pctCell(m.dayChangePct,2),'Since previous close',direction(m.dayChangePct)),
+    metricTile('In 52-week range',r.positionPct==null?'—':`${r.positionPct.toFixed(0)}%`,'0% = at the low, 100% = at the high','','How far up the 52-week low-to-high range the price is'),
+    metricTile('From 52-week high',pctCell(r.fromHighPct),r.high==null?'':`High ${money(r.high)}`,direction(r.fromHighPct)));
+  head.append(tiles);
+  if(r.high!=null && r.low!=null && r.high>r.low){
+    head.append(rangeBar(r.low,r.high,m.price,{label:'Price',lowLabel:`52-week low ${money(r.low)}`,highLabel:`52-week high ${money(r.high)}`,
+      ticks:[{value:ma.sma50,label:'50-day average',text:money(ma.sma50)},{value:ma.sma200,label:'200-day average',text:money(ma.sma200),cls:'slow'},{value:a?.targetMean,label:'Analyst mean target',text:money(a?.targetMean),cls:'target'}].filter(t=>t.value!=null && t.value>=r.low && t.value<=r.high)}));
+    const keys=text('p','','review-meta range-key');keys.append(text('span','● price','key-price'),text('span','| 50-day avg','key-fast'),text('span','| 200-day avg','key-slow'),text('span','| analyst target','key-target'));head.append(keys);
+    if(r.source==='bars' && r.sessions<240)head.append(text('p',`Range covers ${r.sessions} sessions — less than a full year of history.`,'review-meta'));
+    if(r.source==='yahoo')head.append(text('p','Range from Yahoo; daily history was unavailable.','review-meta'));
+  }
+
+  // Returns over standard windows.
+  const perf=reviewSection(panel,'Performance');
+  const returns=text('div','','metric-tiles returns');
+  for(const [k,label] of [['1W','1 week'],['1M','1 month'],['3M','3 months'],['6M','6 months'],['YTD','Year to date'],['1Y','1 year']])returns.append(metricTile(label,pctCell(m.returns[k]),'',direction(m.returns[k])));
+  perf.append(returns);
+
+  // The trader's indicators.
+  const ind=reviewSection(panel,'Indicators the trader uses');
+  ind.append(text('p',m.indicatorSource==='tick'?'Same readings the trader saw on the last engine check.':m.indicatorSource==='bars'?'Computed from daily prices the same way the trader computes them (this ticker is not on the watchlist).':'Not enough daily history to compute indicators.','review-meta'));
+  const rsiNote=mo.rsi==null?'':mo.rsi>=70?'Overbought (70+)':mo.rsi<=30?'Oversold (30 or less)':mo.rsi>=mo.rsiEntryMin?`Above entry minimum ${mo.rsiEntryMin}`:`Below entry minimum ${mo.rsiEntryMin}`;
+  const itiles=text('div','','metric-tiles');
+  itiles.append(metricTile('Trend score',m.trend.composite==null?'—':`${m.trend.composite>0?'+':''}${m.trend.composite.toFixed(2)}`,`Entry needs ${m.trend.compositeMin>0?'+':''}${m.trend.compositeMin.toFixed(2)} · scale −1 to +1`,scoreTone(m.trend.composite),'Average of the five trend signals below'),
+    metricTile('Mean-reversion score',m.meanReversion.composite==null?'—':`${m.meanReversion.composite>0?'+':''}${m.meanReversion.composite.toFixed(2)}`,'Positive = stretched below its usual range',scoreTone(m.meanReversion.composite)),
+    metricTile(`RSI (${mo.rsiPeriod})`,fixed(mo.rsi,1),rsiNote,mo.rsi!=null&&(mo.rsi>=70||mo.rsi<=30)?'warn':''),
+    metricTile('Monthly move',m.reversal?.oneMonthReturnPct==null?'—':pctCell(m.reversal.oneMonthReturnPct),m.reversal?.chasing?`Already ran — above +${m.reversal.chaseThresholdPct}% chase limit`:m.reversal?`Chase limit +${m.reversal.chaseThresholdPct}%`:'',m.reversal?.chasing?'warn':direction(m.reversal?.oneMonthReturnPct)));
+  ind.append(itiles);
+  if(mo.rsi!=null){const rsiWrap=text('div','','rsi-scale');rsiWrap.append(text('span',`RSI ${mo.rsi.toFixed(1)}`),rangeBar(0,100,mo.rsi,{label:'RSI',lowLabel:'0',highLabel:'100',ticks:[{value:30,label:'Oversold',text:'30'},{value:70,label:'Overbought',text:'70'},{value:mo.rsiEntryMin,label:'Entry minimum',text:String(mo.rsiEntryMin),cls:'target'}]}));rsiWrap.querySelector('.range-marker').title=`RSI: ${mo.rsi.toFixed(1)}`;ind.append(rsiWrap);}
+  if(m.trend.signals.length){ind.append(text('h4','Trend signals'),signalList(m.trend.signals));}
+  if(m.meanReversion.signals.length){ind.append(text('h4','Mean-reversion signals'),signalList(m.meanReversion.signals));}
+  ind.append(historyFacts([
+    [`EMA ${ma.emaFastPeriod} / ${ma.emaSlowPeriod}`,ma.emaFast==null?'—':`${money(ma.emaFast)} / ${money(ma.emaSlow)} · ${ma.emaFast>ma.emaSlow?'fast above slow':'fast below slow'}`],
+    ['50-day average',ma.sma50==null?'—':`${money(ma.sma50)} · price ${pctCell(ma.vsSma50Pct)}`],
+    ['200-day average',ma.sma200==null?'—':`${money(ma.sma200)} · price ${pctCell(ma.vsSma200Pct)}`],
+    ['MACD histogram',fixed(mo.macdHistogram,3)+(mo.macdHistogram==null?'':mo.macdHistogram>0?' · rising momentum':' · falling momentum')],
+    ['ADX (trend strength)',mo.adx==null?'—':`${mo.adx.toFixed(1)} · ${mo.adx>=25?'strong trend':mo.adx>=20?'emerging trend':'weak or no trend'}`],
+    ['ATR (typical daily range)',mo.atr==null?'—':`${money(mo.atr)} · ${fixed(mo.atrPct)}% of price`],
+    ['Volatility (1 year, annualised)',mo.volatilityPct==null?'—':`${mo.volatilityPct.toFixed(1)}%`],
+    ['Volume vs 20-day average',mo.relativeVolume==null?'—':`${mo.relativeVolume.toFixed(2)}×`]]));
+
+  // Analysts.
+  const an=reviewSection(panel,'Analysts (Yahoo)');
+  if(!a || (a.analystCount==null && !a.ratings && a.targetMean==null))an.append(text('p','No analyst coverage reported for this ticker.','review-meta'));
+  else{
+    const atiles=text('div','','metric-tiles');
+    const consensus=a.recommendationKey?a.recommendationKey.replace(/_/g,' ').toUpperCase():'—';
+    const upside=a.targetMean!=null&&m.price?(a.targetMean/m.price-1)*100:null;
+    atiles.append(metricTile('Consensus',consensus,a.recommendationMean==null?'':`${a.recommendationMean.toFixed(2)} on 1 (strong buy) to 5 (strong sell)`,a.recommendationMean==null?'':a.recommendationMean<=2.5?'up':a.recommendationMean>=3.5?'down':''),
+      metricTile('Analysts',a.analystCount==null?'—':String(a.analystCount),'With a price target'),
+      metricTile('Mean target',money(a.targetMean),upside==null?'':`${pctCell(upside)} from price`,direction(upside)),
+      metricTile('Target range',a.targetLow==null?'—':`${money(a.targetLow)} – ${money(a.targetHigh)}`,a.targetMedian==null?'':`Median ${money(a.targetMedian)}`));
+    an.append(atiles);
+    if(a.targetLow!=null && a.targetHigh!=null && m.price!=null){
+      const lo=Math.min(a.targetLow,m.price),hi=Math.max(a.targetHigh,m.price);
+      if(hi>lo)an.append(rangeBar(lo,hi,m.price,{label:'Price',lowLabel:`Low ${money(lo)}`,highLabel:`High ${money(hi)}`,ticks:[{value:a.targetLow,label:'Lowest target',text:money(a.targetLow)},{value:a.targetMean,label:'Mean target',text:money(a.targetMean),cls:'target'},{value:a.targetHigh,label:'Highest target',text:money(a.targetHigh)}]}));
+    }
+    const rt=a.ratings,total=rt?rt.strongBuy+rt.buy+rt.hold+rt.sell+rt.strongSell:0;
+    if(total){
+      const bar=text('div','','ratings-bar'),legend=text('div','','ratings-legend');bar.setAttribute('role','img');
+      const parts=[['strongBuy','Strong buy'],['buy','Buy'],['hold','Hold'],['sell','Sell'],['strongSell','Strong sell']];
+      bar.setAttribute('aria-label',parts.map(([k,l])=>`${l} ${rt[k]}`).join(', '));
+      for(const [k,l] of parts){if(!rt[k])continue;const seg=text('span',String(rt[k]),'rating-'+k);seg.style.flexGrow=rt[k];seg.title=`${l}: ${rt[k]}`;bar.append(seg);}
+      for(const [k,l] of parts){const item=text('span','','');item.append(text('i','','rating-'+k),document.createTextNode(`${l} ${rt[k]}`));legend.append(item);}
+      an.append(text('h4',`This month’s ratings (${total})`),bar,legend);
+    }
+    an.append(text('p','Analyst ratings and targets are other people’s opinions. The trader does not use them.','review-meta'));
+  }
+
+  // Valuation and company.
+  const co=reviewSection(panel,'Valuation and company');
+  const v=a?.valuation,b=f?.balanceSheet,c=f?.crowding,l=f?.liquidity,e=f?.calendar;
+  co.append(historyFacts([
+    ['Market cap',bigNumber(l?.marketCap)],
+    ['P/E (trailing / forward)',v?`${fixed(v.trailingPE,1)} / ${fixed(v.forwardPE,1)}`:'—'],
+    ['PEG ratio',fixed(v?.pegRatio)],['Price to book',fixed(v?.priceToBook,1)],['Price to sales',fixed(v?.priceToSales,1)],
+    ['Dividend yield',v?.dividendYieldPct==null?'—':`${v.dividendYieldPct.toFixed(2)}%`],
+    ['Revenue growth (yearly)',pctCell(b?.revenueGrowthPct)],['Earnings growth (yearly)',pctCell(b?.earningsGrowthPct)],
+    ['Profit margin',b?.profitMarginsPct==null?'—':`${b.profitMarginsPct.toFixed(1)}%`],
+    ['Debt to equity',b?.debtToEquityPct==null?'—':`${b.debtToEquityPct.toFixed(0)}%`],
+    ['Beta (vs market)',fixed(c?.beta)],
+    ['Short interest',c?.shortPctOfFloat==null?'—':`${c.shortPctOfFloat.toFixed(1)}% of float`],
+    ['Next earnings',e?.nextEarningsAt?`${new Date(e.nextEarningsAt).toLocaleDateString()}${e.daysUntil!=null?` · in ${e.daysUntil} days`:''}${e.isEstimate?' · estimated':''}`:'—'],
+    ['EPS estimate changes (30 days)',f?.revisions?.currentYear?`${f.revisions.currentYear.upLast30days ?? 0} up · ${f.revisions.currentYear.downLast30days ?? 0} down`:'—']]));
+
+  const foot=[`Daily prices to ${m.barsAsOf?new Date(m.barsAsOf).toLocaleDateString():'—'}`];
+  if(f?.fetchedAt)foot.push(`company data from Yahoo, ${savedTime(f.fetchedAt)}`);
+  panel.append(text('p',foot.join(' · ')+'.','review-meta'));
+  for(const err of m.errors || [])panel.append(text('p',err,'review-warning'));
 }
 function renderPositionReview(data) {
   const panels=positionTabs(data);
@@ -1825,7 +1965,7 @@ async function openAgentTask(id) {
 }
 $('close-position-review').onclick=()=>$('position-review-dialog').close();
 $('position-review-dialog').onclose=()=>{reviewLoad++;tickerChart.request++;};
-$('refresh-position-review').onclick=()=>openPositionReview(reviewSymbol,true);
+$('refresh-position-review').onclick=()=>{void loadTickerMetrics(reviewSymbol);openPositionReview(reviewSymbol,true);};
 $('close-record-inspector').onclick=()=>$('record-inspector').close();
 $('record-inspector').onclose=()=>{inspectorLoad++;};
 $('ask-position-review').onclick=async()=>{

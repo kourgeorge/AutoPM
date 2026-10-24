@@ -116,6 +116,22 @@ export async function getFundamentalsRaw(symbol: string): Promise<RawFundamental
   return { raw, modulesPresent };
 }
 
+/**
+ * Analyst ratings, price targets and valuation ratios, for the dashboard's stock page only.
+ * Kept apart from `getFundamentalsRaw` so these verdicts never reach the trader's fundamentals.
+ * Throws like the other raw fetches; the caller decides what a failure means.
+ */
+export async function getAnalystRaw(symbol: string): Promise<any> {
+  if (isCryptoSymbol(symbol)) throw new Error(`${symbol}: analyst coverage is equities-only`);
+  const raw = await yf.quoteSummary(
+    yahooSymbol(symbol),
+    { modules: ['financialData', 'recommendationTrend', 'summaryDetail', 'defaultKeyStatistics'] },
+    { validateResult: false },
+  ) as any;
+  if (raw == null || typeof raw !== 'object') throw new Error(`${symbol}: quoteSummary returned no object`);
+  return raw;
+}
+
 export type Timeframe = '1Min' | '5Min' | '15Min' | '1Hour' | '1Day';
 
 // Yahoo interval + trading bars per calendar day (used to estimate lookback range)
