@@ -377,12 +377,10 @@ test('entry requests require fresh measured thesis evidence, check catalyst acce
   } finally { orderManager.enterPosition = original; }
 });
 
-test('lessons retain decision sample counts, counter-evidence and future review dates', () => {
+test('lessons keep only real evidence ids and show them to the trader', () => {
   journal.recordDecision(journal.decision('exit', 'trader', { symbol: 'AAPL', executed: true, rationale: 'Measured loss' }), 'loss');
-  journal.recordDecision(journal.decision('exit', 'trader', { symbol: 'MSFT', executed: true, rationale: 'Measured gain' }), 'gain');
-  agentContext.run({ ...context, toolCallId: 'lesson' }, () => lessons.recordLesson('Check events before buying.', ['loss', 'loss'], { counterEvidenceIds: ['gain'], scope: 'Earnings gaps' }));
+  agentContext.run({ ...context, toolCallId: 'lesson' }, () => lessons.recordLesson('Check events before buying.', ['loss', 'loss'], { category: 'mistake' }));
   const lesson = lessons.listLessons()[0];
-  assert.equal(lesson.sampleCount, 1); assert.equal(lesson.completedExitCount, 1); assert.deepEqual(lesson.counterEvidenceIds, ['gain']);
-  assert.match(lessons.readLessons()[0], /not independent trades/);
-  assert.throws(() => lessons.recordLesson('Invalid', ['loss'], { counterEvidenceIds: ['loss'] }), /distinct/);
+  assert.deepEqual(lesson.evidenceIds, ['loss']); assert.equal(lesson.category, 'mistake');
+  assert.match(lessons.readLessons()[0], /^- Check events before buying\. \(evidence: loss; saved \d{4}-\d\d-\d\d; lesson lesson\)$/);
 });

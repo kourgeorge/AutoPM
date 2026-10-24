@@ -19,7 +19,7 @@ import { renderPolicy } from '../policy/render';
 import { getPolicy } from '../policy/load';
 import { getState, updateState } from '../state/state';
 import { readDecisions } from '../journal/journal';
-import { readLessons } from '../journal/lessons';
+import { lessonsForContext } from '../journal/lessons';
 import { getPendingEvents, type Severity } from '../features/eventBus';
 import { pendingOrders } from '../core/orders';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
@@ -597,24 +597,16 @@ function buildDecisionHistory(): string {
 }
 
 /**
- * Beyond this the block stops being a standing memory and starts being an archive. Nothing
- * reaches past it on purpose: there is no `get_lessons` tool, so the model cannot claim to
- * have read a lesson it was not shown — the same trap `get_signals` was added to close, where
- * naming a vocabulary without a way to populate it invited the model to fill it in.
+ * The trader's memory, carried across cycles: what it learned about stocks, about its own
+ * behaviour, and about mistakes it made.
+ *
+ * Every cycle rebuilds its context from scratch, so a conclusion drawn in one cycle is gone in
+ * the next unless it was saved with write_lesson. Rendered in full, never shortened: a lesson
+ * cut to a headline is a slogan, and the reasoning is the part that makes it usable. Lessons
+ * about stocks in play this cycle are always shown; get_lessons reaches the rest.
  */
-const MAX_LESSONS = 20;
+const MAX_LESSONS = 30;
 
-/**
- * What this system concluded, and still believes.
- *
- * The only edge in the loop that survives a cycle boundary. RECENT DECISIONS says what was
- * done, `get_scorecard` measures how it turned out, and both are re-derived from files every
- * cycle — but an INFERENCE drawn from them existed only inside the cycle that drew it. These
- * are those inferences, in the model's own words, carried forward.
- *
- * Rendered in full rather than summarized, unlike events and decisions: a lesson compressed
- * to a headline is a slogan, and the reasoning is the part that makes it applicable.
- */
 /**
  * What is actually resting at the venue.
  *
@@ -687,16 +679,16 @@ function describeOrder(o: OpenOrder): string {
   return `${o.side} ${o.qty} ${o.type === 'other' ? o.rawType : o.type}${price}${o.tif ? ` ${o.tif}` : ''} ${o.status}${filled}`;
 }
 
-function buildLessons(): string {
-  const all = readLessons(20);
-  if (all.length === 0) return '';
-
-  const shown = all.slice(-MAX_LESSONS);
-  const lines = [`=== LESSONS (${shown.length}${all.length > shown.length ? ` of ${all.length}` : ''}) ===`];
-  lines.push('Research observations from previous cycles. These are suggestions, not permissions or binding rules. The active strategy and account mandate always take precedence.');
-  for (const lesson of shown) {
-    lines.push('');
-    lines.push(lesson);
+function buildLessons(state: ReturnType<typeof getState>): string {
+  const focus = [...Object.keys(state.positionSnapshots ?? {}),
+    ...getPendingEvents().map(e => e.symbol).filter((s): s is string => !!s)].map(canonicalSymbol);
+  const { text, shown, total } = lessonsForContext([...new Set(focus)], MAX_LESSONS);
+  const lines = [`=== LESSONS — YOUR MEMORY (${total ? `${shown}${total > shown ? ` of ${total}, get_lessons for the rest` : ''}` : 'empty'}) ===`];
+  if (!total) {
+    lines.push('Nothing saved yet. When you learn something about a stock, notice a habit of your own, or make a mistake, save it with write_lesson so the next cycle knows it.');
+  } else {
+    lines.push('What earlier cycles learned. Apply them; they are advice, and the active strategy and account limits always win. If one turns out wrong, replace it with write_lesson(supersedes).');
+    lines.push(text);
   }
   lines.push('=== END LESSONS ===');
   return lines.join('\n');
@@ -750,8 +742,8 @@ async function renderCycleContext(
   const historyCtx = buildDecisionHistory();
   if (historyCtx) { lines.push(''); lines.push(historyCtx); }
 
-  const lessonsCtx = buildLessons();
-  if (lessonsCtx) { lines.push(''); lines.push(lessonsCtx); }
+  lines.push('');
+  lines.push(buildLessons(state));
 
 
 

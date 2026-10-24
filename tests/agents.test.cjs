@@ -587,19 +587,35 @@ test('the deposit that funded the account is its starting balance, not a flow th
   try { assert.equal((await compare()).changePctA, null); } finally { http.get = realGet; bars.collectBars = realBars; }
 });
 
-test('lessons require evidence for model writes and can be retired without deleting history', () => {
+test('lessons accept optional real evidence, refuse invented ids, and can be retired without deleting history', () => {
   const evidence = journal.recordDecision(journal.decision('hold', 'trader', { rationale: 'Reviewed evidence' }));
   agentContext.run({ role: 'trader', requestId: 'lesson-command', actorId: 'alice', toolCallId: 'lesson-attempt' }, () => {
-    assert.throws(() => lessons.recordLesson('Unsupported observation'), /source decision/);
-    assert.throws(() => lessons.recordLesson('Unknown evidence', ['missing']), /existing decisions/);
+    assert.throws(() => lessons.recordLesson('Unknown evidence', ['missing']), /existing journal decision/);
+    assert.throws(() => lessons.recordLesson('No symbol', [], { category: 'stock' }), /symbol/);
+    assert.throws(() => lessons.recordLesson('Bad kind', [], { category: 'diary' }), /category/);
     lessons.recordLesson('Supported observation', [evidence.id]);
-    lessons.recordLesson('Supported observation', [evidence.id]);
+    lessons.recordLesson('Supported   observation', [evidence.id]);
   });
   assert.equal(lessons.listLessons().length, 1);
   const lesson = lessons.listLessons()[0];
   lessons.reviewLesson(lesson.id, 'Reviewed observation', false);
   assert.equal(lessons.readLessons().length, 0);
   assert.equal(lessons.listLessons()[0].text, 'Reviewed observation');
+});
+
+test('lessons are grouped by kind, pin stocks in play, and can be replaced', () => {
+  const ids = {};
+  agentContext.run({ role: 'trader', requestId: 'memory', actorId: 'trader', toolCallId: 'm1' }, () => { ids.old = lessons.recordLesson('NVDA fades after gap-ups.', [], { category: 'stock', symbol: 'nvda' }); });
+  agentContext.run({ role: 'trader', requestId: 'memory', actorId: 'trader', toolCallId: 'm2' }, () => { ids.next = lessons.recordLesson('NVDA fades the first hour after a gap-up above 3%; wait for 10:30 before entering.', [], { category: 'stock', symbol: 'NVDA', supersedes: ids.old }); });
+  agentContext.run({ role: 'trader', requestId: 'memory', actorId: 'trader', toolCallId: 'm3' }, () => lessons.recordLesson('Entries were refused after hours for a stale trade; check the last trade age first.', [], { category: 'mistake' }));
+  const old = lessons.listLessons(100).find(l => l.id === ids.old);
+  assert.equal(old.active, false); assert.equal(old.replacedBy, ids.next);
+  assert.deepEqual(Object.keys(lessons.listLessons(100).find(l => l.id === ids.next)).sort(), ['active','actorId','at','category','evidenceIds','id','replacedBy','symbol','text']);
+  assert.deepEqual(lessons.listLessons(100, true, { symbol: 'NVDA' }).map(l => l.id), [ids.next]);
+  const block = lessons.lessonsForContext(['NVDA']);
+  assert.match(block.text, /Mistakes to avoid repeating:\n- Entries were refused/);
+  assert.match(block.text, /How stocks behave[^\n]*:\n- \[NVDA\] NVDA fades the first hour/);
+  assert.doesNotMatch(block.text, /fades after gap-ups/);
 });
 
 test('research runs while trading is paused, without order or sleep tools, and reuses a pending request', async () => {

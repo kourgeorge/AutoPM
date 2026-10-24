@@ -1221,21 +1221,17 @@ function brokerOrderDetail(o) {
   return detail;
 }
 $('broker-book-reconcile').onclick=attempt(async()=>{await api('reconcile',{});notice('Broker outcomes checked.',true);await refresh();});
+const lessonKind = lesson => ({stock:'About a stock',behaviour:'Own behaviour',mistake:'Mistake'})[lesson.category || 'behaviour'];
 function renderLessons(list) {
   // Keep unsaved edits intact even if focus moves away during a background refresh.
   if (dirtyLessons.size || $('lesson-list').contains(document.activeElement)) return;
   renderReviewTable('lesson-list',list,6,lesson=>expandableRows(`lesson:${lesson.id}`,`Details for lesson: ${lesson.text}`,
-    [recordTime(lesson.at),text('span',lesson.active ? 'Active' : 'Retired','badge '+(lesson.active ? 'executed' : '')),rowSummary(lesson.text),lesson.evidenceIds.length ? `${lesson.evidenceIds.length} decision${lesson.evidenceIds.length === 1 ? '' : 's'}` : 'Operator observation',lesson.actorId || '—'],()=>{
+    [recordTime(lesson.at),text('span',lesson.active ? 'Active' : lesson.replacedBy ? 'Replaced' : 'Retired','badge '+(lesson.active ? 'executed' : '')),rowSummary(`${lessonKind(lesson)}${lesson.symbol ? ' · '+lesson.symbol : ''} — ${lesson.text}`),lesson.evidenceIds.length ? `${lesson.evidenceIds.length} decision${lesson.evidenceIds.length === 1 ? '' : 's'}` : 'Operator observation',lesson.actorId || '—'],()=>{
       const detail = text('div','','history-detail');
-      detail.append(historyFacts([['Where this lesson applies',lesson.scope || 'Not recorded'],['Supporting decision records',lesson.sampleCount ?? 'Not recorded'],['Confirmed exit records',lesson.completedExitCount ?? 'Not recorded'],['Review date',`${savedTime(lesson.reviewAfter)}${reviewDue(lesson.reviewAfter) ? ' · DUE' : ''}`]]));
-      detail.append(text('p','Decision counts are not independent trades or proof that this lesson improves returns.','review-meta'));
-      if(lesson.policyHash && strategy?.hash && lesson.policyHash!==strategy.hash)detail.append(text('p','Strategy changed since this lesson was recorded.','review-warning'));
+      detail.append(historyFacts([['Kind',lessonKind(lesson)],['Stock',lesson.symbol || '—']]));
       detail.append(text('h3','Lesson'),text('p',lesson.text),text('h3','Supporting evidence'));
       if (lesson.evidenceIds.length) { const links = text('div','','record-links');links.append(...lesson.evidenceIds.map(historyReference));detail.append(links); }
-      else detail.append(text('p','Operator observation; no source decisions are linked.'));
-      detail.append(text('h3','Counter evidence'));
-      if(lesson.counterEvidenceIds?.length){const links=text('div','','record-links');links.append(...lesson.counterEvidenceIds.map(historyReference));detail.append(links);}
-      else detail.append(text('p','No counter evidence linked. This does not mean none exists.'));
+      else detail.append(text('p','No journal decisions linked.'));
       detail.append(text('p',lesson.active ? 'Active — available to guide future reviews.' : 'Retired — kept for reference, excluded from future reviews.'));
       const label = text('label','Edit lesson'),editor = text('textarea',lesson.text);editor.value = lesson.text;editor.maxLength = 2000;
       editor.oninput = () => dirtyLessons.add(lesson.id);label.append(editor);detail.append(label);
@@ -1524,7 +1520,6 @@ $('protection').onsubmit=attempt(async()=>{const f=$('protection').elements;awai
 // Research comes from saved records. Opening details also loads its price chart.
 let reviewSymbol = '', reviewLoad = 0, inspectorLoad = 0, reviewSubmitting = false, reviewLoading = false, positionTab = 'assessment';
 const savedTime = at => at != null && at !== '' && Number.isFinite(new Date(at).getTime()) ? historyDate(at) : 'Not recorded';
-const reviewDue = at => at && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.now();
 const taskProgress = value => ({queued:'Queued',running:'Working',waiting:'Waiting for orders',completed:'Finished',failed:'Failed',interrupted:'Interrupted · awaiting retry',cancelled:'Cancelled'})[value] || value;
 function uiButton(label, onClick, cls = 'link') {
   const button = text('button',label,cls);button.type='button';button.onclick=onClick;return button;
