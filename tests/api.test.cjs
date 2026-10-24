@@ -284,3 +284,23 @@ test('ticker metrics place the price in its 52-week range and keep each data sou
     assert.equal(m.fundamentals,null);assert.deepEqual(m.errors,['Company fundamentals are unavailable.']);
   } finally {[collector.collectBars,yahoo.getAnalystRaw,fundamentals.getFundamentals]=original;}
 });
+test('a reconnecting stream that replays a large backlog does not crash the server',async()=>{
+  const ui=new HeadlessUI(),own=startApiServer({ui,trader:{status:{paused:false}},serveWeb:false});
+  await new Promise(resolve=>setTimeout(resolve,30));
+  const port=own.address().port,big='x'.repeat(5000);
+  ui.reply('before the backlog');const from=ui.feedAfter(-1,5000).at(-1).seq;
+  for(let i=0;i<300;i++)ui.reply(`backlog ${i} ${big}`);
+  const crashes=[],onError=e=>crashes.push(e);process.on('uncaughtException',onError);
+  try {
+    // Ask for everything after the line before the backlog, then read slowly so the socket buffer fills mid-replay.
+    const socket=require('node:net').connect(port,'127.0.0.1');
+    await new Promise(resolve=>socket.once('connect',resolve));
+    socket.write(`GET /api/stream HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nLast-Event-ID: ${from}\r\n\r\n`);
+    let received='';socket.on('data',d=>{received+=d;});socket.pause();
+    await new Promise(resolve=>setTimeout(resolve,300));
+    ui.reply('after the replay');socket.resume();
+    await new Promise(resolve=>setTimeout(resolve,800));socket.destroy();
+    assert.deepEqual(crashes,[]);assert.match(received,/backlog 299/);assert.match(received,/after the replay/);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/status`)).status,200,'the server still answers');
+  } finally {process.off('uncaughtException',onError);await own.close();}
+});

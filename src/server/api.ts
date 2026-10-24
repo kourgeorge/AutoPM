@@ -47,6 +47,8 @@ const MAX_FEED_LIMIT = 1000;
 const DEFAULT_FEED_LIMIT = 200;
 /** Keeps proxies and load balancers from closing an idle event stream. */
 const SSE_HEARTBEAT_MS = 25_000;
+/** Unsent bytes after which a stream client is treated as gone. */
+const MAX_STREAM_BACKLOG_BYTES = 4 * 1024 * 1024;
 /** Equity points kept for the live chart — at one tick a minute, well over a trading day. */
 const EQUITY_HISTORY_POINTS = 1500;
 /** Every request is made by the one local user. */
@@ -612,25 +614,32 @@ function openStream(
   // Node holds the headers until the first write; send one now so the browser knows it is connected.
   res.write(': connected\n\n');
 
-  const send = (e: FeedEntry): void => {
-    if (!res.write(`id: ${e.seq}\nevent: feed\ndata: ${JSON.stringify(e)}\n\n`)) res.end();
+  // A full socket buffer is normal during a replay, not a dead client: Node queues the rest.
+  // Only a client that has stopped reading entirely is dropped. Writing after the stream ended
+  // throws ERR_STREAM_WRITE_AFTER_END, which took the engine down, so every write checks first.
+  const write = (chunk: string): void => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(chunk);
+    if (res.writableLength > MAX_STREAM_BACKLOG_BYTES) res.end();
   };
+  const send = (e: FeedEntry): void => write(`id: ${e.seq}\nevent: feed\ndata: ${JSON.stringify(e)}\n\n`);
 
   // A browser's EventSource resends the last id it saw on reconnect; replay what it missed.
   const resumeFrom = Number(req.headers['last-event-id'] ?? url.searchParams.get('after') ?? NaN);
   if (Number.isInteger(resumeFrom) && resumeFrom >= 0) {
     const replay = ui.feedAfter(resumeFrom, MAX_FEED_LIMIT + 1);
-    if (replay.length > MAX_FEED_LIMIT) { res.write('event: reset\ndata: {"reason":"Fetch /api/feed to catch up"}\n\n'); res.end(); return; }
+    if (replay.length > MAX_FEED_LIMIT) { write('event: reset\ndata: {"reason":"Fetch /api/feed to catch up"}\n\n'); res.end(); return; }
     for (const e of replay) send(e);
+    if (res.writableEnded) return;
   }
 
   const unsubscribeFeed = ui.subscribe(send);
   // Tells the dashboard to refetch status/positions — sending the whole tick would be wasteful.
   const unsubscribeTicks = ui.subscribeTicks(() => {
-    res.write(`event: tick\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
+    write(`event: tick\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
   });
   const heartbeat = setInterval(() => {
-    if (!res.write(': keep-alive\n\n')) res.end();
+    write(': keep-alive\n\n');
   }, SSE_HEARTBEAT_MS);
   heartbeat.unref();
   streams.add(res);
