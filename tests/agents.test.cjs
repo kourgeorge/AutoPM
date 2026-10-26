@@ -811,3 +811,58 @@ test('only full broker coverage is reported as confirmed journal protection', as
     await assert.rejects(() => refreshJournalProtection()); assert.equal(journal.readDecision(entry.id).protectionStatus, 'unknown');
   } finally { broker.getOpenOrders = realOrders; broker.getPositions = realPositions; }
 });
+
+test('get_pnl counts a partial sell as realized at once, adds the broker\'s open profit, and skips sells with no recorded buy', async () => {
+  const { recordFills } = from('review/fills');
+  const fill = (id, symbol, side, qty, price, at) => ({ execId: id, brokerOrderId: 'o-' + id, permId: null, symbol, side, qty, price, fee: null, at });
+  recordFills([
+    fill('a1', 'AAA', 'buy', 10, 100, '2026-09-01T14:00:00Z'), fill('a2', 'AAA', 'buy', 10, 110, '2026-09-02T14:00:00Z'),
+    fill('a0', 'AAA', 'buy', 2, 90, '2026-08-01T14:00:00Z'), fill('a0s', 'AAA', 'sell', 2, 80, '2026-08-02T14:00:00Z'), // an earlier, closed AAA trade: -20
+    fill('a3', 'AAA', 'sell', 5, 120, '2026-09-10T14:00:00Z'),                       // 5 x (120 - 105) = +75, still holding 15
+    fill('b1', 'BBB', 'buy', 4, 50, '2026-09-03T14:00:00Z'), fill('b2', 'BBB', 'sell', 4, 45, '2026-09-04T14:00:00Z'), // -20, closed
+    fill('c1', 'CCC', 'sell', 3, 30, '2026-09-05T14:00:00Z'),                        // no buy on record
+  ]);
+  const original = broker.getPositions;
+  broker.getPositions = async () => [{ symbol: 'AAA', qty: 15, avgCost: 105, marketValue: 1650, unrealizedPnL: 75 }];
+  try {
+    const all = JSON.parse(await traderTools.executeTraderTool('get_pnl', {}));
+    assert.equal(all.realizedPnL, 35); assert.equal(all.unrealizedPnL, 75); assert.equal(all.totalPnL, 110);
+    assert.equal(all.realizedOnOpenPositions, 75, 'only the partial sell on the current position, not the earlier closed AAA trade');
+    const aaa = all.bySymbol.find(r => r.symbol === 'AAA');
+    assert.deepEqual([aaa.realizedPnL, aaa.realizedThisPosition, aaa.unrealizedPnL, aaa.totalPnL, aaa.ledgerQty, aaa.heldQty], [55, 75, 75, 130, 15, 15]);
+    assert.equal(all.bySymbol.find(r => r.symbol === 'CCC').unmatchedQty, 3);
+    assert.ok(all.caveats.some(c => /no recorded buy/.test(c)));
+    const scorecard = JSON.parse(await traderTools.executeTraderTool('get_scorecard', {}));
+    assert.equal(scorecard.trades, 2, 'the scorecard sees only the two closed round trips');
+    const one = JSON.parse(await traderTools.executeTraderTool('get_pnl', { symbol: 'bbb' }));
+    assert.deepEqual([one.realizedPnL, one.unrealizedPnL, one.bySymbol.length], [-20, 0, 1]);
+  } finally { broker.getPositions = original; }
+});
+
+test('get_journal filters by kind and date and pages backwards through the whole history without gaps or repeats', async () => {
+  const ids = [];
+  for (let i = 0; i < 25; i++) {
+    const kind = i % 5 === 0 ? 'entry' : 'skip';
+    ids.push(journal.recordDecision(journal.decision(kind, 'trader', { symbol: i % 2 ? 'AAA' : 'BBB', rationale: 'r' + i })));
+    if (i === 9 || i === 15) await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  const call = input => traderTools.executeTraderTool('get_journal', input).then(JSON.parse);
+  const seen = [];
+  let page = await call({ limit: 4 });
+  while (true) {
+    seen.unshift(...page.decisions.map(d => d.rationale));
+    if (!page.more) break;
+    page = await call({ limit: 4, before: page.nextBefore });
+  }
+  assert.deepEqual(seen, Array.from({ length: 25 }, (_, i) => 'r' + i), 'every decision once, oldest first');
+  const entries = await call({ kinds: ['entry'] });
+  assert.deepEqual(entries.decisions.map(d => d.rationale), ['r0', 'r5', 'r10', 'r15', 'r20']);
+  assert.equal(entries.more, false);
+  // Many records share a millisecond here, which is what paging by position (not time) is for.
+  const [from, to] = [ids[10].at, ids[16].at];
+  const windowed = await call({ symbol: 'aaa', since: from, until: to });
+  assert.deepEqual(windowed.decisions.map(d => d.rationale), ['r11', 'r13', 'r15']);
+  const raw = input => traderTools.executeTraderTool('get_journal', input);
+  assert.match(await raw({ kinds: ['diary'] }), /"ok":false/);
+  assert.match(await raw({ before: 'nope' }), /Unknown decision id/);
+});

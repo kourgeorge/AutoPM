@@ -61,17 +61,19 @@ import {
   type ArmResult,
   type OcoArmResult,
 } from '../strategy/stopOrders';
-import { decision, readDecisions, recordDecision } from '../journal/journal';
+import { decision, readDecisions, readDecisionsNewestFirst, recordDecision } from '../journal/journal';
+import type { DecisionRecord } from '../journal/types';
 import { sleepRefusedBefore, unresolvedDecisions } from '../journal/reviewDecisions';
 import { recordLesson, listLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
-import { openedAtFromFills } from '../review/fills';
+import { openedAtFromFills, readFills } from '../review/fills';
+import { pnlReport } from '../review/pnl';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy, getPolicyHash } from '../policy/load';
 import { logger } from '../core/logger';
 import type { ToolDefinition, SignalResult } from '../core/types';
-import type { OpenOrder } from '../broker/IBroker';
+import type { OpenOrder, Position } from '../broker/IBroker';
 
 /**
  * Every exit names why it is selling. On 2026-10-06 a scheduled review sold ABBV and PLTR
@@ -221,12 +223,28 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_journal',
-    description: 'Read past decisions, oldest first: entries, exits, holds, guard vetoes and venue rejections, each with its rationale and the numbers it intended. This is the durable record of what this system has done and why.',
+    description: 'Read past decisions, oldest first: entries, exits, holds, skips, adjustments, guard vetoes and venue rejections, each with its rationale and the numbers it intended. This is the durable record of what this system has done and why, back to its first decision. Filter by symbol, kind and date. To walk the whole history, page backwards: pass the returned `nextBefore` as `before` until `more` is false. Most records are skips; pass kinds to leave them out.',
     input_schema: {
       type: 'object',
       properties: {
         symbol: { type: 'string', description: 'Optional — filter to one symbol.' },
-        limit: { type: 'integer', description: 'Most recent N records (default 20).', minimum: 1, maximum: 200 },
+        kinds: { type: 'array', items: { type: 'string', enum: ['entry', 'exit', 'hold', 'skip', 'adjustment', 'veto', 'rejected'] }, description: 'Optional — only these kinds, e.g. ["entry","exit"] for trades only.' },
+        since: { type: 'string', description: 'Optional ISO date or time — only decisions at or after it.' },
+        until: { type: 'string', description: 'Optional ISO date or time — only decisions before it.' },
+        before: { type: 'string', description: 'Optional — a decision id from a previous page\'s `nextBefore`: return the page of matches just older than it.' },
+        limit: { type: 'integer', description: 'Most recent N matching records (default 20).', minimum: 1, maximum: 200 },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_pnl',
+    description: 'Profit in dollars, all in one answer: realized (from every sell, matched on average cost, so partial sells count as soon as they fill), unrealized (the broker\'s figure on what is still held) and their total, overall and per stock. Covers all history unless days is given. Use it for "how much have we made"; get_scorecard is for the quality of finished trades (win rate, expectancy) and get_benchmark for the return against SPY. Never state a profit figure you did not read from here. Read `caveats` first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Optional — one stock only.' },
+        days: { type: 'integer', description: 'Optional — realized profit from sells in the last N days only. Unrealized is always as of now.', minimum: 1, maximum: 3650 },
       },
       required: [],
     },
@@ -413,6 +431,7 @@ async function dispatchTraderTool(
       case 'get_orders':       return toolGetOrders(input);
       case 'ack_event':           return toolAckEvent(input);
       case 'get_journal':         return toolGetJournal(input);
+      case 'get_pnl':             return await toolGetPnl(input);
       case 'get_scorecard':       return toolGetScorecard(input);
       case 'get_benchmark':       return await toolGetBenchmark(input);
       case 'get_price_stats':     return await toolGetPriceStats(input);
@@ -1267,11 +1286,41 @@ function toolAckEvent(input: Record<string, unknown>): string {
   return JSON.stringify({ ok: true, id, disposition, ...(corrected ? { correctedFrom: givenId } : {}), ...(reminder ? { reminder } : {}) });
 }
 
+const DECISION_KINDS = new Set(['entry', 'exit', 'hold', 'skip', 'adjustment', 'veto', 'rejected']);
+
 function toolGetJournal(input: Record<string, unknown>): string {
   const symbol = input.symbol as string | undefined;
-  const limit = (input.limit as number | undefined) ?? 20;
+  const limit = Math.min(200, Math.max(1, (input.limit as number | undefined) ?? 20));
+  const kinds = Array.isArray(input.kinds) ? input.kinds.map(String) : null;
+  if (kinds?.some(k => !DECISION_KINDS.has(k))) throw new Error(`kinds must be among ${[...DECISION_KINDS].join(', ')}`);
+  const time = (key: string) => {
+    if (input[key] == null) return null;
+    const t = Date.parse(String(input[key]));
+    if (!Number.isFinite(t)) throw new Error(`${key} must be an ISO date or time`);
+    return t;
+  };
+  const since = time('since'), until = time('until');
+  const key = symbol ? canonicalSymbol(symbol) : null;
+  const matches = (r: DecisionRecord) => {
+    const at = Date.parse(r.at);
+    return (!key || (r.symbol != null && canonicalSymbol(r.symbol) === key)) && (!kinds || kinds.includes(r.kind))
+      && (since == null || at >= since) && (until == null || at < until);
+  };
+  // Newest first in journal order, so `before` is an exact position rather than a timestamp
+  // that two decisions in the same millisecond could share.
+  const rows = readDecisionsNewestFirst();
+  let from = 0;
+  if (input.before != null) {
+    from = rows.findIndex(r => r.id === String(input.before)) + 1;
+    if (from === 0) throw new Error(`Unknown decision id for before: ${input.before}`);
+  }
+  const page: DecisionRecord[] = [];
+  for (let i = from; i < rows.length && page.length <= limit; i++) if (matches(rows[i])) page.push(rows[i]);
+  page.reverse();
+  // One more than asked for (the loop above stops at limit + 1), to know whether an older page exists.
+  const more = page.length > limit;
   // Null fields dropped: most of a hold record is nulls, and they cost the room below.
-  const records = readDecisions({ symbol, limit })
+  const records = (more ? page.slice(1) : page)
     .map(r => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== null)));
   // Oldest first, and the turn runner cuts an oversized result from the END — which is the
   // newest decision, the one a "why did we sell" question is about. So trim from the front
@@ -1280,11 +1329,24 @@ function toolGetJournal(input: Record<string, unknown>): string {
   let size = 0, start = records.length;
   while (start > 0 && size + JSON.stringify(records[start - 1]).length + 1 <= BUDGET) size += JSON.stringify(records[--start]).length + 1;
   const kept = records.slice(start);
+  const oldest = kept[0] as { id?: string } | undefined;
   return JSON.stringify({
     count: kept.length,
-    ...(start > 0 ? { omittedOlder: start, note: `The ${start} oldest of ${records.length} records were left out to fit; pass symbol or a smaller limit to see them.` } : {}),
+    more: more || start > 0,
+    ...(oldest?.id && (more || start > 0) ? { nextBefore: oldest.id } : {}),
+    ...(start > 0 ? { omittedOlder: start, note: `The ${start} oldest of this page were left out to fit; pass nextBefore as before to read them and everything older.` } : {}),
     decisions: kept,
   });
+}
+
+async function toolGetPnl(input: Record<string, unknown>): Promise<string> {
+  const days = input.days as number | undefined;
+  const since = days != null ? new Date(Date.now() - days * 86_400_000) : undefined;
+  let positions: Position[] = [], positionsError: string | null = null;
+  try { positions = await readPositions(); } catch (err: any) { positionsError = err?.message ?? String(err); }
+  const report = pnlReport(readFills(), positions, { symbol: input.symbol as string | undefined, since });
+  if (positionsError) report.caveats.unshift(`Positions could not be read from the broker (${positionsError}); unrealized profit is missing and the totals cover realized only.`);
+  return JSON.stringify(report);
 }
 
 /**
