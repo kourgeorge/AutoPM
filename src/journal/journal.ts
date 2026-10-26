@@ -41,6 +41,12 @@ export function readDecisions(opts: { symbol?: string; limit?: number; filter?: 
 
 }
 
+/** Every decision, newest first in journal order, for paging backwards by id. */
+export function readDecisionsNewestFirst(): DecisionRecord[] {
+  if (ephemeral) return [];
+  return listRecords<DecisionRecord>('journal', { desc: true }).map(r => r.value);
+}
+
 export function decision(
   kind: DecisionRecord['kind'],
   actor: DecisionRecord['actor'],

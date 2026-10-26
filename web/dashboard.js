@@ -440,7 +440,7 @@ const toolPhrases = {
   get_news:s=>s?`Reading ${s} news`:'Reading market news', web_search:(s,q)=>q?`Searching the web: ${q}`:'Searching the web', read_source:'Reading a source',
   get_stock_bars:s=>`Looking at the ${s||'price'} chart`, get_stock_snapshot:s=>`Checking the ${s||''} price`.replace('  ',' '), get_stock_latest_quote:s=>`Checking the ${s||''} quote`.replace('  ',' '),
   get_price_stats:s=>`Measuring ${s||'price'} moves`, get_intraday_volume:s=>`Checking ${s||'today’s'} volume`, get_most_active_stocks:'Looking at the most active stocks',
-  get_market_movers:'Looking at today’s biggest movers', get_portfolio_history:'Reading the equity history', get_journal:'Reading past decisions',
+  get_market_movers:'Looking at today’s biggest movers', get_portfolio_history:'Reading the equity history', get_journal:'Reading past decisions', get_pnl:'Adding up realized and open profit',
   get_scorecard:'Reviewing the track record', get_benchmark:'Comparing with the market', get_lessons:'Reading saved lessons', write_lesson:'Writing down a lesson',
   get_pending_events:'Reading new alerts', ack_event:'Marking an alert as handled', get_position_review:s=>`Reviewing the ${s||''} holding`.replace('  ',' '),
   get_thesis_status:s=>`Checking the ${s||''} investment case`.replace('  ',' '), compare_position_actions:s=>`Weighing keep, trim or sell for ${s||'a holding'}`,
