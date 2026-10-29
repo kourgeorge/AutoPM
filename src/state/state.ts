@@ -35,7 +35,9 @@ export interface Order {
   requestedBy?: string;
   toolCallId?: string;
   decisionId?: string;
+  /** For an entry the plan, once: symbol as written, qty, maxQty, price, stopLoss, takeProfit, atr, thesis, observationIds, contextVariant, riskAssessment. */
   params: Record<string, unknown>;
+  /** The trader's reason. The journal row for this order does not copy it. */
   reason: string;
   eventId: string | null;
   createdAt: number;
@@ -49,7 +51,7 @@ export interface Order {
     extendedHours?: boolean; submittedAt?: number } | null;
   /** Hashes of (request + intent) that resolve to this action, so a replayed request reuses it. */
   dedupKeys?: string[];
-  /** Each status change, oldest first, with what changed at that step. */
+  /** Each status change, oldest first. A step's `result` holds only the fields that step changed. */
   history?: OrderStep[];
 }
 export interface OrderStep {

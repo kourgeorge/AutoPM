@@ -877,7 +877,7 @@ $('refresh-ticker-chart').onclick=loadTickerChart;
 
 function orderDetails(card, p, includeReason = false) {
   const body = text('div', '', 'action-detail');
-  const signal = p.params.signal || p.params, facts = text('dl', '', 'action-facts');
+  const signal = p.params, facts = text('dl', '', 'action-facts');
   for (const [label, value] of [
     ['Quantity', historyNumber(p.params.maxQty ?? p.params.qty)], ['Filled', historyNumber(p.result?.filledQty)],
     ['Price', signal.price == null ? 'Market' : historyPrice(signal.price)],
@@ -962,10 +962,18 @@ function recordedFields(record) {
     field.append(text('dt',label[0].toUpperCase()+label.slice(1)));
     const content = text('dd','');
     if (value && typeof value === 'object') content.append(recordedFields(value));
-    else content.textContent = value == null ? 'Not recorded' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : /^(createdAt|expiresAt|decidedAt|at|firedAt|ackedAt|protectionCheckedAt)$/.test(key) ? historyDate(value) : String(value);
+    else content.textContent = value == null ? 'Not recorded' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : /^(createdAt|expiresAt|decidedAt|at|firedAt|ackedAt)$/.test(key) ? historyDate(value) : String(value);
     field.append(content);list.append(field);
   }
   return list;
+}
+/** Fields the server copies into a decision from its order (FROM_ORDER in src/journal/journal.ts); the order block shows them. */
+const FROM_ORDER = ['symbol','rationale','triggerEventId','qty','price','intendedPrice','intendedStop','intendedTarget',
+  'atrAtEntry','brokerOrderId','orderStatus','requestedQty','filledQty','fillPrice','thesis','observationIds','contextVariant','policyHash','requestId','actorId'];
+/** A decision with an order, without the copies: only what the journal row itself holds. */
+function journalOwned(record) {
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !FROM_ORDER.includes(key)
+    && !(key === 'executed' && (record.kind === 'entry' || record.kind === 'exit'))));
 }
 function historyDetail(entry) {
   const record = entry.record, fill = entry.type === 'fill', action = entry.action;
@@ -987,11 +995,12 @@ function historyDetail(entry) {
   if (fill) {
     card.append(historyFacts([['Filled quantity',historyNumber(record.qty)],['Fill price',historyPrice(record.price)],['Trade value',money(record.qty*record.price)],['Fees',record.fee == null ? 'Not reported' : money(record.fee)]]));
   } else {
-    const filled = record.filledQty ?? action?.result?.filledQty;
-    card.append(historyFacts([
-      ['Requested quantity',historyNumber(record.requestedQty ?? action?.params?.maxQty ?? action?.params?.qty)],
-      ['Filled quantity',historyNumber(filled)],
-      ['Fill price',historyPrice(record.fillPrice ?? action?.result?.filledPrice)],
+    // A hold or skip that placed nothing has no quantities or prices to show.
+    const noTrade = !action && (record.kind === 'hold' || record.kind === 'skip') && record.intendedStop == null;
+    card.append(historyFacts(noTrade ? [['Actor',record.actorId || record.actor]] : [
+      ['Requested quantity',historyNumber(record.requestedQty)],
+      ['Filled quantity',historyNumber(record.filledQty)],
+      ['Fill price',historyPrice(record.fillPrice)],
       ['Planned price',historyPrice(record.intendedPrice)],
       ['Stop / target',`${historyPrice(record.intendedStop)} / ${historyPrice(record.intendedTarget)}`],
       ['Actor / approval',[record.actorId || record.actor, action ? action.automatic ? 'Automatic' : 'Human review' : null].filter(Boolean).join(' · ')],
@@ -1011,8 +1020,8 @@ function historyDetail(entry) {
     }
     details.append(timeline);
   }
-  details.append(text('h3',fill ? 'Broker fill' : 'Decision record'),recordedFields(record));
-  if (action) details.append(text('h3','Order & risk assessment'),recordedFields(action));
+  details.append(text('h3',fill ? 'Broker fill' : 'Decision record'),recordedFields(action ? journalOwned(record) : record));
+  if (action) { const { history, ...order } = action; details.append(text('h3','Order & risk assessment'),recordedFields(order)); }
   card.append(details);
   return card;
 }

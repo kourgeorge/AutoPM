@@ -583,12 +583,22 @@ export async function actEntry(v: ValidatedEntry, clientOrderId?: string): Promi
   return { status: 'submitted', brokerOrderId: id, qty: v.regimeQty, ...(extended ? { extendedHours: true } : {}) };
 }
 
+/** The assessment's `qty` is the order's `maxQty`; saved once. */
+function withoutQty(risk: RiskAssessment | undefined): Omit<RiskAssessment, 'qty'> | undefined {
+  if (!risk) return undefined;
+  const { qty: _qty, ...rest } = risk;
+  return rest;
+}
+
 export async function enterPosition(signal: SignalResult, qty: number, eventId?: string): Promise<QueuedOrder> {
   const validated = await validateEntry(signal, qty);
   const automatic = automationLevel('entry') === 'auto';
   const action = createOrder({ kind: 'entry', symbol: validated.symbol, venue: config.venue,
-    automatic, params: { signal, qty, maxQty: validated.regimeQty, price: signal.price,
-      stopLoss: signal.stopLoss, takeProfit: signal.takeProfit, riskAssessment: validated.riskAssessment }, reason: signal.reason, eventId,
+    // The plan once: `entrySignal` rebuilds the signal from these and the order's reason. `symbol` is
+    // the ticker as written (BRK.B); the order's own symbol is canonical (BRKB).
+    automatic, params: { symbol: signal.symbol, qty, maxQty: validated.regimeQty, price: signal.price, stopLoss: signal.stopLoss,
+      takeProfit: signal.takeProfit, atr: signal.atr, thesis: signal.thesis, observationIds: signal.observationIds,
+      contextVariant: signal.contextVariant, riskAssessment: withoutQty(validated.riskAssessment) }, reason: signal.reason, eventId,
     timeoutMs: getPolicy().automation.timeoutMs });
   return { status: action.status, orderId: action.id, automatic: action.automatic ?? false };
 }

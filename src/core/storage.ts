@@ -42,6 +42,40 @@ export function subscribeActivity(listener: (entry: any) => void): () => void {
   activityListeners.add(listener); return () => activityListeners.delete(listener);
 }
 
+/**
+ * Each non-blank line of a file, read in chunks. A file is never read as one string: Node caps a
+ * string at 512 MB, and trajectories.jsonl reached 724 MB on 2026-10-26, which stopped startup.
+ */
+function eachLine(file: string, fn: (line: string, index: number) => void): void {
+  const fd = fs.openSync(file, 'r'), chunk = Buffer.alloc(16 * 1024 * 1024);
+  let parts: Buffer[] = [], index = 0, read: number;
+  const emit = (buf: Buffer) => { const line = buf.toString('utf8'); if (line.trim()) fn(line, index++); };
+  try {
+    while ((read = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
+      let start = 0;
+      for (let nl = chunk.indexOf(10, start); nl !== -1 && nl < read; nl = chunk.indexOf(10, start)) {
+        emit(Buffer.concat([...parts, chunk.subarray(start, nl)])); parts = []; start = nl + 1;
+      }
+      if (start < read) parts.push(Buffer.from(chunk.subarray(start, read)));
+    }
+    if (parts.length) emit(Buffer.concat(parts));
+  } finally { fs.closeSync(fd); }
+}
+
+/** Write lines through a temp file and rename, without joining them into one string. */
+function writeLines(file: string, lines: string[]): void {
+  const tmp = `${file}.${process.pid}.tmp`, fd = fs.openSync(tmp, 'w');
+  try {
+    for (let i = 0; i < lines.length; i += 1000) fs.writeSync(fd, lines.slice(i, i + 1000).join(''));
+    fs.closeSync(fd);
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    throw err;
+  }
+}
+
 function open(): void {
   if (opened) return;
   opened = true;
@@ -52,8 +86,9 @@ function open(): void {
     if (!name.endsWith('.jsonl')) continue;
     const kind = name.slice(0, -6);
     const rows = new Map<string, Row>();
-    const text = fs.readFileSync(recordFile(kind), 'utf8').split('\n').filter(l => l.trim());
-    text.forEach((line, i) => {
+    let count = 0;
+    eachLine(recordFile(kind), (line, i) => {
+      count++;
       let e: any;
       try { e = JSON.parse(line); }
       catch { throw new Error(`${recordFile(kind)} line ${i + 1} is not valid JSON; repair or remove it before starting.`); }
@@ -64,7 +99,7 @@ function open(): void {
     const sorted = new Map([...rows.values()].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]));
     kinds.set(kind, sorted);
     // Drop superseded lines so files do not grow with every update.
-    if (text.length > sorted.size) writeFileAtomic(recordFile(kind), [...sorted.values()].map(lineFor).join(''));
+    if (count > sorted.size) writeLines(recordFile(kind), [...sorted.values()].map(lineFor));
   }
 }
 

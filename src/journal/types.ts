@@ -81,6 +81,12 @@ export interface DecisionRecord {
   /** `Policy.version` at the moment of the decision — a number, as declared. */
   policyVersion: number;
   policyHash?: string;
+  /**
+   * The order this decision placed. Its row in orders.jsonl is the one copy of the plan, the
+   * reason, the thesis and the broker result: `readDecision` fills `rationale`, `qty`, `price`,
+   * the intended levels, `orderStatus`, `requestedQty`, `filledQty` and `fillPrice` from it,
+   * and none of them is written to the journal row.
+   */
   orderId?: string;
   orderStatus?: string;
   requestId?: string;
@@ -88,8 +94,8 @@ export interface DecisionRecord {
   requestedQty?: number | null;
   filledQty?: number;
   fillPrice?: number | null;
+  /** Saved only when it changes; when it was last checked is not history. */
   protectionStatus?: 'pending' | 'confirmed' | 'unknown';
-  protectionCheckedAt?: string;
   protectionStopLevel?: number | null;
   thesis?: EntryThesis | null;
   observationIds?: string[];

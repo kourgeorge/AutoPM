@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { listRecords, transaction } from '../core/storage';
+import { transaction } from '../core/storage';
 import { agentContext, assertAgentActive } from '../core/agentContext';
 import { listReviews, saveReview } from '../journal/reviews';
 import { readEvidence, validateEvidenceIds } from '../journal/evidence';
@@ -9,7 +9,7 @@ import { isUsable } from '../collect/types';
 import { etNow } from '../core/time';
 import { getPolicyHash } from '../policy/load';
 import type { Bar } from '../core/types';
-import type { DecisionRecord } from '../journal/types';
+import { readDecisions } from '../journal/journal';
 import { sameSymbol } from '../core/symbols';
 import { journalReview } from '../journal/reviewDecisions';
 
@@ -79,8 +79,8 @@ export function followupPath(price: number | null, at: string, bars: Bar[], hori
 export async function decisionFollowup(symbol?: string, days = 90, limit = 20, roundTripCostBps?: number) {
   const since = Date.now() - days * 86400000;
   const matches = (r: { at: string; symbol: string }) => (!symbol || r.symbol === symbol) && Date.parse(r.at) >= since;
-  const actions = listRecords<DecisionRecord>('journal', { where: r => !!r.symbol && matches({ at: r.at, symbol: r.symbol }) && ['entry', 'exit'].includes(r.kind), desc: true, limit }).map(r => {
-    const d = r.value, snapshotId = d.observationIds?.find(id => readEvidence(id)?.tool === 'get_position_review');
+  const actions = readDecisions({ filter: r => !!r.symbol && matches({ at: r.at, symbol: r.symbol }) && ['entry', 'exit'].includes(r.kind), limit }).reverse().map(d => {
+    const snapshotId = d.observationIds?.find(id => readEvidence(id)?.tool === 'get_position_review');
     if (!snapshotId) return null;
     const snapshot = readEvidence(snapshotId)!;
     return { id: d.id, symbol: d.symbol!, at: d.at, decision: d.kind, snapshotId, price: snapshot.data.forward?.price ?? null,

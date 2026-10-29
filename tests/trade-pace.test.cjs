@@ -23,6 +23,7 @@ const { broker } = require('../src/broker');
 const runtime = require('../src/core/runtime');
 
 const signal = { symbol: 'AAPL', signal: 'buy', price: 100, stopLoss: 95, takeProfit: 110, atr: 2, reason: 'test' };
+const { signal: _side, reason: _reason, ...plan } = signal;
 let open, held, replaced;
 
 function usePolicy(risk = {}, automation = {}) {
@@ -78,13 +79,13 @@ test('the day is the ET trading day, not the UTC date', () => {
 
 test('an entry past the daily cap is refused as max_entries_today', async () => {
   usePolicy({ maxEntriesPerDay: 1 });
-  const p = actions.createOrder({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { signal: { ...signal, symbol: 'MSFT' }, qty: 1 }, reason: 'earlier', timeoutMs: 60000, automatic: true });
+  const p = actions.createOrder({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { ...plan, symbol: 'MSFT', qty: 1 }, reason: 'earlier', timeoutMs: 60000, automatic: true });
   actions.transitionOrder(p.id, 'executing');
   await assert.rejects(() => orders.validateEntry(signal, 2), err => err.rule === 'max_entries_today');
 });
 
 test('an approved order re-validated by the executor does not count against itself', () => {
-  const p = actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 1 }, reason: 'mine', timeoutMs: 60000, automatic: true });
+  const p = actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { ...plan, qty: 1 }, reason: 'mine', timeoutMs: 60000, automatic: true });
   assert.equal(actions.getOrder(p.id).status, 'approved');
   assert.equal(pace.entryCapVeto(1, actions.listOrders()), null);
 });
