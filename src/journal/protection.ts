@@ -23,12 +23,11 @@ export async function refreshJournalProtection(): Promise<void> {
     const confirmed = !!stop && target;
     for (const id of [snap.entryDecisionId, snap.managementDecisionId]) {
       if (!id) continue;
-      const record = readDecision(id);
-      if (!record) continue;
+      if (!readDecision(id)) continue;
       const status = confirmed ? 'confirmed' : 'unknown';
-      if (record.protectionStatus === status && record.venueStopId === (stop?.id ?? null) && Date.now()-Date.parse(record.protectionCheckedAt ?? '') < 60000) continue;
+      // Saves only a change: a check that found what was already recorded is not history.
       recordDecisionOutcome(id, { protectionStatus: status, venueStopId: stop?.id ?? null,
-        protectionStopLevel: stop?.stopPrice ?? null, protectionCheckedAt: new Date().toISOString(),
+        protectionStopLevel: stop?.stopPrice ?? null,
         venueStopMissing: confirmed ? null : 'Current broker orders do not confirm full protection at the desired levels' });
     }
   }

@@ -2,13 +2,12 @@ import { broker } from '../broker';
 import { BrokerRejection } from '../broker/errors';
 import { logger } from '../core/logger';
 import { getPolicyHash } from '../policy/load';
-import { pendingOrders, getOrder, transitionOrder, ensureOrderDecision } from '../core/orders';
+import { pendingOrders, getOrder, transitionOrder, ensureOrderDecision, entrySignal } from '../core/orders';
 import { getState, getPositionSnapshot, openPositionSnapshot, removePositionSnapshot, type Order } from '../state/state';
-import type { SignalResult } from '../core/types';
 import type { ExecutionOrder } from '../broker/IBroker';
 import { GuardRejection, validateEntry, actEntry, validateExit, actExit, EXTENDED_ORDER_TTL_MS } from './orderManager';
 import { validateAnnotation, actAnnotation, type AnnotateInput } from './annotation';
-import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
+import { recordDecisionOutcome } from '../journal/journal';
 import { readFills } from '../review/fills';
 import { transaction } from '../core/storage';
 import { sameSymbol } from '../core/symbols';
@@ -27,7 +26,7 @@ async function reconcile(p: Order): Promise<void> {
     const target = orders.find(o => o.id === snap?.takeProfitOrderId && sameSymbol(o.symbol, p.symbol) && o.side === 'sell' && o.type === 'limit');
     if (held && held.qty > 0 && stop && stop.qty-stop.filled >= held.qty && stop.stopPrice === p.params.stopLoss &&
         (snap?.takeProfitLevel == null || (target && target.qty-target.filled >= held.qty && target.limitPrice === snap.takeProfitLevel))) {
-      recordDecisionOutcome('order-' + p.id, { executed: true, orderStatus: 'executed', protectionStatus: 'confirmed', venueStopId: stop.id, venueStopMissing: null });
+      recordDecisionOutcome('order-' + p.id, { executed: true, protectionStatus: 'confirmed', venueStopId: stop.id, venueStopMissing: null });
       transitionOrder(p.id, 'executed', { result: {} }); return;
     }
     if (p.status === 'executing') transitionOrder(p.id, 'unknown', { result: { error: 'Adjustment interrupted; review broker protection before retrying' } });
@@ -75,19 +74,8 @@ async function reconcile(p: Order): Promise<void> {
   const status = order.status === 'filled' || (terminal && order.filledQty > 0) ? 'executed' : terminal ? 'failed' : order.filledQty > 0 ? 'partial' : 'submitted';
   const positions = p.kind === 'exit' && terminal ? await broker.getPositions() : null;
   transaction(() => {
-    const signal = p.params.signal as SignalResult | undefined;
-    recordDecision(decision(p.kind as 'entry' | 'exit', 'trader', {
-      symbol: p.symbol, rationale: p.reason, triggerEventId: p.eventId, orderId: p.id,
-      policyHash: p.policyHash, executed: order!.filledQty > 0, orderStatus: order!.status,
-      qty: order!.qty, price: signal?.price ?? null, intendedPrice: signal?.price ?? null, brokerOrderId: order!.id,
-      intendedStop: signal?.stopLoss ?? null, intendedTarget: signal?.takeProfit ?? null, atrAtEntry: signal?.atr ?? null,
-    }), 'order-' + p.id);
-    recordDecisionOutcome('order-' + p.id, {
-      orderStatus: order!.status, executed: order!.filledQty > 0, requestedQty: order!.qty, filledQty: order!.filledQty, fillPrice: order!.filledPrice ?? null,
-      qty: order!.filledQty, price: order!.filledQty > 0 ? order!.filledPrice : null,
-    });
     if (p.kind === 'entry' && order!.filledQty > 0 && order!.filledPrice != null) {
-      const signal = p.params.signal as SignalResult;
+      const signal = entrySignal(p);
       const stored = getPositionSnapshot(p.symbol);
       const old = stored?.entryDecisionId === 'order-' + p.id ? stored : undefined;
       openPositionSnapshot({ ...old, symbol: p.symbol, entryPrice: order!.filledPrice,
@@ -118,7 +106,7 @@ async function execute(p: Order): Promise<void> {
   // another independent accounting model for pending capital.
   if (pendingOrders().some(other => other.id !== p.id && ['executing','submitted','partial','unknown'].includes(other.status))) return;
   try {
-    const entry = p.kind === 'entry' ? await validateEntry((p.params as any).signal, Number(p.params.qty), Number(p.params.maxQty ?? p.params.qty)) : null;
+    const entry = p.kind === 'entry' ? await validateEntry(entrySignal(p), Number(p.params.qty), Number(p.params.maxQty ?? p.params.qty)) : null;
     const exit = p.kind === 'exit' ? await validateExit(p.symbol, Number(p.params.qty)) : null;
     const annotation = !entry && !exit ? await validateAnnotation(p.params as unknown as AnnotateInput) : null;
     if (annotation && !annotation.ok) throw new Error(JSON.parse(annotation.response).error);
@@ -132,13 +120,6 @@ async function execute(p: Order): Promise<void> {
     if (entry || exit) {
       const result = entry ? await actEntry(entry, p.clientOrderId) : await actExit(p.symbol, p.reason, exit!, p.clientOrderId);
       transaction(() => {
-        recordDecision(decision(p.kind as 'entry' | 'exit', 'trader', {
-          symbol: p.symbol, rationale: p.reason, triggerEventId: p.eventId, orderId: p.id,
-          policyHash: p.policyHash, executed: false, orderStatus: 'submitted', requestedQty: result.qty, filledQty: 0,
-          qty: result.qty, price: entry?.price ?? exit?.price ?? null, intendedPrice: entry?.price ?? exit?.price ?? null, brokerOrderId: result.brokerOrderId,
-          intendedStop: entry?.stopLoss ?? null, intendedTarget: entry?.takeProfit ?? null, atrAtEntry: entry?.atr ?? null,
-        }), 'order-' + p.id);
-        recordDecisionOutcome('order-' + p.id, { orderStatus: 'submitted', brokerOrderId: result.brokerOrderId, requestedQty: result.qty, filledQty: 0, qty: 0, price: null });
         transitionOrder(p.id, 'submitted', { result: { brokerOrderId: result.brokerOrderId, qty: result.qty,
           ...(result.extendedHours ? { extendedHours: true, submittedAt: Date.now() } : {}) } });
       });
@@ -153,7 +134,7 @@ async function execute(p: Order): Promise<void> {
     const message = err?.message ?? String(err);
     if (current.status === 'approved') transitionOrder(p.id, 'failed', { result: { error: message } });
     else if (current.status === 'executing') transitionOrder(p.id, (err instanceof GuardRejection && ['paused_before_submission','position_changed','external_order','quote_unavailable'].includes(err.rule)) || err instanceof BrokerRejection && err.status != null && err.status >= 400 && err.status < 500 && ![408,409,429].includes(err.status) ? 'failed' : 'unknown', { result: { ...current.result, error: message } });
-    recordDecisionOutcome('order-' + p.id, { orderStatus: getOrder(p.id)?.status, vetoRule: err instanceof GuardRejection ? err.rule : null, venueMessage: err instanceof BrokerRejection ? err.venueMessage : null });
+    recordDecisionOutcome('order-' + p.id, { vetoRule: err instanceof GuardRejection ? err.rule : null, venueMessage: err instanceof BrokerRejection ? err.venueMessage : null });
     logger.warn('[Execution] ' + p.id + ': ' + message);
   }
 }

@@ -24,8 +24,9 @@ const runtime = require('../src/core/runtime');
 const { HeadlessUI } = require('../src/ui/headless');
 let placed, brokerOrder, held;
 const signal = { symbol: 'AAPL', signal: 'buy', price: 100, stopLoss: 95, takeProfit: 110, atr: 2, reason: 'test' };
+const { signal: _side, reason: _reason, ...plan } = signal;
 function entry(automatic = false) {
-  return actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic });
+  return actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { ...plan, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic });
 }
 beforeEach(async () => {
   store.resetStorage();
@@ -75,7 +76,7 @@ test('restart in the broker acceptance window recovers once without resubmission
 test('unknown broker outcomes block another account action', async () => {
   const first = entry(true);
   actions.transitionOrder(first.id, 'executing');
-  const second = actions.createOrder({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { signal: { ...signal, symbol: 'MSFT' }, qty: 1 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  const second = actions.createOrder({ kind: 'entry', symbol: 'MSFT', venue: 'paper', params: { ...plan, symbol: 'MSFT', qty: 1 }, reason: 'test', timeoutMs: 60000, automatic: true });
   await executor.sweepOrders();
   assert.equal(actions.getOrder(first.id).status, 'unknown');
   assert.equal(actions.getOrder(second.id).status, 'approved');
@@ -238,4 +239,37 @@ test('entry validation requires a fresh quote and caps a valid order at a cent-p
     assert.ok(validated.price<=101);assert.ok(validated.price>=100.13);
     assert.equal(Math.round(validated.price*100),validated.price*100);
   } finally {prices.collectPrices=originalPrices;bars.collectBars=originalBars;fundamentals.getFundamentals=originalFundamentals;regime.getRegime=originalRegime;}
+});
+
+test('an order is saved once: the journal row holds no copy of it, and readers still see the whole decision', async () => {
+  const p = entry(true);
+  brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 2, filledPrice: 100.5, status: 'filled' };
+  await executor.sweepOrders();
+  const row = store.readRecord('journal', 'order-' + p.id);
+  for (const field of ['rationale', 'qty', 'price', 'fillPrice', 'filledQty', 'requestedQty', 'orderStatus', 'intendedPrice', 'intendedStop', 'brokerOrderId', 'thesis', 'executed', 'policyHash'])
+    assert.equal(field in row, false, `${field} is a copy of the order`);
+  assert.equal(Object.values(row).includes(null), false, 'empty fields are not written');
+  const d = journal.readDecision('order-' + p.id);
+  assert.deepEqual([d.rationale, d.qty, d.price, d.fillPrice, d.requestedQty, d.orderStatus, d.intendedStop, d.brokerOrderId, d.executed],
+    ['test', 2, 100.5, 100.5, 2, 'executed', 95, 'broker-1', true]);
+  const saved = actions.getOrder(p.id);
+  assert.equal('signal' in saved.params, false, 'the plan is not saved twice inside the order');
+  const steps = saved.history.filter(s => s.result);
+  assert.deepEqual(steps.at(-1).result, { filledQty: 2, filledPrice: 100.5 }, 'a step keeps only what it changed');
+});
+
+test('a protection check that finds nothing new writes nothing', async () => {
+  const p = entry(true);
+  brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 2, filledPrice: 100.5, status: 'filled' };
+  await executor.sweepOrders();
+  state.upsertPositionSnapshot('AAPL', { stopOrderId: 'stop', takeProfitLevel: undefined });
+  held = [{ symbol: 'AAPL', qty: 2 }];
+  broker.getOpenOrders = async () => [{ id: 'stop', symbol: 'AAPL', side: 'sell', type: 'stop', stopPrice: 95, qty: 2, filled: 0 }];
+  const { refreshJournalProtection } = require('../src/journal/protection');
+  await refreshJournalProtection();
+  assert.equal(journal.readDecision('order-' + p.id).protectionStatus, 'confirmed');
+  const writes = [], realSave = store.saveRecord;
+  store.saveRecord = (kind, ...rest) => { writes.push(kind); return realSave(kind, ...rest); };
+  try { await refreshJournalProtection(); await refreshJournalProtection(); } finally { store.saveRecord = realSave; }
+  assert.deepEqual(writes, []);
 });

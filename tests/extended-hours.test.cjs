@@ -26,6 +26,7 @@ const runtime = require('../src/core/runtime');
 const { heartbeatDetector } = require('../src/features/detectors/heartbeat');
 
 const signal = { symbol: 'AAPL', signal: 'buy', price: 100, stopLoss: 95, takeProfit: 110, atr: 2, reason: 'test' };
+const { signal: _side, reason: _reason, ...plan } = signal;
 const originals = { collectPrices: prices.collectPrices, lastPrint: prices.lastExtendedHoursPrint, collectBars: bars.collectBars,
   getFundamentals: fundamentals.getFundamentals, getRegime: regime.getRegime };
 let requests, held, open, brokerOrder, session, print;
@@ -125,7 +126,7 @@ test('a sell that cannot be re-priced after the cancel fails cleanly instead of 
 });
 
 test('a resting extended-hours order is cancelled after its time limit and the outcome recorded', async () => {
-  const p = actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  const p = actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { ...plan, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
   const validate = orders.validateEntry;
   orders.validateEntry = async (s, q) => ({ ...s, regimeQty: q, session: 'extended' });
   brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 0, filledPrice: null, status: 'open' };
@@ -148,7 +149,7 @@ test('a resting extended-hours order is cancelled after its time limit and the o
 });
 
 test('a partly filled extended-hours entry keeps its fill when the rest is cancelled', async () => {
-  const p = actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { signal, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  const p = actions.createOrder({ kind: 'entry', symbol: 'AAPL', venue: 'paper', params: { ...plan, qty: 2, maxQty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
   actions.transitionOrder(p.id, 'executing');
   actions.transitionOrder(p.id, 'submitted', { result: { brokerOrderId: 'broker-1', qty: 2, extendedHours: true, submittedAt: Date.now() - orders.EXTENDED_ORDER_TTL_MS - 1 } });
   brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'buy', qty: 2, filledQty: 1, filledPrice: 100.4, status: 'partial' };

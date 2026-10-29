@@ -6,7 +6,8 @@ import { getPolicyHash } from '../policy/load';
 import { listRecords, readRecord, saveRecord, transaction } from './storage';
 import { agentContext, assertAgentActive, recordToolResult } from './agentContext';
 import { linkRequestOrder } from './requests';
-import { decision, recordDecision, recordDecisionOutcome, readDecision } from '../journal/journal';
+import { decision, recordDecision, readDecision } from '../journal/journal';
+import type { SignalResult } from './types';
 import { playDing } from './sound';
 
 const OPEN: OrderStatus[] = ['pending', 'approved', 'executing', 'submitted', 'partial', 'unknown'];
@@ -69,17 +70,21 @@ export function createOrder(input: CreateOrderInput): Order {
     return receipt(action);
   });
 }
+/** The order's journal row: only what the journal adds. `readDecision` reads the rest from the order. */
 export function ensureOrderDecision(action: Order): void {
   if (readDecision('order-' + action.id)) return;
-  const signal = action.params.signal as import('./types').SignalResult | undefined;
   recordDecision(decision(action.kind === 'entry' || action.kind === 'exit' ? action.kind : 'adjustment', 'trader', {
-    symbol: action.symbol, rationale: action.reason, orderId: action.id, requestId: action.requestId, actorId: action.requestedBy,
-    triggerEventId: action.eventId, orderStatus: action.status, requestedQty: Number(action.params.qty ?? 0) || null,
-    filledQty: 0, qty: 0, intendedPrice: signal?.price ?? action.params.price as number ?? null, intendedStop: signal?.stopLoss ?? action.params.stopLoss as number ?? null,
-    intendedTarget: signal?.takeProfit ?? action.params.takeProfit as number ?? null,
-    thesis: signal?.thesis, observationIds: signal?.observationIds ?? action.params.observationIds as string[] | undefined, contextVariant: signal?.contextVariant,
-    atrAtEntry: signal?.atr ?? null, protectionStatus: action.kind === 'exit' ? undefined : 'pending',
+    rationale: action.reason, orderId: action.id, protectionStatus: action.kind === 'exit' ? undefined : 'pending',
   }), 'order-' + action.id);
+}
+/** The entry signal an order was queued from, rebuilt from its params and reason. */
+export function entrySignal(p: Order): SignalResult {
+  const { symbol, price, stopLoss, takeProfit, atr, thesis, observationIds, contextVariant } = p.params as Record<string, any>;
+  return { symbol, signal: 'buy', reason: p.reason, price, stopLoss, takeProfit, atr, thesis, observationIds, contextVariant };
+}
+/** A step keeps only what it changed in the result; the order's `result` is the current whole. */
+function changed(before: Order['result'], after: NonNullable<Order['result']>): NonNullable<Order['result']> {
+  return Object.fromEntries(Object.entries(after).filter(([key, value]) => (before as Record<string, unknown> | null)?.[key] !== value));
 }
 export interface TransitionMeta {
   decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
@@ -92,10 +97,10 @@ export function transitionOrder(id: string, status: OrderStatus, meta: Transitio
     if (!NEXT[p.status].includes(status)) throw new Error(`Order ${id} is already ${p.status}; cannot change to ${status}`);
     const next: Order = { ...p, ...meta, status,
       decidedAt: ['approved','rejected','expired'].includes(status) ? Date.now() : p.decidedAt,
-      history: [...(p.history ?? []), { at: new Date().toISOString(), transition: status, ...meta }] };
+      history: [...(p.history ?? []), { at: new Date().toISOString(), transition: status, ...meta, ...(meta.result ? { result: changed(p.result, meta.result) } : {}) }] };
+    if (!next.history!.at(-1)!.result || !Object.keys(next.history!.at(-1)!.result!).length) delete next.history!.at(-1)!.result;
     saveRecord('orders', id, next);
     ensureOrderDecision(p);
-    recordDecisionOutcome('order-' + id, { orderStatus: status });
     if (status === 'unknown') { updateState({ paused: true }); notifyAccount('broker_outcome_unknown', `${p.kind} ${p.symbol}: ${meta.result?.error ?? 'Broker outcome needs review'}`, p.id); }
     return next;
   });
