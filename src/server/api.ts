@@ -33,6 +33,7 @@ import { getLastTick } from '../features/lastTick';
 import { heartbeatCadenceMs } from '../features/detectors/heartbeat';
 import { getPolicy } from '../policy/load';
 import { scorecard } from '../review/metrics';
+import { benchmarkChart } from '../review/benchmark';
 import { activityHistory, savedPositionContext, savedRequestDetails } from '../review/activity';
 import { textPage } from '../agents/savedResults';
 import { startResearch, researchStatus } from '../agents/researcher';
@@ -210,6 +211,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/llm-usage': 'AI model usage history: calls, tokens and cost per day, per agent and per model. ?days=N.',
   '/api/llm-usage/day': 'AI model usage for one day, call by call. ?day=YYYY-MM-DD.',
   '/api/scorecard': 'Closed round-trip statistics. ?days=N.',
+  '/api/benchmark-chart': 'Account equity against benchmarks, as % change per session, with return, Sharpe, volatility and drawdown for each. ?days=N&symbols=SPY,QQQ (up to 5).',
   '/api/feed': 'The activity feed. ?tail=N for the newest N, or ?after=SEQ&limit=N.',
   '/api/commands': 'Slash commands the operator can run.',
   '/api/agent-commands': 'Every agent request (trader, assistant, researcher) with status and result.',
@@ -484,6 +486,25 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     const days = Number(raw);
     if (!Number.isInteger(days) || days <= 0) throw new HttpError(400, 'days must be a whole number above 0');
     return scorecard({ days });
+  });
+
+  // Each call hits the broker's portfolio history and one bar fetch per symbol, so a
+  // dashboard flipping between windows reuses the answer for a minute.
+  const benchmarkChartCache = new Map<string, { until: number; result: Promise<unknown> }>();
+  add('GET', '/api/benchmark-chart', ({ url }) => {
+    const days = Number(url.searchParams.get('days') ?? 90);
+    if (!Number.isInteger(days) || days <= 0 || days > 3650) throw new HttpError(400, 'days must be a whole number from 1 to 3650');
+    const symbols = (url.searchParams.get('symbols') ?? 'SPY').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+    if (symbols.length === 0 || symbols.length > 5 || !symbols.every(s => /^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(s))) {
+      throw new HttpError(400, 'symbols must be 1 to 5 valid tickers, comma separated');
+    }
+    const key = `${days}:${symbols.join(',')}`, cached = benchmarkChartCache.get(key);
+    if (cached && cached.until > Date.now()) return cached.result;
+    const result = benchmarkChart({ days, symbols });
+    result.catch(() => benchmarkChartCache.delete(key));
+    if (benchmarkChartCache.size >= 32) benchmarkChartCache.delete(benchmarkChartCache.keys().next().value!);
+    benchmarkChartCache.set(key, { until: Date.now() + 60_000, result });
+    return result;
   });
 
   add('GET', '/api/feed', ({ url }) => {

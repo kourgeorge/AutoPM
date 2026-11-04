@@ -445,3 +445,79 @@ export async function comparePerformance(a: string, b: string, days: number) {
     valuesA, valuesB, changePctA, changePctB,
     excessPct: changePctA != null && changePctB != null ? r(changePctA-changePctB) : null, caveats };
 }
+
+export interface BenchmarkChartSeries {
+  /** "ACCOUNT" for the equity curve, otherwise the ticker. */
+  label: string;
+  /** Percentage change from the first common session, one per `dates` entry; null when this leg has no figure. */
+  values: Array<number | null>;
+  totalReturnPct: number | null;
+  /** The account's return minus this series', percentage points: positive means the account beat it. Null for the account itself. */
+  accountExcessPct: number | null;
+  sharpe: number | null;
+  volPct: number | null;
+  maxDrawdownPct: number | null;
+}
+
+/**
+ * The account's equity curve and any number of index/ticker benchmarks on one date axis, each
+ * as % change from the first common session — the Performance page's chart. Same alignment
+ * rule as `benchmark()` (dates every leg shares, never index-joined) and the same accounting
+ * gate: when cash flows sit inside the window the account line is withheld, not drawn with a
+ * deposit baked into it.
+ */
+export async function benchmarkChart(opts: { days?: number; symbols?: string[] } = {}): Promise<{
+  window: { from: string | null; to: string | null; days: number; sessions: number };
+  dates: string[];
+  series: BenchmarkChartSeries[];
+  caveats: string[];
+}> {
+  const days = opts.days ?? 90;
+  const symbols = [...new Set((opts.symbols?.length ? opts.symbols : ['SPY']).map(s => s.toUpperCase()))];
+  const caveats: string[] = [];
+
+  const [account, ...benchmarks] = await Promise.all([fetchEquityCurve(days), ...symbols.map(s => fetchSymbolCurve(s, days))]);
+  if (account.error) caveats.push(account.error);
+  benchmarks.forEach((leg, i) => {
+    if (leg.error) caveats.push(leg.error);
+    else if (leg.stale) caveats.push(`the last ${symbols[i]} bar is stale, so its line may end a session early`);
+  });
+
+  // Only legs that actually arrived take part in the intersection; a missing benchmark must
+  // not empty the whole chart.
+  const legs = [account, ...benchmarks];
+  const present = legs.filter(leg => leg.series.size > 0);
+  const dates = present.length === 0 ? [] : [...present[0].series.keys()].filter(d => present.every(leg => leg.series.has(d))).sort();
+  if (present.length > 1 && dates.length === 0) caveats.push('the series share no dates, so there is nothing to compare');
+  if (dates.length > 0 && dates.length < THIN_SESSIONS) {
+    caveats.push(`window is ${dates.length} session(s) — too short for a meaningful comparison, and one good or bad day moves every figure here`);
+  }
+
+  const accountIssue = dates.length && account.series.size ? await accountPerformanceIssue(dates[0], account.opening) : null;
+  if (accountIssue) caveats.push(accountIssue);
+
+  const build = (label: string, leg: Leg, withheld: boolean): Omit<BenchmarkChartSeries, 'accountExcessPct'> => {
+    const levels = withheld || leg.series.size === 0 ? [] : dates.map(d => leg.series.get(d)!);
+    const returns = dailyReturns(levels);
+    return {
+      label,
+      values: levels.length ? levels.map(v => r((v / levels[0] - 1) * 100)) : dates.map(() => null),
+      totalReturnPct: r(totalReturnPct(levels)),
+      sharpe: r(annualisedSharpe(returns)),
+      volPct: r(annualisedVolPct(returns)),
+      maxDrawdownPct: levels.length >= 2 ? r(maxDrawdownPct(levels)) : null,
+    };
+  };
+
+  const accountSeries = build('ACCOUNT', account, !!accountIssue);
+  const series: BenchmarkChartSeries[] = [
+    { ...accountSeries, accountExcessPct: null },
+    ...benchmarks.map((leg, i) => {
+      const s = build(symbols[i], leg, false);
+      return { ...s, accountExcessPct: s.totalReturnPct != null && accountSeries.totalReturnPct != null ? r(accountSeries.totalReturnPct - s.totalReturnPct) : null };
+    }),
+  ];
+  if (dates.length >= MIN_RETURNS_FOR_SHARPE + 1) caveats.push('Sharpe figures use a zero risk-free rate — read them as return per unit of volatility');
+
+  return { window: { from: dates[0] ?? null, to: dates.at(-1) ?? null, days, sessions: dates.length }, dates, series, caveats };
+}
