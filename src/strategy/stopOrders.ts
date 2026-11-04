@@ -555,6 +555,9 @@ const ORPHAN_STRIKES = 2;
  */
 const FLAT_BOOK_STRIKES = 5;
 
+/** While a leftover's protective leg still reads open, the venue is asked again only this often. */
+const ORPHAN_RECHECK_STRIKES = 25;
+
 function logFailureOnce(symbol: string, reason: string): void {
   const key = canonicalSymbol(symbol);
   if (lastFailure.get(key) === reason) return;
@@ -605,13 +608,20 @@ export async function sweepStops(): Promise<void> {
     absentFor.set(key, strikes);
     if (strikes < needed) continue;
 
+    // A protective leg still working at the venue means the empty read may be the broken one,
+    // so the stop level is kept. Any other outcome — filled, cancelled with an agent or manual
+    // sell, expired, unknown to the venue — means the shares are gone. (Waiting for "filled"
+    // alone kept BRKB, sold by the agent, forever and polled two orders every tick: 2026-11-04.)
+    // While a leg stays open the venue is asked again every ORPHAN_RECHECK_STRIKES reads, not
+    // every tick, so a held-back snapshot cannot flood the broker with lookups.
+    if ((strikes - needed) % ORPHAN_RECHECK_STRIKES !== 0) continue;
+    const ids = [snapshots[key].stopOrderId, snapshots[key].takeProfitOrderId].filter((id): id is string => !!id);
+    const outcomes = await Promise.all(ids.map(id => broker.getOrder(id)));
+    if (outcomes.some(o => o?.status === 'open' || o?.status === 'partial')) continue;
     logger.info(
       `[Stops] ${key} is not held at the venue on ${strikes} consecutive reads — removing its `
         + `snapshot: ${JSON.stringify(snapshots[key])}`,
     );
-    const ids = [snapshots[key].stopOrderId, snapshots[key].takeProfitOrderId].filter((id): id is string => !!id);
-    const outcomes = await Promise.all(ids.map(id => broker.getOrder(id)));
-    if (!outcomes.some(o => o?.status === 'filled')) continue;
     removePositionSnapshot(key);
     absentFor.delete(key);
   }
