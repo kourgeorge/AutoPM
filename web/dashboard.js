@@ -596,7 +596,7 @@ async function refresh() {
     renderAgentFloor(s);
     renderHandoffs(s.handoffs);
     if (review) { renderRequests(c.commands); renderLessons(l.lessons); }
-    if (performance) renderScorecard(sc);
+    if (performance) { renderScorecard(sc); loadBenchmark().catch(e => notice(e.message)); }
     if (view === 'activity') await loadHistory();
     if (view === 'usage') await loadUsage();
     if (view === 'broker') { await loadBrokerBook(); await loadHistory('fills'); }
@@ -1265,6 +1265,102 @@ function renderScorecard(sc) {
   $('score-caveats').replaceChildren(...(sc.caveats || []).map(c => text('li', c)));
 }
 $('score-days').onchange = attempt(refresh);
+
+// ── Benchmark comparison ──────────────────────────────────────────────────────
+const bench = { extra: [], data: null, request: 0, key: '' };
+const benchLabel = label => label === 'ACCOUNT' ? 'Your account' : label;
+const benchColor = i => `var(--series-${i % 6})`;
+function benchSymbols() {
+  return [...new Set([...[...document.querySelectorAll('.bench-picks input[type=checkbox]:checked')].map(box => box.value), ...bench.extra])].slice(0, 5);
+}
+async function loadBenchmark(force = false) {
+  const symbols = benchSymbols(), key = `days=${$('bench-days').value}&symbols=${encodeURIComponent(symbols.join(','))}`;
+  if (!symbols.length) { bench.data = null; bench.key = ''; $('bench-status').textContent = 'Pick at least one benchmark.'; drawBenchmark(); return; }
+  if (!force && key === bench.key && bench.data) return;
+  const request = ++bench.request;
+  $('bench-status').textContent = 'Loading…';
+  try {
+    const data = await api('benchmark-chart?' + key);
+    if (request !== bench.request) return;
+    bench.data = data; bench.key = key;
+    $('bench-status').textContent = data.window.sessions ? `${data.window.from} to ${data.window.to} · ${data.window.sessions} trading days` : 'No common trading days in this window.';
+  } catch (err) {
+    if (request !== bench.request) return;
+    bench.data = null; bench.key = ''; $('bench-status').textContent = 'Comparison unavailable: ' + err.message;
+  }
+  drawBenchmark();
+}
+function drawBenchmark() {
+  const data = bench.data, svg = $('bench-chart');
+  svg.replaceChildren(); $('bench-tip').hidden = true;
+  const series = data ? data.series.map((item, i) => ({ ...item, color: benchColor(i) })) : [];
+  $('bench-legend').replaceChildren(...series.map(item => {
+    const entry = text('span', '', item.values.some(v => v != null) ? '' : 'missing');
+    const swatch = text('i', ''); swatch.style.background = item.color;
+    entry.append(swatch, text('span', benchLabel(item.label)), text('strong', item.totalReturnPct == null ? '—' : signedPct(item.totalReturnPct), direction(item.totalReturnPct)));
+    if (bench.extra.includes(item.label)) {
+      const remove = text('button', '×', 'text-button'); remove.title = `Remove ${item.label}`; remove.setAttribute('aria-label', remove.title);
+      remove.onclick = attempt(async () => { bench.extra = bench.extra.filter(s => s !== item.label); await loadBenchmark(); });
+      entry.append(remove);
+    }
+    return entry;
+  }));
+  rows('bench-rows', series, item => {
+    const name = text('span', '', 'bench-name'), swatch = text('i', ''); swatch.style.background = item.color; name.append(swatch, benchLabel(item.label));
+    const pct = v => v == null ? '—' : `${v.toFixed(2)}%`;
+    return [name, text('span', item.totalReturnPct == null ? '—' : signedPct(item.totalReturnPct), direction(item.totalReturnPct)),
+      item.accountExcessPct == null ? '—' : text('span', signedPct(item.accountExcessPct), direction(item.accountExcessPct)),
+      item.sharpe == null ? '—' : item.sharpe.toFixed(2), pct(item.volPct), item.maxDrawdownPct == null ? '—' : `−${item.maxDrawdownPct.toFixed(2)}%`];
+  });
+  $('bench-caveats').replaceChildren(...(data?.caveats || []).map(c => text('li', c)));
+  const drawn = series.filter(item => item.values.filter(v => v != null).length >= 2);
+  if (!data || data.dates.length < 2 || !drawn.length) { svg.classList.add('empty'); return; }
+  svg.classList.remove('empty');
+  const width = Math.max(300, svg.clientWidth), height = svg.clientHeight || 280, left = 56, right = width - 12, top = 12, bottom = height - 26;
+  const all = drawn.flatMap(item => item.values.filter(v => v != null)).concat(0);
+  const low = Math.min(...all), high = Math.max(...all), pad = (high - low || 1) * .08, min = low - pad, max = high + pad;
+  const n = data.dates.length, x = i => left + i / (n - 1) * (right - left), y = v => bottom - (v - min) / (max - min) * (bottom - top);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  for (let i = 0; i < 5; i++) {
+    const value = min + (max - min) * i / 4, py = y(value);
+    svg.append(svgNode('line', { x1: left, x2: right, y1: py, y2: py, class: 'price-grid' }), svgNode('text', { x: left - 8, y: py + 4, 'text-anchor': 'end', class: 'price-axis' }, `${value.toFixed(1)}%`));
+  }
+  svg.append(svgNode('line', { x1: left, x2: right, y1: y(0), y2: y(0), class: 'bench-zero' }));
+  for (const [i, anchor] of [[0, 'start'], [Math.floor((n - 1) / 2), 'middle'], [n - 1, 'end']]) svg.append(svgNode('text', { x: x(i), y: height - 6, 'text-anchor': anchor, class: 'price-axis' }, data.dates[i]));
+  // Draw benchmarks first so the account line sits on top.
+  for (const item of [...drawn].reverse()) {
+    const d = item.values.map((v, i) => v == null ? '' : `${i && item.values[i - 1] != null ? 'L' : 'M'}${x(i).toFixed(2)},${y(v).toFixed(2)}`).join('');
+    const line = svgNode('path', { d, class: 'bench-line' + (item.label === 'ACCOUNT' ? ' bench-account' : '') }); line.style.stroke = item.color; svg.append(line);
+  }
+  const cursor = svgNode('line', { x1: 0, x2: 0, y1: top, y2: bottom, class: 'bench-cursor', visibility: 'hidden' });
+  const dots = drawn.map(item => { const dot = svgNode('circle', { r: 3.5, visibility: 'hidden' }); dot.style.fill = item.color; return dot; });
+  svg.append(cursor, ...dots);
+  svg.onpointerleave = () => { cursor.setAttribute('visibility', 'hidden'); dots.forEach(dot => dot.setAttribute('visibility', 'hidden')); $('bench-tip').hidden = true; };
+  svg.onpointermove = event => {
+    const box = svg.getBoundingClientRect(), px = (event.clientX - box.left) * width / box.width;
+    const i = Math.max(0, Math.min(n - 1, Math.round((px - left) / (right - left) * (n - 1))));
+    cursor.setAttribute('x1', x(i)); cursor.setAttribute('x2', x(i)); cursor.setAttribute('visibility', 'visible');
+    drawn.forEach((item, k) => { const v = item.values[i]; dots[k].setAttribute('visibility', v == null ? 'hidden' : 'visible'); if (v != null) { dots[k].setAttribute('cx', x(i)); dots[k].setAttribute('cy', y(v)); } });
+    const tip = $('bench-tip'); tip.replaceChildren(text('strong', data.dates[i]), ...drawn.map(item => { const row = text('div', ''), swatch = text('i', ''); swatch.style.background = item.color; row.append(swatch, text('span', benchLabel(item.label)), text('b', item.values[i] == null ? '—' : signedPct(item.values[i]), direction(item.values[i]))); return row; }));
+    tip.hidden = false;
+    const shown = x(i) * box.width / width;
+    tip.style.left = `${Math.min(Math.max(shown + 12, 0), box.width - tip.offsetWidth)}px`;
+  };
+  svg.setAttribute('aria-label', `From ${data.dates[0]} to ${data.dates.at(-1)}: ` + series.map(item => `${benchLabel(item.label)} ${item.totalReturnPct == null ? 'unavailable' : signedPct(item.totalReturnPct)}`).join(', '));
+}
+new ResizeObserver(() => { if (bench.data && $('bench-chart').clientWidth) drawBenchmark(); }).observe($('bench-chart'));
+$('bench-days').onchange = attempt(() => loadBenchmark());
+for (const box of document.querySelectorAll('.bench-picks input[type=checkbox]')) box.onchange = attempt(() => loadBenchmark());
+$('bench-add').onsubmit = attempt(async event => {
+  event.preventDefault();
+  const symbol = $('bench-symbol').value.trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(symbol)) { $('bench-status').textContent = 'Enter a valid ticker.'; return; }
+  if (benchSymbols().length >= 5 && !benchSymbols().includes(symbol)) { $('bench-status').textContent = 'Up to 5 benchmarks at a time.'; return; }
+  const box = document.querySelector(`.bench-picks input[value="${symbol}"]`);
+  if (box) box.checked = true; else if (!bench.extra.includes(symbol)) bench.extra.push(symbol);
+  $('bench-symbol').value = '';
+  await loadBenchmark();
+});
 
 // ── AI usage ───────────────────────────────────────────────────────────────
 const tokenCount = n => n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);

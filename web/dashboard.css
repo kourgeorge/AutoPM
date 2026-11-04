@@ -10,6 +10,7 @@
   --chat-frame: #28734f;
   --chat-raised: #20242a; --chat-input: #090b0e; --chat-accent: #c2cbd5; --chat-accent-ink: #11151a; --chat-soft: #1c2128;
   --chart-up: #78e5b0; --chart-down: #ff999c; --sidebar-width: 176px;
+  --series-0: #78e5b0; --series-1: #8ab4ff; --series-2: #edc77e; --series-3: #d59cff; --series-4: #6fd3e0; --series-5: #ff9f7a;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   --panel-padding: 10px; --panel-radius: 4px; --view-gap: 8px;
@@ -28,6 +29,7 @@
   --chat-frame: #205c40;
   --chat-raised: #e5e8ec; --chat-input: #f8f9fa; --chat-accent: #434c58; --chat-accent-ink: #fff; --chat-soft: #dce1e7;
   --chart-up: #16734c; --chart-down: #b53b46; color-scheme: light;
+  --series-0: #16734c; --series-1: #2f62c4; --series-2: #9a6a0c; --series-3: #8240b8; --series-4: #137b88; --series-5: #c2502a;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); font-size: 14px; }
@@ -1177,3 +1179,30 @@ details[open] > summary > .json-hint { display: none; }
 .ratings-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 10px; font-size: 11px; color: var(--ink-3); }
 .ratings-legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 2px; vertical-align: -1px; }
 @media (max-width: 900px) { .metric-tiles, .metric-tiles.returns { grid-template-columns: repeat(2,minmax(0,1fr)); } .signal-row { grid-template-columns: 110px minmax(60px,1fr) 46px; } .signal-row > small { grid-column: 1 / -1; } }
+
+/* Performance: account against benchmarks. */
+.bench-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 12px 0 4px; font-size: 13px; }
+.bench-picks label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.bench-picks small { color: var(--ink-3); font-size: 11px; }
+.bench-picks input[type=checkbox] { width: auto; margin: 0; }
+#bench-add input { width: 120px; font-size: 12px; padding: 5px 8px; }
+.bench-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 6px 0 8px; font-size: 13px; }
+.bench-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.bench-legend > span.missing { opacity: .55; }
+.bench-legend strong { font-family: var(--font-mono); font-weight: 500; }
+.bench-legend button { padding: 0 4px; font-size: 14px; line-height: 1; }
+.bench-legend i, .bench-name i, .bench-tip i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; flex: none; }
+.bench-name { display: inline-flex; align-items: center; gap: 8px; }
+.bench-chart-wrap { position: relative; }
+#bench-chart { display: block; width: 100%; height: 280px; touch-action: none; }
+#bench-chart.empty { height: 0; }
+.bench-line { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; opacity: .9; }
+.bench-line.bench-account { stroke-width: 2.6; opacity: 1; }
+.bench-zero { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 4; }
+.bench-cursor { stroke: var(--ink-3); stroke-width: 1; }
+.bench-tip { position: absolute; top: 8px; pointer-events: none; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; min-width: 160px; }
+.bench-tip strong { display: block; font-family: var(--font-mono); margin-bottom: 4px; }
+.bench-tip div { display: flex; align-items: center; gap: 6px; }
+.bench-tip b { margin-left: auto; font-family: var(--font-mono); font-weight: 500; }
+.bench-table { margin-top: 12px; }
+@media (max-width: 600px) { #bench-chart { height: 220px; } }
