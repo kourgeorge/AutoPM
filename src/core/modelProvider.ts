@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { withModelBudget } from './modelBudget';
+import { activeAiConfig } from './aiConnection';
 import { AiConfig, ChatMessage, ContentBlock, ModelResponse, ToolDefinition } from './types';
 
 // ── Provider interface ────────────────────────────────────────────────────────
@@ -393,6 +394,23 @@ export class OpenAICompatibleProvider implements ModelProvider {
  * constructor throws, because the alternative is inventing a URL for a name that may simply
  * be a typo and posting the API key to it.
  */
+const rawProvider = (cfg: AiConfig): ModelProvider =>
+  cfg.provider.toLowerCase() === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatibleProvider(cfg);
 export function createModelProvider(cfg: AiConfig): ModelProvider {
-  return withModelBudget(cfg.provider.toLowerCase() === 'anthropic' ? new AnthropicProvider(cfg) : new OpenAICompatibleProvider(cfg), cfg.model);
+  return withModelBudget(rawProvider(cfg), cfg.model);
+}
+
+/**
+ * For the live agents: reads the model and key saved on the Settings page before every call,
+ * so a change there applies to the next call without a restart. The inner client is rebuilt
+ * only when one of them actually changed.
+ */
+export function createLiveModelProvider(): ModelProvider {
+  let built: { key: string; provider: ModelProvider } | null = null;
+  const current = (): ModelProvider => {
+    const cfg = activeAiConfig(), key = JSON.stringify([cfg.provider, cfg.baseUrl, cfg.model, cfg.apiKey]);
+    if (built?.key !== key) built = { key, provider: rawProvider(cfg) };
+    return built.provider;
+  };
+  return withModelBudget({ chat: params => current().chat(params) }, () => activeAiConfig().model);
 }

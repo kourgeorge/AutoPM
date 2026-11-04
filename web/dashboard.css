@@ -809,7 +809,11 @@ dialog p { font-size: 13px; margin: 0; }
 dialog .actions { padding-top: 8px; border-top: 1px solid var(--line-soft); }
 .empty-state, .table-empty { font-size: 12px; padding: 12px 10px; border-radius: var(--panel-radius); }
 .form-grid, .risk-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; }
-#ai-usage-settings .section-description { margin: 8px 0 12px; }
+#ai-usage-settings .section-description, #ai-connection-settings .section-description { margin: 8px 0 12px; }
+#ai-connection-settings .score-grid { margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#ai-connection-settings .score-grid strong { font-size: 15px; overflow-wrap: anywhere; }
+#ai-connection-form .actions { margin-top: 12px; }
+@media (max-width: 600px) { #ai-connection-settings .score-grid { grid-template-columns: minmax(0, 1fr); } }
 #ai-usage-summary { margin-top: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 #ai-usage-summary strong { font-size: 18px; overflow-wrap: anywhere; }
 #ai-settings-form .actions { margin-top: 12px; }
@@ -1206,3 +1210,14 @@ details[open] > summary > .json-hint { display: none; }
 .bench-tip b { margin-left: auto; font-family: var(--font-mono); font-weight: 500; }
 .bench-table { margin-top: 12px; }
 @media (max-width: 600px) { #bench-chart { height: 220px; } }
+
+/* Collapsible Settings panels: the title is the toggle; a folded panel keeps only its title row. */
+.collapse-toggle { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; border-radius: 4px; }
+.collapse-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.collapse-toggle::before { content: ''; display: inline-block; flex: none; width: 6px; height: 6px; border-right: 2px solid var(--ink-3); border-bottom: 2px solid var(--ink-3); transform: translateY(-2px) rotate(45deg); transition: transform .15s; }
+#view-strategy .collapse-toggle:hover, #view-strategy .collapse-toggle:active { background: none; color: inherit; border-color: transparent; }
+.collapse-toggle:hover::before { border-color: var(--ink-2); }
+section.collapsed .collapse-toggle::before { transform: rotate(-45deg); }
+#view-strategy > section.panel.collapsed > :not(.pane-title) { display: none; }
+#view-strategy > section.panel.collapsed > .pane-title { margin-bottom: 0; }
+#view-strategy > section.panel.collapsed > .pane-title > :not(h2):not(.badge) { display: none; }

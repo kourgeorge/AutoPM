@@ -18,7 +18,7 @@ import { appEndpoints, readAppEndpoint } from '../server/api';
  */
 
 import { readRecord, listRecords } from '../core/storage';
-import { createModelProvider } from '../core/modelProvider';
+import { createLiveModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
 import { renderPolicy } from '../policy/render';
@@ -208,7 +208,7 @@ Keep answers concise. Tools available: ${ASSISTANT_TOOLS.map(t => t.name).join('
 export function assistantSystemPrompt(): string { return runtimeContract() + "\n\n" + SYSTEM_PROMPT; }
 
 export class AssistantAgent {
-  private readonly provider = createModelProvider(config.ai);
+  private readonly provider = createLiveModelProvider();
   private active: Promise<void> | null = null;
   private controller = new AbortController();
   private stopped = false;

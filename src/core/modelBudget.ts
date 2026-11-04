@@ -41,7 +41,8 @@ export function modelBudgetStatus() {
     researchLimit: shareLimit(limit, SHARES.researcher),
     resetsAt: new Date(Date.parse(usage.day + 'T00:00:00Z') + 86_400_000).toISOString() };
 }
-export function withModelBudget(provider: ModelProvider, model = 'unknown'): ModelProvider {
+/** `model` may be a function when the model can change between calls (see `createLiveModelProvider`). */
+export function withModelBudget(provider: ModelProvider, modelName: string | (() => string) = 'unknown'): ModelProvider {
   aiSettings();
   return { async chat(params) {
     if (JSON.stringify(params).length > 200_000) throw new Error('Model context exceeds the account request limit');
@@ -60,6 +61,7 @@ export function withModelBudget(provider: ModelProvider, model = 'unknown'): Mod
         assistantRequests: (usage.assistantRequests ?? 0) + (assistant ? 1 : 0) });
     });
     const startedAt = new Date().toISOString();
+    const model = typeof modelName === 'function' ? modelName() : modelName;
     let response: Awaited<ReturnType<ModelProvider['chat']>>;
     try {
       response = await provider.chat(params);

@@ -14,7 +14,7 @@ import { runAgentLoop } from './agentLoop';
 import { ToolRegistry, pickTools } from './toolRegistry';
 import { runtimeContract, RESEARCH_CONTRACT } from './runtimeContract';
 import { enqueueRequest, pendingRequests, updateRequest, type AgentRequest } from '../core/requests';
-import { createModelProvider } from '../core/modelProvider';
+import { createLiveModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { getPolicyHash } from '../policy/load';
@@ -89,7 +89,7 @@ function adoptLegacyResearch(): void {
 }
 
 export class Researcher {
-  private readonly provider = createModelProvider(config.ai);
+  private readonly provider = createLiveModelProvider();
   private active: Promise<void> | null = null;
   private controller = new AbortController();
   private stopped = false;

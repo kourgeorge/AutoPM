@@ -17,6 +17,7 @@ import { readPolicyText } from '../policy/load';
 import { renderPolicy } from '../policy/render';
 import { getMarketStatusSnapshot } from '../tools/traderTools';
 import { config } from './config';
+import { activeAiConfig } from './aiConnection';
 
 const DEFAULT_LESSONS = 5;
 
@@ -58,7 +59,7 @@ export function registerOperatorCommands(trader: Trader): void {
       const tick = getLastTick();
       const t = trader.status;
       const lines = [
-        `Venue      ${config.venue} (${config.broker}), model ${config.ai.model}`,
+        `Venue      ${config.venue} (${config.broker}), model ${activeAiConfig().model}`,
         `Trader     ${t.paused ? 'PAUSED — /resume to continue' : 'running'}, ${t.cycles} cycle${t.cycles === 1 ? '' : 's'} this run`,
         `Automation ${automationSummary()}`,
       ];
