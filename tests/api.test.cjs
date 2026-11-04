@@ -304,3 +304,27 @@ test('a reconnecting stream that replays a large backlog does not crash the serv
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/status`)).status,200,'the server still answers');
   } finally {process.off('uncaughtException',onError);await own.close();}
 });
+test('AI model and key can be changed from settings, apply to the next call, and the key is never returned',async()=>{
+  const {activeAiConfig}=require('../src/core/aiConnection');
+  const {createLiveModelProvider}=require('../src/core/modelProvider');
+  const start=(await request('/api/settings/ai-connection')).body;
+  assert.equal(start.provider,'ollama');assert.equal(start.server,config.ai.baseUrl??'http://localhost:11434/v1');
+  assert.equal(start.modelSource,'env');assert.equal(start.keySource,'env');
+  const saved=(await request('/api/settings/ai-connection',{model:'llama-test',apiKey:'secret-key-1234'})).body;
+  assert.equal(saved.model,'llama-test');assert.equal(saved.modelSource,'settings');assert.equal(saved.keyHint,'••••1234');
+  assert.ok(!JSON.stringify(saved).includes('secret-key'),'the key never leaves the engine');
+  assert.equal(activeAiConfig().apiKey,'secret-key-1234');
+  // The live provider sends the newly saved model and key on its next call.
+  const seen=[],realFetch=global.fetch;
+  global.fetch=async(url,init)=>{seen.push({model:JSON.parse(init.body).model,auth:init.headers.Authorization});return new Response(JSON.stringify({choices:[{message:{content:'ok'},finish_reason:'stop'}]}),{status:200});};
+  try {
+    const provider=createLiveModelProvider();
+    await provider.chat({systemPrompt:'t',messages:[],tools:[],maxTokens:5});
+    storage.saveValue('aiConnection',{model:'llama-next'});
+    await provider.chat({systemPrompt:'t',messages:[],tools:[],maxTokens:5});
+  } finally { global.fetch=realFetch; }
+  assert.deepEqual(seen,[{model:'llama-test',auth:'Bearer secret-key-1234'},{model:'llama-next',auth:'Bearer test'}]);
+  assert.equal((await request('/api/settings/ai-connection',{model:'has space'})).res.status,400);
+  const reset=(await request('/api/settings/ai-connection',{model:null,apiKey:null})).body;
+  assert.equal(reset.modelSource,'env');assert.equal(reset.keySource,'env');assert.equal(reset.model,start.model);
+});

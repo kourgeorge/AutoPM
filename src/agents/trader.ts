@@ -10,7 +10,7 @@ import { buildDecisionBrief } from './decisionBrief';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest, type WakeReason } from '../core/requests';
 import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
-import { createModelProvider } from '../core/modelProvider';
+import { createLiveModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { logger } from '../core/logger';
 import { canonicalSymbol } from '../core/symbols';
@@ -68,7 +68,7 @@ export function traderSystemPrompt(): string { return runtimeContract() + "\n\nT
 
 export class Trader {
   private running = false;
-  private readonly provider = createModelProvider(config.ai);
+  private readonly provider = createLiveModelProvider();
   private wakeUp: (() => void) | null = null;
   private wakePending = false;
   /** Why the next cycle runs. The trader sets no timer: the heartbeat, events and messages wake it. */

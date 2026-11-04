@@ -113,6 +113,23 @@
 </div>
 <div id="view-strategy" class="view" role="tabpanel" aria-labelledby="tab-strategy" hidden>
 <div class="view-heading"><h1>Settings</h1><span id="revision"></span></div>
+<section id="ai-connection-settings" class="panel" aria-labelledby="ai-connection-title">
+  <div class="pane-title"><h2 id="ai-connection-title">AI model</h2><span id="ai-connection-badge" class="badge">Loading…</span></div>
+  <p class="section-description">The LLM server every agent talks to. Changing the model or key applies from the next AI call, with no restart. The server and provider come from <code>.env</code> (<code>AI_PROVIDER</code>, <code>AI_BASE_URL</code>).</p>
+  <div class="score-grid" aria-live="polite">
+    <div><span>Server</span><strong id="ai-connection-server">—</strong></div>
+    <div><span>Provider</span><strong id="ai-connection-provider">—</strong></div>
+    <div><span>API key</span><strong id="ai-connection-key">—</strong></div>
+  </div>
+  <form id="ai-connection-form">
+    <div class="form-grid">
+      <label>Model<input name="model" type="text" autocomplete="off" spellcheck="false" required disabled></label>
+      <label>New API key<input name="apiKey" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current key" disabled></label>
+    </div>
+    <p id="ai-connection-source" class="section-description"></p>
+    <div class="actions"><button id="save-ai-connection" class="primary" disabled>Save model and key</button><button type="button" id="reset-ai-connection" disabled>Use .env values</button><span id="ai-connection-state" role="status">Loading…</span></div>
+  </form>
+</section>
 <section id="ai-usage-settings" class="panel" aria-labelledby="ai-settings-title">
   <div class="pane-title"><h2 id="ai-settings-title">AI usage</h2><span id="ai-limit-status" class="badge">Loading…</span></div>
   <p class="section-description">The trader, chat and ticker reviews share this daily allowance. One request can make several AI calls. Failed provider attempts also count.</p>

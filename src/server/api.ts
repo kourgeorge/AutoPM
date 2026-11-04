@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudget';
+import { aiConnectionStatus, saveAiConnection } from '../core/aiConnection';
 import { llmUsage, llmUsageForDay } from '../review/llmUsage';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
@@ -217,6 +218,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/agent-commands': 'Every agent request (trader, assistant, researcher) with status and result.',
   '/api/lessons': 'Saved lessons, active and inactive.',
   '/api/settings/ai': 'AI daily call limit and how much of it is used.',
+  '/api/settings/ai-connection': 'The LLM server, provider and model in use, and where the key comes from (never the key itself).',
   '/api/strategy': 'The full saved strategy settings and playbook, with its hash.',
   '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
   '/api/broker-orders': 'Orders resting at the broker from the last tick.',
@@ -564,6 +566,19 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     try { saveAiSettings({ maxRequestsPerDay: input.maxRequestsPerDay as number | null }); }
     catch (err: any) { throw new HttpError(400, err.message); }
     return modelBudgetStatus();
+  });
+  add('GET', '/api/settings/ai-connection', () => aiConnectionStatus());
+  // `null` clears a saved value so `.env` applies again; a missing field is left as it is.
+  add('POST', '/api/settings/ai-connection', async ({ body }) => {
+    const input = await body(), change: { model?: string | null; apiKey?: string | null } = {};
+    for (const field of ['model', 'apiKey'] as const) {
+      if (!Object.hasOwn(input, field)) continue;
+      if (input[field] !== null && typeof input[field] !== 'string') throw new HttpError(400, `${field} must be text or null`);
+      change[field] = input[field] as string | null;
+    }
+    try { saveAiConnection(change); }
+    catch (err: any) { throw new HttpError(400, err.message); }
+    return aiConnectionStatus();
   });
 
   add('GET', '/api/strategy', () => getPolicySnapshot());

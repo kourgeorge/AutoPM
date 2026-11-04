@@ -27,6 +27,7 @@ import { initializeAccount, stopRuntime } from './core/runtime';
 import { closeStorage } from './core/storage';
 import { NotificationDelivery } from './core/notifications';
 import { ExecutionLoop } from './strategy/executionLoop';
+import { activeAiConfig } from './core/aiConnection';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -62,8 +63,8 @@ function pushEnvironment(): void {
   ui.setEnvironment({
     broker: config.broker,
     venue: config.venue,
-    provider: config.ai.provider,
-    model: config.ai.model,
+    provider: activeAiConfig().provider,
+    model: activeAiConfig().model,
     // Empty when disarmed — `joinChunks` drops an empty chunk, so the badge costs no columns
     // until there is something to say.
     gate: armed.length > 0 ? `gate ${armed.join('+')}` : '',

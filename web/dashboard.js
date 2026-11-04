@@ -51,7 +51,7 @@ async function start() {
   configureConversationClear(initialStatus);
   addEntries(tail.entries);
   connectStream();
-  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadCommands(), loadPrompts()]);
+  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadAiConnection(), loadCommands(), loadPrompts()]);
 }
 /**
  * The server pushes every new conversation line and a signal on each account update. The browser
@@ -1513,6 +1513,76 @@ $('ai-settings-form').onsubmit = attempt(async () => {
     $('save-ai-settings').disabled = false;
     syncAiLimitField();
   }
+});
+// Each Settings panel folds away by its title; which ones are folded is remembered per browser.
+(() => {
+  const key = 'autotrade.collapsedSettings';
+  let collapsed = [];
+  try { collapsed = JSON.parse(localStorage.getItem(key) || '[]'); } catch {}
+  for (const section of document.querySelectorAll('#view-strategy > section.panel')) {
+    const heading = section.querySelector(':scope > .pane-title h2');
+    if (!heading || !section.id) continue;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'collapse-toggle';
+    toggle.append(...heading.childNodes);
+    heading.append(toggle);
+    const set = open => {
+      section.classList.toggle('collapsed', !open);
+      toggle.setAttribute('aria-expanded', String(open));
+    };
+    set(!collapsed.includes(section.id));
+    toggle.onclick = () => {
+      set(section.classList.contains('collapsed'));
+      collapsed = [...document.querySelectorAll('#view-strategy > section.panel.collapsed')].map(s => s.id);
+      try { localStorage.setItem(key, JSON.stringify(collapsed)); } catch {}
+    };
+  }
+})();
+let aiConnectionLoaded = false;
+function fillAiConnection(c) {
+  const f = $('ai-connection-form').elements;
+  $('ai-connection-server').textContent = c.server ?? 'Not set';
+  $('ai-connection-provider').textContent = c.provider;
+  $('ai-connection-key').textContent = c.keyHint;
+  $('ai-connection-badge').textContent = c.model;
+  f.model.value = c.model;
+  f.apiKey.value = '';
+  const from = source => source === 'settings' ? 'saved here' : 'from .env';
+  $('ai-connection-source').textContent = `Model ${from(c.modelSource)}${c.modelSource === 'settings' ? ` (.env says ${c.envModel})` : ''}; key ${from(c.keySource)}.`;
+  $('reset-ai-connection').hidden = c.modelSource === 'env' && c.keySource === 'env';
+  aiConnectionLoaded = true;
+  $('ai-connection-state').textContent = 'Saved';
+}
+function setAiConnectionBusy(busy) {
+  const f = $('ai-connection-form').elements;
+  f.model.disabled = f.apiKey.disabled = busy || !aiConnectionLoaded;
+  $('save-ai-connection').disabled = $('reset-ai-connection').disabled = busy || !aiConnectionLoaded;
+}
+async function loadAiConnection() {
+  setAiConnectionBusy(true);
+  try { fillAiConnection(await api('settings/ai-connection')); }
+  finally { setAiConnectionBusy(false); }
+}
+async function saveAiConnection(change, message) {
+  setAiConnectionBusy(true);
+  $('ai-connection-state').textContent = 'Saving…';
+  try {
+    fillAiConnection(await api('settings/ai-connection', change));
+    notice(message, true);
+  } catch (error) { $('ai-connection-state').textContent = 'Could not save'; throw error; }
+  finally { setAiConnectionBusy(false); }
+}
+$('ai-connection-form').oninput = () => { $('ai-connection-state').textContent = 'Unsaved changes'; };
+$('ai-connection-form').onsubmit = attempt(async () => {
+  if (!aiConnectionLoaded) return;
+  const f = $('ai-connection-form').elements, model = f.model.value.trim(), apiKey = f.apiKey.value.trim();
+  if (!model) throw new Error('Enter a model name.');
+  await saveAiConnection({model, ...(apiKey ? {apiKey} : {})}, 'AI model saved. It applies from the next AI call.');
+});
+$('reset-ai-connection').onclick = attempt(async () => {
+  if (!confirm('Forget the model and key saved here and go back to the .env values?')) return;
+  await saveAiConnection({model:null, apiKey:null}, 'Back to the .env model and key.');
 });
 async function loadStrategy() {
   strategy=await api('strategy');const f=$('settings').elements,p=strategy.policy;
