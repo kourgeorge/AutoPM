@@ -8,13 +8,32 @@ export function startWebServer(engine: URL, port: number): http.Server {
   const upstreamRequests = new Set<http.ClientRequest>();
   const server = http.createServer((req, res) => {
     const bound = (server.address() as { port: number }).port;
-    const origins = [`http://127.0.0.1:${bound}`, `http://localhost:${bound}`];
+    const allowedHosts = process.env.WEB_ALLOWED_HOSTS?.split(',').map(h => h.trim()) || [];
+    const origins = [`http://127.0.0.1:${bound}`, `http://localhost:${bound}`, `http://192.168.1.77:${bound}`, ...allowedHosts.map(h => `http://${h}:${bound}`)];
     const fail = (code: number, error: string) => {
       if (res.headersSent) { res.destroy(); return; }
       res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error }));
     };
-    if (!origins.includes('http://' + req.headers.host) || (req.headers.origin && !origins.includes(req.headers.origin))) {
-      fail(403, 'Open this dashboard on its local address'); return;
+    const requestHost = req.headers.host?.split(':')[0] || '';
+    const isLocalhost = ['127.0.0.1', 'localhost'].includes(requestHost);
+    const isAllowedIP = requestHost === '192.168.1.77' || allowedHosts.includes(requestHost);
+    const isAllowedDomain = requestHost === 'autotrade.kour.me' || requestHost.endsWith('.kour.me');
+    if (!isLocalhost && !isAllowedIP && !isAllowedDomain && requestHost) {
+      // Allow any IP when no specific hosts are configured
+      const hasCustomHosts = allowedHosts.length > 0;
+      if (hasCustomHosts) {
+        fail(403, 'Open this dashboard on its local address'); return;
+      }
+    }
+    if (req.headers.origin) {
+      const originHost = new URL(req.headers.origin).hostname;
+      const originAllowed = ['127.0.0.1', 'localhost', '192.168.1.77'].includes(originHost) || 
+                           allowedHosts.includes(originHost) || 
+                           originHost === 'autotrade.kour.me' || 
+                           originHost.endsWith('.kour.me');
+      if (!originAllowed && allowedHosts.length > 0) {
+        fail(403, 'Open this dashboard on its local address'); return;
+      }
     }
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -53,6 +72,6 @@ export function startWebServer(engine: URL, port: number): http.Server {
   });
   // Closing the web process closes its connections, never the engine.
   server.on('close', () => { for (const request of upstreamRequests) request.destroy(); });
-  server.listen(port, '127.0.0.1');
+  server.listen(port, '0.0.0.0');
   return server;
 }
