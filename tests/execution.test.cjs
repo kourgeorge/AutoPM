@@ -191,26 +191,44 @@ test('pending exits keep their baseline across multiple protection sweeps', asyn
   assert.equal(state.getPositionSnapshot('AAPL').stopLevel,95);
 });
 
-test('a sold holding loses its snapshot once, even though its stop was cancelled rather than filled', async () => {
-  const { sweepStops }=require('../src/strategy/stopOrders');
-  const { logger }=require('../src/core/logger');
-  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532,stopOrderId:'old-stop',takeProfitOrderId:'old-target'});
-  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
-  let lookups=0;broker.getOrder=async id=>{lookups++;return {id,symbol:'BRK.B',side:'sell',qty:18,filledQty:0,filledPrice:null,status:'cancelled'};};
-  const lines=[],info=logger.info;logger.info=(m,...a)=>{if(String(m).includes('removing its snapshot'))lines.push(m);return info.call(logger,m,...a);};
-  try { for(let i=0;i<4;i++)await sweepStops(); } finally { logger.info=info; }
-  assert.equal(state.getPositionSnapshot('BRKB'),undefined);
-  assert.equal(lines.length,1);assert.equal(lookups,2);
+test('unheld snapshots wait for consecutive reads and do not depend on protective order lookups', async () => {
+  const { sweepStops } = require('../src/strategy/stopOrders');
+  held = [{symbol:'MSFT',qty:1,avgCost:100,marketValue:100}];
+  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32,stopOrderId:'cancelled-stop',takeProfitOrderId:'expired-target'});
+  let lookups = 0;
+  broker.getOrder = async () => { lookups++; throw new Error('Old order unavailable'); };
+  await sweepStops();
+  assert.ok(state.getPositionSnapshot('BRKB'));
+  await sweepStops();
+  assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+  await sweepStops();
+  assert.equal(lookups, 0);
 });
 
-test('a leftover snapshot whose stop is still open at the venue is kept, and the venue is not asked every tick', async () => {
-  const { sweepStops }=require('../src/strategy/stopOrders');
-  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532,stopOrderId:'live-stop'});
-  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
-  let lookups=0;broker.getOrder=async id=>{lookups++;return {id,symbol:'BRK.B',side:'sell',qty:18,filledQty:0,filledPrice:null,status:'open'};};
-  for(let i=0;i<20;i++)await sweepStops();
-  assert.equal(state.getPositionSnapshot('BRKB').stopLevel,532);
-  assert.equal(lookups,1);
+test('flat book preserves snapshots until five consecutive missing reads', async () => {
+  const { sweepStops } = require('../src/strategy/stopOrders');
+  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32});
+  for (let i = 0; i < 4; i++) {
+    await sweepStops();
+    assert.ok(state.getPositionSnapshot('BRKB'));
+  }
+  await sweepStops();
+  assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+});
+
+test('a returning holding resets the snapshot absence count', async () => {
+  const { sweepStops } = require('../src/strategy/stopOrders');
+  const other = {symbol:'MSFT',qty:1,avgCost:100,marketValue:100};
+  state.openPositionSnapshot({symbol:'BRKB'});
+  held = [other];
+  await sweepStops();
+  held = [other, {symbol:'BRKB',qty:1,avgCost:543.77,marketValue:543.77}];
+  await sweepStops();
+  held = [other];
+  await sweepStops();
+  assert.ok(state.getPositionSnapshot('BRKB'));
+  await sweepStops();
+  assert.equal(state.getPositionSnapshot('BRKB'), undefined);
 });
 
 test('a stop moved during a sweep is re-read, not flagged as vanished', async () => {
