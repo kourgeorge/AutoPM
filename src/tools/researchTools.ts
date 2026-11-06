@@ -29,6 +29,8 @@ export const RESEARCH_TOOL_DEFINITIONS: ToolDefinition[] = [
       properties: {
         query: { type: 'string', description: 'Search query, e.g. "NVDA earnings guidance 2025"' },
         limit: { type: 'integer', description: 'Max results to return (default 5)', minimum: 1, maximum: 10 },
+        news: { type: 'boolean', description: 'Search news articles only (default false). Use for "latest news" questions.' },
+        recency: { type: 'string', enum: ['day', 'week', 'month', 'year'], description: 'Only return results published within this window.' },
       },
       required: ['query'],
     },
@@ -36,7 +38,7 @@ export const RESEARCH_TOOL_DEFINITIONS: ToolDefinition[] = [
 ];
 
 /** Tavily only. Without a key, or when Tavily fails, says so — never an empty result list. Never throws. */
-async function executeWebSearch(query: string, limit: number): Promise<string> {
+async function executeWebSearch(query: string, limit: number, news = false, recency?: string): Promise<string> {
   const tavilyKey = process.env.TAVILY_API_KEY;
   // DuckDuckGo's HTML endpoint used to be the keyless fallback. It now answers bots with a
   // challenge page, which parsed as zero results — "no news" when search was in fact down.
@@ -46,7 +48,8 @@ async function executeWebSearch(query: string, limit: number): Promise<string> {
     const { default: axios } = await import('axios');
     const res = await axios.post(
       'https://api.tavily.com/search',
-      { api_key: tavilyKey, query, max_results: limit, search_depth: 'basic' },
+      { api_key: tavilyKey, query, max_results: limit, search_depth: 'basic',
+        ...(news ? { topic: 'news' } : {}), ...(recency ? { time_range: recency } : {}) },
       { timeout: 10_000 },
     );
     const hits = (res.data.results ?? []).slice(0, limit).map((r: any) => ({
@@ -67,6 +70,7 @@ export async function executeResearchTool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<string | null> {
-  if (name === 'web_search') return executeWebSearch(input.query as string, (input.limit as number | undefined) ?? 5);
+  if (name === 'web_search') return executeWebSearch(input.query as string, (input.limit as number | undefined) ?? 5,
+    input.news === true, typeof input.recency === 'string' ? input.recency : undefined);
   return null;
 }

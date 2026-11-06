@@ -1,6 +1,7 @@
 /** Platform behavior is code-owned and takes precedence over account strategy prose. */
-export function runtimeContract(): string {
+export function runtimeContract(now = new Date()): string {
   return `PLATFORM EXECUTION CONTRACT
+Today is ${now.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} (US Eastern). Use this date, not your training data, for "latest", "today" and search queries; results dated after your training are current, not stale.
 This contract defines tool behavior even when older account strategy text describes it differently.
 execute_entry, execute_exit and annotate_position QUEUE orders. ok:true means the request was accepted; it does not mean an order filled or protection changed.
 get_orders reports the authoritative status, parameters and broker outcome of automatic and manual orders. Only pending orders await human approval. Never approve orders through a model.
