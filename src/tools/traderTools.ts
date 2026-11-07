@@ -8,7 +8,7 @@ export { validateAnnotation, actAnnotation } from '../strategy/annotation';
 export type { AnnotateInput, AnnotationValidation } from '../strategy/annotation';
 import { ToolRegistry } from '../agents/toolRegistry';
 import { agentContext } from '../core/agentContext';
-import { listRequests } from '../core/requests';
+import { listRequests, getRequest, operatorOrigin } from '../core/requests';
 import { broker } from '../broker';
 import { BrokerRejection } from '../broker/errors';
 import {
@@ -1099,6 +1099,13 @@ async function toolExecuteEntry(input: Record<string, unknown>): Promise<string>
   } catch (err) { const refusal = journalRefusal(err, { symbol, rationale: reason, qty, price }); if (refusal) return refusal; throw err; }
 }
 
+/** Whether `text` names `symbol` as a word, ignoring case and the share-class separator. */
+export function mentionsSymbol(text: string, symbol: string): boolean {
+  const key = canonicalSymbol(symbol).replace(/[^A-Z0-9]/g, '');
+  const words = text.toUpperCase().split(/[^A-Z0-9./-]+/).map(w => w.replace(/[^A-Z0-9]/g, ''));
+  return words.includes(key);
+}
+
 async function toolExecuteExit(input: Record<string, unknown>): Promise<string> {
   const { symbol, basis, qty, eventId } = input as { symbol: string; basis?: ExitBasis; qty?: number; eventId?: string };
   const stated = String(input.reason ?? '').trim();
@@ -1106,8 +1113,18 @@ async function toolExecuteExit(input: Record<string, unknown>): Promise<string> 
   if (!basis || !EXIT_BASES.includes(basis)) return refuse(`basis is required: one of ${EXIT_BASES.join(', ')}.`);
   if (stated.length < 20) return refuse('reason must say, in a sentence, what changed since the last hold.');
   if (HOLD_LANGUAGE.test(stated)) return refuse('reason describes keeping the position, but execute_exit sells it. If you mean to hold, do not exit — record the hold with ack_event. If you mean to sell, state why.');
-  if (basis === 'operator_request' && (agentContext.getStore()?.actorId ?? 'system') === 'system') {
-    return refuse('operator_request needs an instruction from the operator. This cycle is a scheduled review; choose the basis that actually applies, or hold.');
+  if (basis === 'operator_request') {
+    const ctx = agentContext.getStore();
+    if ((ctx?.actorId ?? 'system') === 'system') {
+      return refuse('operator_request needs an instruction from the operator. This cycle is a scheduled review; choose the basis that actually applies, or hold.');
+    }
+    // A relayed instruction counts only for a stock the operator named in their own words —
+    // the assistant's summary alone cannot make a sale "operator-directed".
+    const request = ctx?.requestId ? getRequest(ctx.requestId) : undefined;
+    const origin = request && operatorOrigin(request);
+    if (origin != null && !mentionsSymbol(origin, symbol)) {
+      return refuse(`operator_request needs the operator to have asked about ${canonicalSymbol(symbol)}. Their message did not name it; choose the basis that actually applies, or hold.`);
+    }
   }
   const observationIds = input.evidenceIds as string[] | undefined;
   if (['thesis_broken','risk_reduction'].includes(basis) && !observationIds?.length) return refuse('Discretionary exits require the observation IDs showing what changed');

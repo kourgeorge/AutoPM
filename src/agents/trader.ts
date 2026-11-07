@@ -7,7 +7,7 @@ import { describeGap, investmentGap } from '../strategy/investment';
 import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
-import { enqueueRequest, pendingRequests, updateRequest, getRequest, type WakeReason } from '../core/requests';
+import { enqueueRequest, pendingRequests, updateRequest, getRequest, operatorOrigin, type WakeReason, type AgentRequest } from '../core/requests';
 import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
 import { createLiveModelProvider } from '../core/modelProvider';
@@ -137,7 +137,7 @@ export class Trader {
       provider: this.provider, registry: traderTools(), systemPrompt: traderSystemPrompt(), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [command.text]) }] }],
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [relayedText(command)]) }] }],
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
@@ -753,6 +753,15 @@ async function renderCycleContext(
   return lines.join('\n');
 }
 
+
+/**
+ * A relayed instruction is the assistant's summary, not the operator's words. Both are shown, so
+ * the trader can tell what was actually asked from what the assistant added.
+ */
+function relayedText(command: AgentRequest): string {
+  const origin = operatorOrigin(command);
+  return origin ? `${command.text}\n> (relayed by the assistant; the operator wrote: "${origin}")` : command.text;
+}
 
 export function buildCycleContext(state: ReturnType<typeof getState>, pendingMessages: string[]): Promise<string> {
   return withAccountRead(async () => boundedCycleContext(await renderCycleContext(state, pendingMessages)));
