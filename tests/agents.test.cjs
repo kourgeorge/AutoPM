@@ -913,3 +913,18 @@ test('a crypto sell that leaves only fee dust closes the round trip; a stock rem
   assert.equal(isFlat('AAPL', 1, 100), false, 'one share left is a position');
   assert.equal(isFlat('BTC/USD', 0.5, 1), false, 'half a coin left is a position');
 });
+
+test('Anthropic calls mark the system prompt and the conversation tail for caching, and count cached input', async () => {
+  const { AnthropicProvider } = from('core/modelProvider');
+  const provider = new AnthropicProvider({ provider: 'anthropic', model: 'claude-opus-5-5', apiKey: 'test' });
+  let sent;
+  provider.client = { messages: { create: async body => { sent = body; return {
+    stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }],
+    usage: { input_tokens: 100, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 9000 } }; } } };
+  const result = await provider.chat({ systemPrompt: 'rules', tools: [], maxTokens: 100,
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] });
+  assert.deepEqual(sent.system, [{ type: 'text', text: 'rules', cache_control: { type: 'ephemeral' } }]);
+  assert.deepEqual(sent.messages.at(-1).content.at(-1).cache_control, { type: 'ephemeral' });
+  assert.equal(result.usage.inputTokens, 9100, 'the total includes the cached part');
+  assert.equal(result.usage.cachedInputTokens, 9000);
+});

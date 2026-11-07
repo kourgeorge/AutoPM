@@ -106,9 +106,20 @@ export class AnthropicProvider implements ModelProvider {
       }),
     }));
 
+    // Prompt caching. The tools and system prompt are the same on every call of a turn (and
+    // every turn of a day — the date line is the only part that moves), and each round of the
+    // tool loop re-sends the whole conversation so far. Two breakpoints: after the system prompt
+    // (which caches the tools ahead of it), and on the last block of the conversation, so the
+    // next round reads everything before its new tool results from the cache.
+    const lastMessage = anthropicMessages.at(-1);
+    const lastBlock = Array.isArray(lastMessage?.content) ? lastMessage.content.at(-1) : undefined;
+    if (lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
+      (lastBlock as { cache_control?: Anthropic.CacheControlEphemeral }).cache_control = { type: 'ephemeral' };
+    }
+
     const response = await this.client.messages.create({
       model: this.model,
-      system: systemPrompt,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
       messages: anthropicMessages,
       tools: tools as Anthropic.Tool[],
       max_tokens: maxTokens,
@@ -136,8 +147,12 @@ export class AnthropicProvider implements ModelProvider {
       stopReason: response.stop_reason as ModelResponse['stopReason'],
       content,
       usage: {
-        inputTokens: response.usage.input_tokens,
+        // The API reports uncached, cache-written and cache-read input separately; the sum is
+        // what the call sent, which is what `inputTokens` has always meant.
+        inputTokens: response.usage.input_tokens + (response.usage.cache_creation_input_tokens ?? 0)
+          + (response.usage.cache_read_input_tokens ?? 0),
         outputTokens: response.usage.output_tokens,
+        cachedInputTokens: response.usage.cache_read_input_tokens ?? 0,
       },
     };
   }

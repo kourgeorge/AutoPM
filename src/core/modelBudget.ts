@@ -69,7 +69,7 @@ export function withModelBudget(provider: ModelProvider, modelName: string | (()
       recordModelCall({ startedAt, role, model, inputTokens: 0, outputTokens: 0, error: err instanceof Error ? err.message.slice(0, 300) : String(err) });
       throw err;
     }
-    recordModelCall({ startedAt, role, model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens });
+    recordModelCall({ startedAt, role, model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, cachedInputTokens: response.usage.cachedInputTokens });
     params.signal?.throwIfAborted();
     transaction(() => {
       const usage = modelUsage(day);
@@ -94,11 +94,14 @@ export function withModelBudget(provider: ModelProvider, modelName: string | (()
 export interface ModelCall {
   at: string; day: string; role: string; requestId: string | null; model: string;
   inputTokens: number; outputTokens: number; durationMs: number; error?: string;
+  /** Part of `inputTokens` read from the prompt cache. */
+  cachedInputTokens?: number;
 }
-function recordModelCall(c: { startedAt: string; role: string; model: string; inputTokens: number; outputTokens: number; error?: string }): void {
+function recordModelCall(c: { startedAt: string; role: string; model: string; inputTokens: number; outputTokens: number; cachedInputTokens?: number; error?: string }): void {
   const at = new Date().toISOString();
   const row: ModelCall = { at, day: at.slice(0, 10), role: c.role, requestId: agentContext.getStore()?.requestId ?? null,
     model: c.model, inputTokens: c.inputTokens, outputTokens: c.outputTokens,
+    ...(c.cachedInputTokens ? { cachedInputTokens: c.cachedInputTokens } : {}),
     durationMs: Date.parse(at) - Date.parse(c.startedAt), ...(c.error ? { error: c.error } : {}) };
   try { appendRecord('model-calls', crypto.randomUUID(), at, row); } catch { /* usage history must never fail a model call */ }
 }
