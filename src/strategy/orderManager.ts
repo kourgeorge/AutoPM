@@ -758,8 +758,6 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
     // protection on an exit the operator then denies would leave the position worse off than
     // if the tool had never been called.
     const cancelled: string[] = [];
-    let cancelledOurStop = false;
-    let cancelledOurTp = false;
     const sells = restingSells(await broker.getOpenOrders(), symbol);
     if (sells.some(order => order.id !== ourStopId && order.id !== ourTpId)) {
       reject('external_order', 'Another order reserves this position; the bot will not cancel orders it does not own');
@@ -784,16 +782,13 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
           venueMessage,
         );
       }
-      if (order.id === ourStopId) cancelledOurStop = true;
-      if (order.id === ourTpId) cancelledOurTp = true;
+      // Recorded per order, the moment it is true: if a later cancel in this loop throws, an id
+      // already gone from the venue must not stay in state reading as protection.
+      if (order.id === ourStopId) patchPositionSnapshot(symbol, { stopOrderId: undefined });
+      if (order.id === ourTpId) patchPositionSnapshot(symbol, { takeProfitOrderId: undefined });
       cancelled.push(describe(order));
       logger.trade(`Cancelled ${describe(order)} — it reserved the ${symbol} shares`);
     }
-
-    // Recorded the moment it is true. The order is gone from the venue, so an id still sitting in
-    // state would read as protection that is not there.
-    if (cancelledOurStop) patchPositionSnapshot(symbol, { stopOrderId: undefined });
-    if (cancelledOurTp) patchPositionSnapshot(symbol, { takeProfitOrderId: undefined });
 
     let id: string;
     try {

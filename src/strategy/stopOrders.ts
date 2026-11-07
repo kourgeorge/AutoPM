@@ -361,20 +361,23 @@ export function canLowerTakeProfit(current: number | undefined | null, next: num
  * It does not serialize its callers — the tools are already serial within a cycle, and an
  * operation asked for explicitly outranks a repair pass. It only keeps the sweep out.
  */
-const busy = new Set<string>();
+/** Holders per symbol. A count, not a set: an exit and a move can overlap, and the first to
+ * finish must not unlock the symbol while the other is still between two broker calls. */
+const busy = new Map<string, number>();
 
 export async function withStopLock<T>(symbol: string, fn: () => Promise<T>): Promise<T> {
   const key = canonicalSymbol(symbol);
-  busy.add(key);
+  busy.set(key, (busy.get(key) ?? 0) + 1);
   try {
     return await fn();
   } finally {
-    busy.delete(key);
+    const left = (busy.get(key) ?? 1) - 1;
+    if (left > 0) busy.set(key, left); else busy.delete(key);
   }
 }
 
 export function isStopLocked(symbol: string): boolean {
-  return busy.has(canonicalSymbol(symbol));
+  return (busy.get(canonicalSymbol(symbol)) ?? 0) > 0;
 }
 
 // ── Acting ────────────────────────────────────────────────────────────────────

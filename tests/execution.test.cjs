@@ -111,6 +111,38 @@ test('unconfirmed stop cancellation fails the unsent exit without an unknown sel
   } finally { orders.validateExit = validate; }
 });
 
+test('an exit whose stop cancel succeeds and target cancel fails forgets only the cancelled stop', async () => {
+  held = [{ symbol: 'AAPL', qty: 2, marketValue: 200 }];
+  state.openPositionSnapshot({ symbol: 'AAPL', stopLevel: 95, takeProfitLevel: 110, stopOrderId: 'stop-1', takeProfitOrderId: 'tp-1' });
+  broker.getOpenOrders = async () => [
+    { id: 'stop-1', symbol: 'AAPL', side: 'sell', type: 'stop', qty: 2, filled: 0, stopPrice: 95 },
+    { id: 'tp-1', symbol: 'AAPL', side: 'sell', type: 'limit', qty: 2, filled: 0, limitPrice: 110 },
+  ];
+  broker.cancelOrder = async id => { if (id === 'tp-1') throw new Error('Broker has not confirmed cancellation'); };
+  const validate = orders.validateExit;
+  orders.validateExit = async () => ({ pos: held[0], sellQty: 2, price: 100, pnl: 0, session: 'open' });
+  try {
+    const p = actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+    await executor.sweepOrders();
+    assert.equal(actions.getOrder(p.id).status, 'failed');
+    assert.equal(placed, 0);
+    const snap = state.getPositionSnapshot('AAPL');
+    assert.equal(snap.stopOrderId, undefined, 'the cancelled stop is not kept as protection');
+    assert.equal(snap.takeProfitOrderId, 'tp-1', 'the target still rests');
+  } finally { orders.validateExit = validate; }
+});
+
+test('the stop lock stays held until its last holder finishes', async () => {
+  const { withStopLock, isStopLocked } = require('../src/strategy/stopOrders');
+  let releaseFirst, releaseSecond;
+  const first = withStopLock('AAPL', () => new Promise(r => { releaseFirst = r; }));
+  const second = withStopLock('AAPL', () => new Promise(r => { releaseSecond = r; }));
+  releaseFirst(); await first;
+  assert.equal(isStopLocked('AAPL'), true);
+  releaseSecond(); await second;
+  assert.equal(isStopLocked('AAPL'), false);
+});
+
 test('pause blocks execution and survives a fresh process', async () => {
   const p = entry(true);
   state.updateState({ paused: true });
@@ -413,4 +445,17 @@ test('a protection check that finds nothing new writes nothing', async () => {
   store.saveRecord = (kind, ...rest) => { writes.push(kind); return realSave(kind, ...rest); };
   try { await refreshJournalProtection(); await refreshJournalProtection(); } finally { store.saveRecord = realSave; }
   assert.deepEqual(writes, []);
+});
+
+test('startup reports our own stop resting at a different price than recorded', async () => {
+  const { checkRecordedStops } = require('../src/review/reconcile');
+  state.openPositionSnapshot({ symbol: 'AAPL', stopLevel: 116, stopOrderId: 'our-stop' });
+  state.openPositionSnapshot({ symbol: 'MSFT', stopLevel: 300, stopOrderId: 'ms-stop' });
+  broker.getOpenOrders = async () => [
+    { id: 'our-stop', symbol: 'AAPL', side: 'sell', type: 'stop', qty: 2, filled: 0, stopPrice: 100 },
+    { id: 'ms-stop', symbol: 'MSFT', side: 'sell', type: 'stop', qty: 1, filled: 0, stopPrice: 300 },
+  ];
+  const found = await checkRecordedStops();
+  assert.equal(found.length, 1);
+  assert.match(found[0], /AAPL.*\$116.*\$100/);
 });
