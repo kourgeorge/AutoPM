@@ -866,3 +866,33 @@ test('get_journal filters by kind and date and pages backwards through the whole
   assert.match(await raw({ kinds: ['diary'] }), /"ok":false/);
   assert.match(await raw({ before: 'nope' }), /Unknown decision id/);
 });
+
+test('an operator_request exit needs the operator to have named the stock themselves', async () => {
+  const exit = (requestId, actorId) => agentContext.run({ role: 'trader', requestId, actorId, toolCallId: 'exit-' + requestId }, () =>
+    traderTools.executeTraderTool('execute_exit', { symbol: 'AAPL', basis: 'operator_request', reason: 'The operator asked to close this position today.' }));
+  // Relayed from a chat that never mentioned AAPL: the assistant's summary alone is not enough.
+  const chat = commands.enqueueRequest('assistant', 'How is my portfolio doing?', 'alice');
+  const relayed = agentContext.run({ role: 'assistant', requestId: chat.id, actorId: 'alice', toolCallId: 'relay-1' }, () => commands.enqueueRequest('trader', 'Sell AAPL'));
+  assert.match(JSON.parse(await exit(relayed.id, 'alice')).error, /did not name it/);
+  // Relayed from a chat that did name it: passes this check (and fails later for other reasons).
+  const asked = commands.enqueueRequest('assistant', 'please sell my aapl shares', 'alice');
+  const named = agentContext.run({ role: 'assistant', requestId: asked.id, actorId: 'alice', toolCallId: 'relay-2' }, () => commands.enqueueRequest('trader', 'Sell AAPL'));
+  assert.doesNotMatch(String(JSON.parse(await exit(named.id, 'alice')).error), /did not name it|operator_request needs/);
+  // A scheduled cycle can never claim it.
+  assert.match(JSON.parse(await exit('cycle-x', 'system')).error, /scheduled review/);
+});
+
+test('mentionsSymbol matches whole tickers only', () => {
+  assert.equal(traderTools.mentionsSymbol('sell my aapl please', 'AAPL'), true);
+  assert.equal(traderTools.mentionsSymbol('close BRK.B', 'BRK/B'), true);
+  assert.equal(traderTools.mentionsSymbol('the AAPLX fund', 'AAPL'), false);
+  assert.equal(traderTools.mentionsSymbol('cut tech exposure', 'AAPL'), false);
+});
+
+test('an exit whose reason describes holding is refused', async () => {
+  for (const reason of ['Thesis remains intact, keep holding into earnings.', 'Retain the position; no exit warranted today.']) {
+    const result = JSON.parse(await agentContext.run({ role: 'trader', requestId: 'hold-' + reason.length, actorId: 'system', toolCallId: 'h' + reason.length }, () =>
+      traderTools.executeTraderTool('execute_exit', { symbol: 'AAPL', basis: 'risk_reduction', reason })));
+    assert.match(result.error, /describes keeping the position/);
+  }
+});

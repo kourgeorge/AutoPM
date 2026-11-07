@@ -46,6 +46,15 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     return command;
   });
 }
+/**
+ * The operator's own words behind a request: the chat message the assistant was answering when
+ * it relayed this one. Undefined for a scheduler cycle, or for a message typed straight to the
+ * trader (that text IS the operator's).
+ */
+export function operatorOrigin(request: AgentRequest): string | undefined {
+  const parent = request.parentId ? getRequest(request.parentId) : undefined;
+  return parent?.role === 'assistant' ? parent.text : undefined;
+}
 const finishedListeners = new Set<(request: AgentRequest) => void>();
 /** Told once, when a request first reaches completed or failed. */
 export function onRequestFinished(listener: (request: AgentRequest) => void): () => void {
