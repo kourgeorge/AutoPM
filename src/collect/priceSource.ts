@@ -33,14 +33,25 @@ function toMs(ts: string): string {
 }
 
 /**
- * When the market is not in its regular session the last-trade timestamp can be
- * hours old — that is not a stale feed, it is the most recent price available.
- * Use the fetch time as asOf so the 90-second freshness gate does not fire
- * spuriously overnight and after close.
+ * The time a price is judged by.
+ *
+ * Regular session: the real print time. Overnight (closed): the fetch time — the last trade is
+ * hours old because nothing trades, not because the feed died, and the freshness gate would
+ * otherwise fire for every symbol every night.
+ *
+ * Extended hours (04:00–09:30, 16:00–20:00) keep the real print time too, aged as if it were
+ * EXTENDED_GRACE_MS younger. The app trades then, and the stop and drawdown detectors read these
+ * prices; restamping them with the fetch time made a 16:00 close read as fresh at 19:00. IEX
+ * after-hours prints are sparse, so the grace allows minutes between trades — but not hours.
  */
-function effectiveAsOf(dataAsOf: string): string {
+export const EXTENDED_GRACE_MS = 12 * 60_000;
+export function effectiveAsOf(dataAsOf: string, now = new Date()): string {
   const normalized = toMs(dataAsOf);
-  return marketSession() === 'open' ? normalized : new Date().toISOString();
+  const session = marketSession(now);
+  if (session === 'open') return normalized;
+  if (session === 'closed') return now.toISOString();
+  const at = Date.parse(normalized);
+  return Number.isFinite(at) ? new Date(Math.min(at + EXTENDED_GRACE_MS, now.getTime())).toISOString() : normalized;
 }
 
 const ALPACA_SOURCE = 'alpaca' as const;
@@ -302,7 +313,10 @@ async function collectPriceYahoo(
 ): Promise<Maybe<number>> {
   try {
     const { price, asOf } = await getQuoteRaw(symbol);
-    return observe(price, YAHOO_SOURCE, effectiveAsOf(asOf ?? new Date().toISOString()), maxAgeMs);
+    // No timestamp while anything trades is an unknown age, which `observe` treats as stale —
+    // never as fresh. Overnight every price is restamped anyway.
+    const stamped = asOf ? effectiveAsOf(asOf) : marketSession() === 'closed' ? new Date().toISOString() : 'unknown';
+    return observe(price, YAHOO_SOURCE, stamped, maxAgeMs);
   } catch (err) {
     return missingFrom(YAHOO_SOURCE, err);
   }

@@ -186,3 +186,20 @@ test('the heartbeat paces the trader through extended hours and goes quiet overn
   assert.equal(beat('premarket').severity, 'urgent');
   assert.equal(beat('closed').severity, 'info');
 });
+
+test('extended-hours prices keep their real trade time; overnight prices are restamped', () => {
+  const { effectiveAsOf, EXTENDED_GRACE_MS } = prices;
+  // 2026-11-04 is a Wednesday. 18:00 ET = 23:00Z (EST).
+  const afterHours = new Date('2026-11-04T23:00:00Z');
+  const close = '2026-11-04T21:00:00Z'; // 16:00 ET, two hours earlier
+  assert.equal(effectiveAsOf(close, afterHours), new Date(Date.parse(close) + EXTENDED_GRACE_MS).toISOString());
+  // A print from a minute ago is never pushed into the future.
+  const recent = '2026-11-04T22:59:00Z';
+  assert.equal(effectiveAsOf(recent, afterHours), afterHours.toISOString());
+  // Overnight (22:00 ET = 03:00Z next day): nothing trades, so the fetch time stands in.
+  const overnight = new Date('2026-11-05T03:00:00Z');
+  assert.equal(effectiveAsOf(close, overnight), overnight.toISOString());
+  // Regular session: the real print time.
+  const regular = new Date('2026-11-04T16:00:00Z');
+  assert.equal(effectiveAsOf('2026-11-04T15:58:00Z', regular), '2026-11-04T15:58:00.000Z');
+});
