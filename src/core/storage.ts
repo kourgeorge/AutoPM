@@ -16,7 +16,7 @@ import path from 'path';
 import { DATA_DIR, ensureDataDir } from './paths';
 import { writeFileAtomic } from './fsAtomic';
 
-interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number }
+interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number; name?: string }
 
 const DB_DIR = path.join(DATA_DIR, 'db');
 const SETTINGS_FILE = path.join(DB_DIR, 'settings.json');
@@ -97,7 +97,7 @@ function open(): void {
         try { e = JSON.parse(line); }
         catch { throw new Error(`${recordFile(kind)} line ${i + 1} is not valid JSON; repair or remove it before starting.`); }
         if (e.deleted) rows.delete(e.id);
-        else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, offset, length });
+        else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, offset, length, name: typeof e.value?.name === 'string' ? e.value.name : undefined });
         if (e.seq >= nextSeq) nextSeq = e.seq + 1;
       });
       const sorted = new Map([...rows.values()].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]));
@@ -116,6 +116,8 @@ function rowsOf(kind: string): Map<string, Row> {
 function put(kind: string, row: Row): void {
   const rows = rowsOf(kind);
   const old = rows.get(row.id);
+  const value = JSON.parse(row.json!);
+  row.name = typeof value?.name === 'string' ? value.name : undefined;
   rows.set(row.id, row);   // replacing a key keeps its position, so seq order holds
   lines.push({ kind, line: lineFor(row), row });
   undo.push(() => { if (old) rows.set(old.id, old); else rows.delete(row.id); });
@@ -223,19 +225,31 @@ export function readRecords<T>(kind: string, limit?: number, after = 0): T[] {
   return (limit === undefined ? rows : rows.slice(-limit)).map(r => payload(kind, r));
 }
 
-/** Query one kind: `where` filters parsed values, `desc` reads newest first, `limit` caps matches. */
-export function listRecords<T>(kind: string, opts: { where?: (value: T) => boolean; desc?: boolean; limit?: number } = {}):
-  Array<{ seq: number; id: string; at: string; value: T }> {
+/** Query one kind without retaining payloads that the caller has already consumed.
+ * `name` uses indexed value.name metadata to skip unrelated payloads before disk reads.
+ */
+export interface RecordQuery<T> { name?: string; where?: (value: T) => boolean; desc?: boolean; limit?: number }
+export function* iterateRecords<T>(kind: string, opts: RecordQuery<T> = {}):
+  Generator<{ seq: number; id: string; at: string; value: T }> {
   open();
   const rows = [...(kinds.get(kind)?.values() ?? [])];
   if (opts.desc) rows.reverse();
-  const out: Array<{ seq: number; id: string; at: string; value: T }> = [];
+  let count = 0;
   for (const r of rows) {
-    if (opts.limit !== undefined && out.length >= opts.limit) break;
+    if (opts.limit !== undefined && count >= opts.limit) break;
+    if (opts.name !== undefined && r.name !== opts.name) continue;
     const value = payload(kind, r) as T;
-    if (!opts.where || opts.where(value)) out.push({ seq: r.seq, id: r.id, at: r.at, value });
+    if (!opts.where || opts.where(value)) {
+      count++;
+      yield { seq: r.seq, id: r.id, at: r.at, value };
+    }
   }
-  return out;
+}
+
+/** Matching records, collected for callers that need an array. */
+export function listRecords<T>(kind: string, opts: RecordQuery<T> = {}):
+  Array<{ seq: number; id: string; at: string; value: T }> {
+  return [...iterateRecords<T>(kind, opts)];
 }
 
 export function readRecordPage<T>(kind: string, after: number, limit: number): T[] {

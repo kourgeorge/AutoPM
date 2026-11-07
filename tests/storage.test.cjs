@@ -73,3 +73,38 @@ test('history larger than the heap can be indexed and queried', () => {
   `], { cwd: path.join(__dirname, '..'), env: { ...process.env, DATA_DIR: directory }, encoding: 'utf8', timeout: 60000 });
   assert.equal(child.status, 0, child.stderr || child.stdout);
 });
+
+test('named queries skip unrelated disk payloads and stop when the consumer has a match', () => {
+  store.resetStorage();
+  store.appendRecord('calls', 'unrelated', 'first', { name: 'large_read', result: 'x'.repeat(1024 * 1024) });
+  store.appendRecord('calls', 'older', 'second', { name: 'review', symbol: 'IBM' });
+  store.appendRecord('calls', 'newer', 'third', { name: 'review', symbol: 'IBM' });
+  for (const reload of [false, true]) {
+    if (reload) store.closeStorage();
+    store.readValue('account'); // Finish indexing before counting payload reads.
+    const original = fs.openSync;
+    let reads = 0;
+    fs.openSync = function(file, ...args) {
+      if (file === path.join(directory, 'db/calls.jsonl')) reads++;
+      return original.call(this, file, ...args);
+    };
+    try {
+      for (const row of store.iterateRecords('calls', { name: 'review', desc: true })) {
+        assert.equal(row.id, 'newer');
+        break;
+      }
+      assert.equal(reads, 1);
+      assert.deepEqual(store.listRecords('calls', { name: 'missing' }), []);
+      assert.equal(reads, 1);
+    } finally { fs.openSync = original; }
+  }
+  store.saveRecord('calls', 'newer', { name: 'changed' });
+  assert.deepEqual(store.listRecords('calls', { name: 'review' }).map(r => r.id), ['older']);
+  assert.throws(() => store.transaction(() => {
+    store.saveRecord('calls', 'older', { name: 'changed' });
+    throw new Error('rollback');
+  }), /rollback/);
+  assert.equal(store.listRecords('calls', { name: 'review' })[0].id, 'older');
+  store.closeStorage();
+  assert.equal(store.listRecords('calls', { name: 'changed' })[0].id, 'newer');
+});

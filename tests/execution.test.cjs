@@ -83,6 +83,25 @@ test('unknown broker outcomes block another account action', async () => {
   assert.equal(placed, 0);
 });
 
+test('unconfirmed stop cancellation fails the unsent exit without an unknown sell', async () => {
+  held = [{ symbol: 'AAPL', qty: 2, marketValue: 200 }];
+  state.openPositionSnapshot({ symbol: 'AAPL', stopLevel: 95, stopOrderId: 'stop-1' });
+  broker.getOpenOrders = async () => [{ id: 'stop-1', symbol: 'AAPL', side: 'sell', type: 'stop', qty: 2, filled: 0, stopPrice: 95 }];
+  broker.cancelOrder = async () => { throw new Error('Broker has not confirmed cancellation'); };
+  const validate = orders.validateExit;
+  orders.validateExit = async () => ({ pos: held[0], sellQty: 2, price: 100, pnl: 0, session: 'open' });
+  try {
+    const p = actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+    await executor.sweepOrders();
+    assert.equal(actions.getOrder(p.id).status, 'failed');
+    assert.match(actions.getOrder(p.id).result.error, /not confirmed cancellation/);
+    assert.equal(placed, 0);
+    assert.equal(actions.pendingOrders().length, 0);
+    await executor.sweepOrders();
+    assert.equal(placed, 0, 'failed exit is not automatically retried');
+  } finally { orders.validateExit = validate; }
+});
+
 test('pause blocks execution and survives a fresh process', async () => {
   const p = entry(true);
   state.updateState({ paused: true });

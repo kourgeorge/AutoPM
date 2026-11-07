@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { readRecord, saveRecord, listRecords } from '../core/storage';
+import { readRecord, saveRecord, iterateRecords } from '../core/storage';
 import { agentContext, assertAgentActive } from '../core/agentContext';
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
 
@@ -41,7 +41,7 @@ export const readEvidence = (id: string) => fromReceipt(id, readRecord<Receipt>(
 
 /** Newest observation from `tool` that matches. */
 export function latestEvidence(tool: string, where: (e: Evidence) => boolean = () => true): Evidence | null {
-  for (const { id, value } of listRecords<Receipt>('tool-calls', { where: r => r.name === tool, desc: true })) {
+  for (const { id, value } of iterateRecords<Receipt>('tool-calls', { name: tool, desc: true })) {
     const e = fromReceipt(id, value);
     if (e && where(e)) return e;
   }
