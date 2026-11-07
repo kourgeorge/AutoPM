@@ -233,6 +233,11 @@ test('historical simulation shares risk sizing and discloses unsupported targetl
     const targetResult = await runBacktest({ ...config, exitMode: 'stop_takeprofit' });
     assert.ok(targetResult.trades.length > 0);
     assert.ok(!targetResult.caveats.some(c => /do not validate that threshold/.test(c)));
+    // The trailing mode runs the live trail rule: with a tight trail it stops out sooner.
+    const loose = await runBacktest({ ...config, exitMode: 'stop_trailing' });
+    const tight = await runBacktest({ ...config, exitMode: 'stop_trailing', policy: { ...p, risk: { ...p.risk, trailingStopAtrMult: 0.5 } } });
+    assert.ok(loose.trades.length > 0 && tight.trades.length > 0);
+    assert.ok(tight.trades.length >= loose.trades.length, 'a tighter trail never holds longer');
   } finally { source.getHistoricalBars = original; }
 });
 

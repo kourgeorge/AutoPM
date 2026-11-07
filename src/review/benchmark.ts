@@ -36,7 +36,7 @@ const TRADING_DAYS_PER_YEAR = 252;
 const THIN_SESSIONS = 30;
 
 /** Fewer daily returns than this and a standard deviation is not worth printing at all. */
-const MIN_RETURNS_FOR_SHARPE = 5;
+export const MIN_RETURNS_FOR_SHARPE = 5;
 
 /** Total return over a level series, percentage points. Null below two points. */
 function totalReturnPct(levels: number[]): number | null {
@@ -114,7 +114,7 @@ export interface Benchmark {
  * additive over time), simple returns are the right input to a total return and to a Sharpe
  * (they are what the account actually earned). Same name, different quantity, on purpose.
  */
-function dailyReturns(levels: number[]): number[] {
+export function dailyReturns(levels: number[]): number[] {
   const out: number[] = [];
   for (let i = 1; i < levels.length; i++) {
     if (levels[i - 1] > 0) out.push(levels[i] / levels[i - 1] - 1);
@@ -131,7 +131,7 @@ function stdev(xs: number[]): number | null {
 }
 
 /** Annualised mean-over-sigma. Null when sigma is zero — a flat line has no ratio. */
-function annualisedSharpe(returns: number[]): number | null {
+export function annualisedSharpe(returns: number[]): number | null {
   if (returns.length < MIN_RETURNS_FOR_SHARPE) return null;
   const sd = stdev(returns);
   if (sd == null || sd === 0) return null;
@@ -139,13 +139,13 @@ function annualisedSharpe(returns: number[]): number | null {
   return (mean / sd) * Math.sqrt(TRADING_DAYS_PER_YEAR);
 }
 
-function annualisedVolPct(returns: number[]): number | null {
+export function annualisedVolPct(returns: number[]): number | null {
   const sd = stdev(returns);
   return sd == null ? null : sd * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100;
 }
 
 /** Peak-to-trough of a level series, percentage points, ≥ 0. */
-function maxDrawdownPct(levels: number[]): number | null {
+export function maxDrawdownPct(levels: number[]): number | null {
   if (levels.length < 2) return null;
   let peak = levels[0];
   let worst = 0;

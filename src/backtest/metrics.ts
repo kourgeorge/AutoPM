@@ -9,36 +9,8 @@
 
 import type { SimulatedTrade } from './engine';
 
-const perTradeSharpeIsThin = (trades: number) => trades < 20;
-
-function r(n: number | null, dp = 2): number | null {
-  if (n == null || !Number.isFinite(n)) return null;
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
-}
-
-function mean(xs: number[]): number | null {
-  return xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
-}
-
-function median(xs: number[]): number | null {
-  if (xs.length === 0) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = s.length >> 1;
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-
-function stdev(xs: number[]): number | null {
-  if (xs.length < 2) return null;
-  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
-}
-
-function meanOverSigma(xs: number[]): number | null {
-  const sd = stdev(xs);
-  if (sd == null || sd === 0) return null;
-  return (xs.reduce((a, b) => a + b, 0) / xs.length) / sd;
-}
+// One copy of the statistics, shared with the live scorecard so the two cannot drift.
+import { perTradeSharpeIsThin, r, mean, median, stdev, meanOverSigma } from '../review/metrics';
 
 export interface GroupStats {
   trades: number;

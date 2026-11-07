@@ -12,10 +12,9 @@
 
 import type { EquityPoint } from './engine';
 import { getHistoricalBars } from './barCache';
+import { dailyReturns, annualisedSharpe, annualisedVolPct, maxDrawdownPct, MIN_RETURNS_FOR_SHARPE } from '../review/benchmark';
 
-const TRADING_DAYS_PER_YEAR = 252;
 const THIN_SESSIONS = 30;
-const MIN_RETURNS_FOR_SHARPE = 5;
 
 export interface BenchmarkStats {
   window: { from: string | null; to: string | null; sessions: number };
@@ -35,44 +34,7 @@ export interface BenchmarkStats {
   caveats: string[];
 }
 
-function dailyReturns(levels: number[]): number[] {
-  const out: number[] = [];
-  for (let i = 1; i < levels.length; i++) {
-    if (levels[i - 1] > 0) out.push(levels[i] / levels[i - 1] - 1);
-  }
-  return out;
-}
-
-function stdev(xs: number[]): number | null {
-  if (xs.length < 2) return null;
-  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
-}
-
-function annualisedSharpe(returns: number[]): number | null {
-  if (returns.length < MIN_RETURNS_FOR_SHARPE) return null;
-  const sd = stdev(returns);
-  if (sd == null || sd === 0) return null;
-  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-  return (mean / sd) * Math.sqrt(TRADING_DAYS_PER_YEAR);
-}
-
-function annualisedVolPct(returns: number[]): number | null {
-  const sd = stdev(returns);
-  return sd == null ? null : sd * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100;
-}
-
-function maxDrawdownPct(levels: number[]): number | null {
-  if (levels.length < 2) return null;
-  let peak = levels[0];
-  let worst = 0;
-  for (const v of levels) {
-    if (v > peak) peak = v;
-    if (peak > 0) worst = Math.max(worst, ((peak - v) / peak) * 100);
-  }
-  return worst;
-}
-
+// One copy of the return statistics, shared with the live benchmark so the two cannot drift.
 function r(n: number | null, dp = 2): number | null {
   if (n == null || !Number.isFinite(n)) return null;
   const f = 10 ** dp;

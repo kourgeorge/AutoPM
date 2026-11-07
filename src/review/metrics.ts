@@ -26,20 +26,20 @@ import { computeOutcomes, type TradeOutcome } from './ledger';
  * separately because a ratio degrades faster than a mean does: the sample estimates both the
  * numerator and the denominator, so its error compounds.
  */
-const perTradeSharpeIsThin = (trades: number) => trades < 20;
+export const perTradeSharpeIsThin = (trades: number) => trades < 20;
 
 /** Round for transport. A win rate is not more true at fifteen decimal places. */
-function r(n: number | null, dp = 2): number | null {
+export function r(n: number | null, dp = 2): number | null {
   if (n == null || !Number.isFinite(n)) return null;
   const f = 10 ** dp;
   return Math.round(n * f) / f;
 }
 
-function mean(xs: number[]): number | null {
+export function mean(xs: number[]): number | null {
   return xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 }
 
-function median(xs: number[]): number | null {
+export function median(xs: number[]): number | null {
   if (xs.length === 0) return null;
   const s = [...xs].sort((a, b) => a - b);
   const mid = s.length >> 1;
@@ -53,14 +53,14 @@ function median(xs: number[]): number | null {
  * the population of every trade it will ever take. The difference is invisible at a hundred
  * trades and is a tenth of the answer at ten, which is the range this file actually runs in.
  */
-function stdev(xs: number[]): number | null {
+export function stdev(xs: number[]): number | null {
   if (xs.length < 2) return null;
   const m = xs.reduce((a, b) => a + b, 0) / xs.length;
   return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
 }
 
 /** Mean over sigma, guarding the flat-line case where sigma is zero and the ratio is not. */
-function meanOverSigma(xs: number[]): number | null {
+export function meanOverSigma(xs: number[]): number | null {
   const sd = stdev(xs);
   if (sd == null || sd === 0) return null;
   return (xs.reduce((a, b) => a + b, 0) / xs.length) / sd;
