@@ -19,7 +19,7 @@ import { logger } from '../core/logger';
 import { readDecisions } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 import type { Fill } from '../broker/IBroker';
-import { readFills } from './fills';
+import { readFills, isFlat } from './fills';
 
 export interface TradeOutcome {
   symbol: string;
@@ -139,6 +139,7 @@ export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): T
 
   for (const [, { display: symbol, fills: symbolFills }] of bySymbol) {
     let position = 0;
+    let peak = 0;
     let entry = emptyLeg();
     let exit = emptyLeg();
     let unexplained = false;
@@ -148,6 +149,7 @@ export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): T
       if (fill.side === 'buy') {
         absorb(entry, fill, fill.qty);
         position += fill.qty;
+        peak = Math.max(peak, position);
         continue;
       }
 
@@ -171,7 +173,8 @@ export function computeOutcomes(opts: { symbol?: string; since?: Date } = {}): T
       absorb(exit, fill, matched);
       position -= matched;
 
-      if (position > 0) continue; // scale-out: the round trip is not over
+      if (!isFlat(symbol, position, peak)) continue; // scale-out: the round trip is not over
+      position = 0; peak = 0; // crypto fee dust belongs to the trip it came from
 
       outcomes.push(assemble(symbol, entry, exit, unexplained, journal));
       entry = emptyLeg();

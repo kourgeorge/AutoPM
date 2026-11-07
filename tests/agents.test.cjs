@@ -896,3 +896,20 @@ test('an exit whose reason describes holding is refused', async () => {
     assert.match(result.error, /describes keeping the position/);
   }
 });
+
+test('a crypto sell that leaves only fee dust closes the round trip; a stock remainder does not', () => {
+  const { recordFills, isFlat } = from('review/fills');
+  const { computeOutcomes } = from('review/ledger');
+  const { pnlReport } = from('review/pnl');
+  const { readFills } = from('review/fills');
+  recordFills([
+    { execId: 'btc-b1', brokerOrderId: 'bb1', permId: null, symbol: 'BTC/USD', side: 'buy', qty: 0.04304851, price: 63584.55, fee: null, at: '2026-08-11T22:45:24.335Z' },
+    { execId: 'btc-b2', brokerOrderId: 'bb1', permId: null, symbol: 'BTC/USD', side: 'buy', qty: 0.03585149, price: 63625.856, fee: null, at: '2026-08-11T22:45:24.336Z' },
+    { execId: 'btc-s1', brokerOrderId: 'bs1', permId: null, symbol: 'BTC/USD', side: 'sell', qty: 0.078702749, price: 63028.78, fee: null, at: '2026-08-16T15:49:25.992Z' },
+  ]);
+  const trips = computeOutcomes({ symbol: 'BTC/USD' });
+  assert.equal(trips.length, 1);
+  assert.equal(pnlReport(readFills(), []).bySymbol.find(r => r.symbol === 'BTC/USD').ledgerQty, 0);
+  assert.equal(isFlat('AAPL', 1, 100), false, 'one share left is a position');
+  assert.equal(isFlat('BTC/USD', 0.5, 1), false, 'half a coin left is a position');
+});

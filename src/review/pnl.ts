@@ -12,6 +12,7 @@
  */
 import type { Fill, Position } from '../broker/IBroker';
 import { canonicalSymbol } from '../core/symbols';
+import { isFlat } from './fills';
 
 export interface SymbolPnL {
   symbol: string;
@@ -54,12 +55,12 @@ const cents = (n: number) => Math.round(n * 100) / 100;
 export function pnlReport(fills: Fill[], positions: Position[], opts: { symbol?: string; since?: Date } = {}): PnLReport {
   const want = opts.symbol ? canonicalSymbol(opts.symbol) : null;
   const sinceMs = opts.since?.getTime() ?? null;
-  const rows = new Map<string, SymbolPnL & { costQty: number; cost: number; feeSeen: boolean }>();
+  const rows = new Map<string, SymbolPnL & { costQty: number; cost: number; feeSeen: boolean; peakQty: number }>();
   const row = (symbol: string) => {
     const key = canonicalSymbol(symbol);
     let r = rows.get(key);
     if (!r) rows.set(key, r = { symbol, realizedPnL: 0, unrealizedPnL: null, totalPnL: 0, sharesBought: 0, sharesSold: 0, ledgerQty: 0,
-      heldQty: null, realizedThisPosition: 0, unmatchedQty: 0, fees: null, firstFillAt: null, lastFillAt: null, costQty: 0, cost: 0, feeSeen: false });
+      heldQty: null, realizedThisPosition: 0, unmatchedQty: 0, fees: null, firstFillAt: null, lastFillAt: null, costQty: 0, cost: 0, feeSeen: false, peakQty: 0 });
     return r;
   };
 
@@ -73,7 +74,7 @@ export function pnlReport(fills: Fill[], positions: Position[], opts: { symbol?:
     const inWindow = sinceMs == null || Date.parse(f.at) >= sinceMs;
     if (f.fee != null) { r.feeSeen = true; if (inWindow) r.fees = (r.fees ?? 0) + f.fee; }
     if (f.side === 'buy') {
-      r.cost += f.qty * f.price; r.costQty += f.qty;
+      r.cost += f.qty * f.price; r.costQty += f.qty; r.peakQty = Math.max(r.peakQty, r.costQty);
       if (inWindow) r.sharesBought += f.qty;
     } else {
       const matched = Math.min(f.qty, r.costQty);
@@ -82,7 +83,7 @@ export function pnlReport(fills: Fill[], positions: Position[], opts: { symbol?:
       if (inWindow) { r.realizedPnL += gain; r.sharesSold += f.qty; r.unmatchedQty += f.qty - matched; }
       r.cost -= matched * avg; r.costQty -= matched;
       // Back to flat closes this position; whatever comes next is a new one.
-      if (r.costQty <= 1e-9) { r.cost = 0; r.costQty = 0; r.realizedThisPosition = 0; } else if (inWindow) r.realizedThisPosition += gain;
+      if (isFlat(f.symbol, r.costQty, r.peakQty)) { r.cost = 0; r.costQty = 0; r.peakQty = 0; r.realizedThisPosition = 0; } else if (inWindow) r.realizedThisPosition += gain;
     }
     if (inWindow) {
       counted++;
