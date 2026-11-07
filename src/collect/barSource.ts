@@ -65,7 +65,7 @@ const BARS_PER_TRADING_DAY: Record<Timeframe, number> = {
  * yesterday's bar by now, and anchoring on TODAY would flag a thin pair stale for the first
  * minutes after 00:00Z before its first trade of the day prints.
  */
-async function dailyAnchorDate(symbol: string, now: Date): Promise<string> {
+export async function dailyAnchorDate(symbol: string, now: Date): Promise<string> {
   if (isCryptoSymbol(symbol)) {
     return new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
   }

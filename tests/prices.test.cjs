@@ -89,3 +89,24 @@ test('a Yahoo price with no timestamp is stale while anything trades', async () 
   assert.equal(p.value, 100);
   assert.equal(p.stale, true);
 });
+
+test('tick daily bars are fetched once per completed session, and failures are retried', async () => {
+  const collect = require('../src/collect');
+  const barSource = require('../src/collect/barSource');
+  const original = { bars: barSource.collectBars, anchor: barSource.dailyAnchorDate };
+  let fetches = 0, anchor = '2026-11-05', fail = false;
+  barSource.dailyAnchorDate = async () => anchor;
+  barSource.collectBars = async () => { fetches++; return fail ? { value: null, source: 'alpaca', fetchedAt: '', error: 'down', stale: true } : { value: [{ t: anchor }], source: 'alpaca', asOf: anchor, fetchedAt: '', stale: false }; };
+  const req = { ...collect.DEFAULT_COLLECT_REQUEST, watchlist: [] };
+  try {
+    collect.resetTickBarCache();
+    await collect.tickBars('AAPL', req); await collect.tickBars('AAPL', req); await collect.tickBars('AAPL', req);
+    assert.equal(fetches, 1, 'one fetch for three ticks in the same session');
+    anchor = '2026-11-06';
+    await collect.tickBars('AAPL', req);
+    assert.equal(fetches, 2, 'a new completed session fetches again');
+    anchor = '2026-11-07'; fail = true;
+    await collect.tickBars('AAPL', req); await collect.tickBars('AAPL', req);
+    assert.equal(fetches, 4, 'a failed fetch is not cached');
+  } finally { barSource.collectBars = original.bars; barSource.dailyAnchorDate = original.anchor; collect.resetTickBarCache(); }
+});
