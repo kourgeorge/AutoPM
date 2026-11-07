@@ -166,3 +166,28 @@ test('a failed disk write rolls memory back and is not written again by the next
   store.closeStorage();
   assert.deepEqual(store.listRecords('fail').map(r => r.id), ['kept', 'next']);
 });
+
+test('a hand edit to the settings file is picked up, settings and playbook together', () => {
+  const policy = require('../src/policy/load');
+  store.resetStorage();
+  policy.loadPolicy();
+  const file = path.join(directory, 'db/trade-settings.json');
+  const before = policy.getPolicyHash();
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  doc.playbook = 'Prefer quality names.';
+  doc.settings.risk.maxPositions = Math.max(1, doc.settings.risk.maxPositions - 1);
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const future = new Date(Date.now() + 5000);
+  fs.utimesSync(file, future, future);
+  assert.equal(policy.getPolicy().risk.maxPositions, doc.settings.risk.maxPositions);
+  const after = policy.getPolicyHash();
+  assert.notEqual(after, before);
+  assert.equal(policy.getPolicyHash(), after, 'the hash is stable once both are reloaded');
+  // An invalid edit keeps the active settings.
+  const kept = policy.getPolicy().risk.maxPositions;
+  doc.settings.risk.maxPositions = -5;
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const later = new Date(Date.now() + 10000);
+  fs.utimesSync(file, later, later);
+  assert.equal(policy.getPolicy().risk.maxPositions, kept);
+});
