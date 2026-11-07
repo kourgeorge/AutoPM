@@ -7,7 +7,7 @@ import type { IBroker, ExecutionOrder, Position, AccountInfo, OrderRequest, Open
 import { BrokerRejection, type BrokerAttempt } from './errors';
 import { logger } from '../core/logger';
 import { isCryptoSymbol } from '../core/symbols';
-import type { VenueSession } from '../collect/marketCalendar';
+import { venueSession, type VenueSession } from '../collect/marketCalendar';
 
 const API_TIMEOUT_MS = parseInt(process.env.IBKR_API_TIMEOUT_MS ?? '10000');
 
@@ -600,24 +600,33 @@ export class IBKRBroker implements IBroker {
       });
   }
 
-  /** US market hours only; does not account for early closes. */
+  /**
+   * Today's session from the exchange calendar (shared with the Alpaca path — market data comes
+   * from there for IBKR accounts too), so a holiday reads closed and a half day ends early.
+   * Falls back to clock hours if the calendar cannot be read, which is what this always was.
+   */
   async isMarketOpen(): Promise<boolean> {
-    const { day, hours, minutes } = etNow();
-    if (day === 0 || day === 6) return false;
-    const etMin = hours * 60 + minutes;
-    return etMin >= 9 * 60 + 30 && etMin < 16 * 60;
+    return (await this.marketSession()) === 'regular';
   }
 
-  /** Same clock-only hours as `isMarketOpen`: no holidays, no early closes. */
   async marketSession(): Promise<VenueSession> {
-    const { day, hours, minutes } = etNow();
-    if (day === 0 || day === 6) return 'closed';
-    const etMin = hours * 60 + minutes;
-    if (etMin >= 9 * 60 + 30 && etMin < 16 * 60) return 'regular';
-    return etMin >= 4 * 60 && etMin < 20 * 60 ? 'extended' : 'closed';
+    try { return await venueSession(); }
+    catch (err: any) {
+      logger.warn(`[IBKR] market calendar unavailable, using clock hours: ${err?.message ?? err}`);
+      return clockSession();
+    }
   }
 
   disconnect(): void {
     this.api.disconnect();
   }
+}
+
+/** Clock-only hours: no holidays, no early closes. The fallback when the calendar is unreachable. */
+function clockSession(): VenueSession {
+  const { day, hours, minutes } = etNow();
+  if (day === 0 || day === 6) return 'closed';
+  const etMin = hours * 60 + minutes;
+  if (etMin >= 9 * 60 + 30 && etMin < 16 * 60) return 'regular';
+  return etMin >= 4 * 60 && etMin < 20 * 60 ? 'extended' : 'closed';
 }
