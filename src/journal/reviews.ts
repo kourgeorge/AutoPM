@@ -1,5 +1,5 @@
 import { agentContext } from '../core/agentContext';
-import { listRecords, readRecord, saveRecord } from '../core/storage';
+import { iterateRecords, readRecord, saveRecord } from '../core/storage';
 
 /**
  * A review is the result of the tool call that recorded it: one copy, kept with the request,
@@ -18,11 +18,14 @@ export function saveReview<T extends { id: string; at: string }>(tool: ReviewToo
 /** Saved reviews from one tool, newest first. */
 export function listReviews<T>(tool: ReviewTool, where: (review: T) => boolean = () => true, limit = Infinity): T[] {
   const out: T[] = [];
-  for (const { value } of listRecords<{ name: string; result?: string }>('tool-calls', { where: r => r.name === tool, desc: true })) {
-    if (out.length >= limit) break;
+  if (limit <= 0) return out;
+  for (const { value } of iterateRecords<{ name: string; result?: string }>('tool-calls', { name: tool, desc: true })) {
     let parsed: any;
     try { parsed = JSON.parse(value.result ?? ''); } catch { continue; }
-    if (parsed?.ok && parsed.review && where(parsed.review)) out.push(parsed.review);
+    if (parsed?.ok && parsed.review && where(parsed.review)) {
+      out.push(parsed.review);
+      if (out.length >= limit) break;
+    }
   }
   return out;
 }

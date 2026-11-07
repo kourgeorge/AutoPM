@@ -133,7 +133,9 @@ async function execute(p: Order): Promise<void> {
     const current = getOrder(p.id)!;
     const message = err?.message ?? String(err);
     if (current.status === 'approved') transitionOrder(p.id, 'failed', { result: { error: message } });
-    else if (current.status === 'executing') transitionOrder(p.id, (err instanceof GuardRejection && ['paused_before_submission','position_changed','external_order','quote_unavailable'].includes(err.rule)) || err instanceof BrokerRejection && err.status != null && err.status >= 400 && err.status < 500 && ![408,409,429].includes(err.status) ? 'failed' : 'unknown', { result: { ...current.result, error: message } });
+    // A refused protection cancellation aborts actExit before any sell is sent.
+    // The stop's outcome may still need review, but there is no exit to reconcile.
+    else if (current.status === 'executing') transitionOrder(p.id, (err instanceof GuardRejection && ['paused_before_submission','position_changed','external_order','quote_unavailable','resting_order_not_cancelled'].includes(err.rule)) || err instanceof BrokerRejection && err.status != null && err.status >= 400 && err.status < 500 && ![408,409,429].includes(err.status) ? 'failed' : 'unknown', { result: { ...current.result, error: message } });
     recordDecisionOutcome('order-' + p.id, { vetoRule: err instanceof GuardRejection ? err.rule : null, venueMessage: err instanceof BrokerRejection ? err.venueMessage : null });
     logger.warn('[Execution] ' + p.id + ': ' + message);
   }
