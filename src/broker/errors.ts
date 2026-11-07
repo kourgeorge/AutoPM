@@ -44,6 +44,8 @@ export class BrokerRejection extends Error {
     readonly venueMessage: string,
     readonly venueCode: string | number | null,
     readonly request: BrokerAttempt,
+    /** Set when part of a pair was accepted before the refusal: that leg is live at the venue. */
+    readonly acceptedStopOrderId?: string,
   ) {
     super(`Broker rejected ${describe(request)}: ${status ?? '?'} ${venueMessage}`);
     this.name = 'BrokerRejection';

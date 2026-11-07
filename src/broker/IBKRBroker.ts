@@ -481,9 +481,10 @@ export class IBKRBroker implements IBroker {
         'placeOco(takeProfit)',
       );
     } catch (err: any) {
-      // Retain the accepted protective stop. The durable intent records the uncertain pair.
+      // Retain the accepted protective stop and say which it is, so the caller can record it: a
+      // live stop the system has no id for can be neither relinked nor safely re-armed.
       const inner: Error = err?.error ?? err;
-      throw new BrokerRejection(null, inner.message, null, req);
+      throw new BrokerRejection(null, inner.message, null, req, String(stopOrderId));
     }
     await this.awaitTransmitted(takeProfitOrderId, req);
 

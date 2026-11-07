@@ -470,9 +470,16 @@ export async function armOco(
   try {
     await verifyFreeHolding(symbol, qty);
     const { stopOrderId, takeProfitOrderId } = await protect(symbol, stopLevel, takeProfitLevel, async clientOrderId => {
-      const placed = await guardedBroker().placeOco({ ...plan.request, clientOrderId });
-      patchPositionSnapshot(symbol, placed);
-      return placed;
+      try {
+        const placed = await guardedBroker().placeOco({ ...plan.request, clientOrderId });
+        patchPositionSnapshot(symbol, placed);
+        return placed;
+      } catch (err: any) {
+        // One leg is live at the venue (IBKR places the pair as two orders). Record it before the
+        // intent goes unknown, so the operator can see and relink it.
+        if (err?.acceptedStopOrderId) patchPositionSnapshot(symbol, { stopOrderId: err.acceptedStopOrderId });
+        throw err;
+      }
     });
     logger.trade(
       `OCO armed for ${symbol}: ${qty} @ stop $${stopLevel} / target $${takeProfitLevel} `
@@ -528,22 +535,28 @@ export async function moveOcoTo(
 
 /**
  * Failure reasons already logged, per symbol, so a position that cannot be armed does not
- * write the same warning every 60 seconds for the rest of the day. Cleared when the symbol
+ * write the same warning on every sweep for the rest of the day. Cleared when the symbol
  * arms, or when it is no longer held — which also bounds the map at the size of the book.
  */
 const lastFailure = new Map<string, string>();
 
 /**
- * Consecutive sweeps in which a snapshot's symbol was not held, per canonical symbol.
+ * Consecutive sweeps in which a snapshot's symbol was not held, and when the run began, per
+ * canonical symbol.
  *
  * Deliberately in memory rather than in `state.json`: a restart resets the count and delays a
- * prune by one tick, which costs nothing, while persisting it would add a field that can go
- * stale in order to fix that nothing.
+ * prune, which costs nothing, while persisting it would add a field that can go stale in order
+ * to fix that nothing.
  */
-const absentFor = new Map<string, number>();
+const absentFor = new Map<string, { strikes: number; since: number }>();
 
-/** Consecutive absences before a snapshot is believed to be a leftover. */
+/**
+ * How long a snapshot's symbol must read as not held, and on how many reads, before it is
+ * believed to be a leftover. Both must hold: the sweep runs every 2 seconds, so a read count
+ * alone is a few seconds of venue trouble, while a time alone could be one bad read.
+ */
 const ORPHAN_STRIKES = 2;
+const ORPHAN_MIN_MS = 60_000;
 
 /**
  * The bar when the WHOLE book reads empty.
@@ -551,9 +564,10 @@ const ORPHAN_STRIKES = 2;
  * A flat book and a broken read are the same bytes — a successful response carrying no positions
  * is exactly what a venue in trouble returns — and deleting a stop level cannot be undone, since
  * this file is the only place those levels exist. So a genuinely flat book waits five minutes to
- * be believed, and an ordinary close waits two ticks.
+ * be believed, and an ordinary close one minute.
  */
 const FLAT_BOOK_STRIKES = 5;
+const FLAT_BOOK_MIN_MS = 5 * 60_000;
 
 function logFailureOnce(symbol: string, reason: string): void {
   const key = canonicalSymbol(symbol);
@@ -595,25 +609,29 @@ export async function sweepStops(): Promise<void> {
   for (const key of [...absentFor.keys()]) if (!unheld.has(key)) absentFor.delete(key);
 
   const needed = positions.length === 0 ? FLAT_BOOK_STRIKES : ORPHAN_STRIKES;
+  const neededMs = positions.length === 0 ? FLAT_BOOK_MIN_MS : ORPHAN_MIN_MS;
   for (const key of unheld) {
     // An exit or an entry mid-flight owns this symbol: during the fill-wait the position can be
     // live at the venue before the read that produced `positions`, and `execute_exit` removes
     // the snapshot itself the moment its sell is accepted.
     if (isStopLocked(key) || exiting.has(key)) continue;
 
-    const strikes = (absentFor.get(key) ?? 0) + 1;
-    absentFor.set(key, strikes);
+    const now = Date.now();
+    const run = absentFor.get(key) ?? { strikes: 0, since: now };
+    const strikes = run.strikes + 1;
+    absentFor.set(key, { strikes, since: run.since });
 
     if (strikes === 1) {
-      logger.info(`[Stops] ${key} not held at venue (strike 1/${needed})`);
+      logger.info(`[Stops] ${key} not held at venue (waiting ${needed} reads and ${neededMs / 60_000} min)`);
     }
-    if (strikes < needed) continue;
+    if (strikes < needed || now - run.since < neededMs) continue;
 
     // Repeated position reads establish absence independently of how the position closed.
     // Protective orders may be cancelled, expired, or unavailable after a manual close.
     removePositionSnapshot(key);
     logger.info(
-      `[Stops] ${key} is not held at the venue on ${strikes} consecutive reads — removed its `
+      `[Stops] ${key} is not held at the venue on ${strikes} consecutive reads over `
+        + `${Math.round((now - run.since) / 1000)}s — removed its `
         + `snapshot: ${JSON.stringify(snapshots[key])}`,
     );
     absentFor.delete(key);

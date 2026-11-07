@@ -44,6 +44,15 @@ beforeEach(async () => {
 });
 after(() => { runtime.stopRuntime(); store.closeStorage(); });
 
+/** Runs `fn` with `Date.now` under test control; `tick(ms)` moves it forward. */
+async function withClock(fn) {
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try { await fn(ms => { now += ms; }); }
+  finally { Date.now = realNow; }
+}
+
 test('manual approval and automatic execution share bookkeeping; baselines wait for fills', async () => {
   const p = entry();
   actions.decideOrder(p.id, 'approve', 'human', undefined, 'alice');
@@ -200,6 +209,43 @@ test('uncertain protection survives restart semantics and is never blindly place
   assert.equal(store.readValue('protectionIntents').AAPL.status,'unknown');
 });
 
+test('a definite broker refusal of a stop is retried without pausing trading', async () => {
+  const { armStop }=require('../src/strategy/stopOrders');
+  const { BrokerRejection }=require('../src/broker/errors');
+  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
+  state.openPositionSnapshot({symbol:'AAPL',stopLevel:95});
+  broker.placeOrder=async req=>{placed++;throw new BrokerRejection(422,'stop price must be below market',null,req);};
+  assert.equal((await armStop('AAPL',2,95)).ok,false);
+  assert.equal(state.getState().paused,false);
+  assert.equal(store.readValue('protectionIntents').AAPL,undefined);
+  broker.placeOrder=async()=>{placed++;return {id:'stop-2'};};
+  const second=await armStop('AAPL',2,95);
+  assert.equal(second.ok,true);assert.equal(placed,2);
+  assert.equal(store.readValue('protectionIntents').AAPL.status,'confirmed');
+});
+
+test('a retry-later broker answer is still treated as uncertain', async () => {
+  const { armStop }=require('../src/strategy/stopOrders');
+  const { BrokerRejection }=require('../src/broker/errors');
+  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
+  state.openPositionSnapshot({symbol:'AAPL',stopLevel:95});
+  broker.placeOrder=async req=>{placed++;throw new BrokerRejection(429,'rate limit',null,req);};
+  assert.equal((await armStop('AAPL',2,95)).ok,false);
+  assert.equal(state.getState().paused,true);
+  assert.equal(store.readValue('protectionIntents').AAPL.status,'unknown');
+});
+
+test('a pair whose stop was accepted before the target failed keeps the stop id', async () => {
+  const { armOco }=require('../src/strategy/stopOrders');
+  const { BrokerRejection }=require('../src/broker/errors');
+  held=[{symbol:'AAPL',qty:2,avgCost:100,marketValue:200}];
+  state.openPositionSnapshot({symbol:'AAPL',stopLevel:95,takeProfitLevel:110});
+  broker.placeOco=async req=>{throw new BrokerRejection(null,'target leg timed out',null,req,'ib-stop-7');};
+  assert.equal((await armOco('AAPL',2,95,110)).ok,false);
+  assert.equal(state.getPositionSnapshot('AAPL').stopOrderId,'ib-stop-7');
+  assert.equal(state.getState().paused,true);
+});
+
 test('pending exits keep their baseline across multiple protection sweeps', async () => {
   const { sweepStops }=require('../src/strategy/stopOrders');
   state.openPositionSnapshot({symbol:'AAPL',stopLevel:95,stopOrderId:'our-stop'});
@@ -216,38 +262,74 @@ test('unheld snapshots wait for consecutive reads and do not depend on protectiv
   state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32,stopOrderId:'cancelled-stop',takeProfitOrderId:'expired-target'});
   let lookups = 0;
   broker.getOrder = async () => { lookups++; throw new Error('Old order unavailable'); };
-  await sweepStops();
-  assert.ok(state.getPositionSnapshot('BRKB'));
-  await sweepStops();
-  assert.equal(state.getPositionSnapshot('BRKB'), undefined);
-  await sweepStops();
+  await withClock(async tick => {
+    await sweepStops();
+    assert.ok(state.getPositionSnapshot('BRKB'));
+    tick(61_000);
+    await sweepStops();
+    assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+    await sweepStops();
+  });
   assert.equal(lookups, 0);
+});
+
+test('a burst of missing reads inside the time window keeps the snapshot', async () => {
+  const { sweepStops } = require('../src/strategy/stopOrders');
+  held = [{symbol:'MSFT',qty:1,avgCost:100,marketValue:100}];
+  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32});
+  await withClock(async tick => {
+    // 2-second sweeps: twenty reads in forty seconds is venue trouble, not a close.
+    for (let i = 0; i < 20; i++) { await sweepStops(); tick(2_000); }
+    assert.ok(state.getPositionSnapshot('BRKB'));
+    tick(21_000);
+    await sweepStops();
+    assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+  });
 });
 
 test('flat book preserves snapshots until five consecutive missing reads', async () => {
   const { sweepStops } = require('../src/strategy/stopOrders');
   state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32});
-  for (let i = 0; i < 4; i++) {
+  await withClock(async tick => {
+    for (let i = 0; i < 4; i++) {
+      await sweepStops();
+      assert.ok(state.getPositionSnapshot('BRKB'));
+      tick(100_000);
+    }
     await sweepStops();
+    assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+  });
+});
+
+test('a flat book read many times within five minutes keeps the snapshot', async () => {
+  const { sweepStops } = require('../src/strategy/stopOrders');
+  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32});
+  await withClock(async tick => {
+    for (let i = 0; i < 100; i++) { await sweepStops(); tick(2_000); }
     assert.ok(state.getPositionSnapshot('BRKB'));
-  }
-  await sweepStops();
-  assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+    tick(101_000);
+    await sweepStops();
+    assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+  });
 });
 
 test('a returning holding resets the snapshot absence count', async () => {
   const { sweepStops } = require('../src/strategy/stopOrders');
   const other = {symbol:'MSFT',qty:1,avgCost:100,marketValue:100};
   state.openPositionSnapshot({symbol:'BRKB'});
-  held = [other];
-  await sweepStops();
-  held = [other, {symbol:'BRKB',qty:1,avgCost:543.77,marketValue:543.77}];
-  await sweepStops();
-  held = [other];
-  await sweepStops();
-  assert.ok(state.getPositionSnapshot('BRKB'));
-  await sweepStops();
-  assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+  await withClock(async tick => {
+    held = [other];
+    await sweepStops();
+    tick(61_000);
+    held = [other, {symbol:'BRKB',qty:1,avgCost:543.77,marketValue:543.77}];
+    await sweepStops();
+    held = [other];
+    await sweepStops();
+    tick(61_000);
+    assert.ok(state.getPositionSnapshot('BRKB'));
+    await sweepStops();
+    assert.equal(state.getPositionSnapshot('BRKB'), undefined);
+  });
 });
 
 test('a stop moved during a sweep is re-read, not flagged as vanished', async () => {
