@@ -70,22 +70,40 @@ interface TradeSettings { text: string; playbook: string }
 const TRADE_SETTINGS_FILE = path.join(DATA_DIR, 'db', 'trade-settings.json');
 let ephemeralTradeSettings: TradeSettings | undefined;   // replay harness only
 
+/**
+ * The file as last read, keyed by its modification time. Settings and playbook are read
+ * together and kept together, so the strategy hash can never mix the settings in memory with a
+ * playbook edited on disk since — that mix failed live orders with "Strategy changed".
+ */
+let tradeSettingsCache: { mtimeMs: number; value: TradeSettings } | undefined;
+
 function readTradeSettings(): TradeSettings | undefined {
   if (isEphemeralStorage()) return ephemeralTradeSettings;
-  if (!fs.existsSync(TRADE_SETTINGS_FILE)) return undefined;
+  let mtimeMs: number;
+  try { mtimeMs = fs.statSync(TRADE_SETTINGS_FILE).mtimeMs; }
+  catch { tradeSettingsCache = undefined; return undefined; }
+  if (tradeSettingsCache?.mtimeMs === mtimeMs) return tradeSettingsCache.value;
   const file = JSON.parse(fs.readFileSync(TRADE_SETTINGS_FILE, 'utf8'));
   if (!file?.settings || typeof file.playbook !== 'string') throw new Error(`${TRADE_SETTINGS_FILE} must contain "settings" and "playbook"`);
-  return { text: dumpYaml(file.settings, { lineWidth: -1 }), playbook: userPlaybook(file.playbook) };
+  const value = { text: dumpYaml(file.settings, { lineWidth: -1 }), playbook: userPlaybook(file.playbook) };
+  tradeSettingsCache = { mtimeMs, value };
+  return value;
 }
 
 function writeTradeSettings(settings: TradeSettings): void {
   if (isEphemeralStorage()) { ephemeralTradeSettings = settings; return; }
+  tradeSettingsCache = undefined;
   fs.mkdirSync(path.dirname(TRADE_SETTINGS_FILE), { recursive: true });
   writeFileAtomic(TRADE_SETTINGS_FILE, JSON.stringify({ settings: parseYaml(settings.text), playbook: settings.playbook }, null, 2) + '\n');
 }
 
 let _policy: Policy | null = null;
 let _meta: PolicyMeta | null = null;
+/** The settings file's mtime when `_policy` was taken from it; a change means a hand edit. */
+let _loadedMtimeMs: number | undefined;
+function settingsMtime(): number | undefined {
+  try { return fs.statSync(TRADE_SETTINGS_FILE).mtimeMs; } catch { return undefined; }
+}
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -435,6 +453,7 @@ export function loadPolicy(): Policy {
   if (!readTradeSettings()) writeTradeSettings({ text, playbook: '' });
   _policy = result.policy;
   _meta = result.meta;
+  _loadedMtimeMs = settingsMtime();
   logger.info(`[Policy] Loaded v${result.meta.version} (${result.meta.hash})`);
   return result.policy;
 }
@@ -460,8 +479,19 @@ export function reloadPolicy(): PolicyLoadResult {
   return result;
 }
 
+
 export function getPolicy(): Policy {
-  return _policy ?? loadPolicy();
+  if (!_policy) return loadPolicy();
+  if (_meta?.source !== 'ephemeral' && !isEphemeralStorage()) {
+    let mtimeMs: number | undefined;
+    try { mtimeMs = fs.statSync(TRADE_SETTINGS_FILE).mtimeMs; } catch { /* no file: keep the loaded policy */ }
+    if (mtimeMs !== undefined && mtimeMs !== _loadedMtimeMs) {
+      _loadedMtimeMs = mtimeMs;
+      const result = reloadPolicy();
+      if (!result.ok) logger.warn(`[Policy] ${TRADE_SETTINGS_FILE} changed but is invalid; keeping the active settings: ${result.errors.join('; ')}`);
+    }
+  }
+  return _policy!;
 }
 
 /**
@@ -519,6 +549,6 @@ export function saveStrategy(settings: unknown, expectedHash: string, playbook =
     if (!expectedHash || expectedHash !== actualHash) throw new Error('Strategy changed; reload before saving');
     writeTradeSettings({ text, playbook });
   });
-  _policy = parsed.policy; _meta = parsed.meta;
+  _policy = parsed.policy; _meta = parsed.meta; _loadedMtimeMs = settingsMtime();
   return getPolicySnapshot();
 }
