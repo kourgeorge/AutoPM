@@ -15,8 +15,8 @@
  * entirely is behaviourally equivalent, not a shortcut around a real constraint.
  *
  * The stop-loss LEVEL formula (`entryPrice - stopLossAtrMult * atr`) is a backtest
- * convention, not a copy of an enforced production rule — see the plan doc for why. Only the
- * sizing formula and `canTighten`'s tighten-only mechanics are true reuse of real logic.
+ * convention, not a copy of an enforced production rule — see the plan doc for why. The sizing
+ * formula, `canTighten` and the trailing stop (`trailTarget`) are true reuse of real logic.
  */
 
 import type { AiConfig, Bar } from '../core/types';
@@ -28,8 +28,9 @@ import { computeSignals, signalTally } from '../strategy/signals';
 import { computeMeanReversionSignals } from '../strategy/meanReversion';
 import { crossSectionalComposite, type CrossSectionalEntry } from '../strategy/crossSectional';
 import { entrySignalVeto, positionSizeVeto, exposureVeto } from '../strategy/orderManager';
+import { trailTarget } from '../strategy/trailingStop';
+import type { PositionData } from '../features/compute';
 import { dailyLossStatus } from '../strategy/riskManager';
-import { canTighten } from '../strategy/stopOrders';
 import { getHistoricalBars } from './barCache';
 import { buildDailyDossier, type OpenPositionInput, type CandidateInput } from './aiDossier';
 import { decideDay, type Decision } from './aiDecision';
@@ -208,8 +209,12 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
         const window = bars.slice(0, tIdx + 1);
         const atrSeries = atr(window, policy.strategy.atrPeriod);
         const currentAtr = atrSeries.length > 0 ? atrSeries[atrSeries.length - 1] : pos.atrAtEntry;
-        const trailingCandidate = pos.highSinceEntry - policy.risk.stopLossAtrMult * currentAtr;
-        if (canTighten(pos.stop, trailingCandidate)) nextStop = trailingCandidate;
+        // The live rule, not a copy: same function, same setting, same cent rounding and minimum
+        // step. The live trail is off unless `trailingStopAtrMult` is set; a backtest that asks for
+        // trailing stops with it unset trails at the entry stop distance, as it always did.
+        const mult = policy.risk.trailingStopAtrMult ?? policy.risk.stopLossAtrMult;
+        const to = trailTarget({ price: barT.c, sessionHigh: pos.highSinceEntry, atr: currentAtr, stale: false } as PositionData, pos.stop, mult);
+        if (to != null) nextStop = to;
       }
       pos.stop = nextStop;
 
