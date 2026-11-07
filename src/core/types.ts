@@ -56,7 +56,12 @@ export type ContentBlock =
 export interface ModelResponse {
   stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence';
   content: ContentBlock[];
-  usage: { inputTokens: number; outputTokens: number };
+  /**
+   * `inputTokens` is every input token the call sent, cached or not, so budgets and history keep
+   * measuring the same thing. `cachedInputTokens`, when the provider reports it, is the part read
+   * from the prompt cache at a fraction of the price.
+   */
+  usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
 }
 
 export interface AiConfig {
