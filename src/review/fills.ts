@@ -21,7 +21,20 @@
 import { appendRecord, readRecords, transaction } from '../core/storage';
 import { logger } from '../core/logger';
 import type { Fill } from '../broker/IBroker';
-import { canonicalSymbol } from '../core/symbols';
+
+/**
+ * Whether a position is back to flat — one rule for the round-trip ledger and the P&L report.
+ *
+ * Shares are whole, so a stock is flat at zero. Crypto is not: Alpaca takes its fee in coin, so
+ * selling "everything" leaves dust (BTC/USD 2026-08-16: bought 0.0789, sold 0.078702749,
+ * 0.25% left), and an exact zero kept that trade open forever — out of the scorecard and never
+ * reviewed. A remainder under 1% of the position's peak is that dust.
+ */
+export function isFlat(symbol: string, remaining: number, peak: number): boolean {
+  if (remaining <= 1e-9) return true;
+  return isCryptoSymbol(symbol) && peak > 0 && remaining < peak * 0.01;
+}
+import { canonicalSymbol, isCryptoSymbol } from '../core/symbols';
 
 
 let _ephemeral = false;
