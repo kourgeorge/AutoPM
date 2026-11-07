@@ -37,6 +37,7 @@ beforeEach(async () => {
   usePolicy();
   state.updateState({ positionSnapshots: {}, accountId: 'alpaca:paper:acct', paused: false, dailyLossHalted: false, startOfDayEquity: 100000 });
   open = []; held = []; replaced = [];
+  trail.resetTrailFailures();
   broker.marketSession = async () => 'regular';
   broker.getAccountInfo = async () => ({ accountId: 'acct', equity: 100000, cash: 100000, buyingPower: 100000, previousCloseEquity: 100000 });
   broker.getPositions = async () => held;
@@ -177,4 +178,24 @@ test('a symbol with an order in flight is left alone', async () => {
   actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 10 }, reason: 'selling', timeoutMs: 60000 });
   await trail.trailStops({ positions: { AAPL: position() } }, policy.getPolicy());
   assert.equal(replaced.length, 0);
+});
+
+test('a raise that keeps failing is retried after a back-off, not journalled every tick', async () => {
+  usePolicy({ trailingStopAtrMult: 2 }, { stopAdjust: 'auto' });
+  held = [{ symbol: 'AAPL', qty: 10, avgCost: 100, marketValue: 1180 }];
+  open = [];
+  state.openPositionSnapshot({ symbol: 'AAPL', entryPrice: 100, stopLevel: 100, stopOrderId: 'gone' });
+  const tick = () => trail.trailStops({ positions: { AAPL: position() } }, policy.getPolicy());
+  for (let i = 0; i < 10; i++) await tick();
+  assert.equal(journal.readDecisions({ symbol: 'AAPL' }).length, 1);
+  // A new high moves the target: that is a different raise, tried at once.
+  await trail.trailStops({ positions: { AAPL: position({ sessionHigh: 125, price: 123 }) } }, policy.getPolicy());
+  assert.equal(journal.readDecisions({ symbol: 'AAPL' }).length, 2);
+  // After the back-off the same raise is tried again.
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + trail.RETRY_AFTER_FAILURE_MS + 1000;
+    await trail.trailStops({ positions: { AAPL: position({ sessionHigh: 125, price: 123 }) } }, policy.getPolicy());
+  } finally { Date.now = realNow; }
+  assert.equal(journal.readDecisions({ symbol: 'AAPL' }).length, 3);
 });

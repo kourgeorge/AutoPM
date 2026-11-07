@@ -40,7 +40,7 @@ function parse<T>(json: string | undefined): T | null { try { return JSON.parse(
 
 /** The trader's tool calls in one request, oldest first. */
 function tradersCalls(requestId: string, names: string[]) {
-  return listRecords<ToolCallRow>('tool-calls', { where: r => r.role === 'trader' && r.requestId === requestId && names.includes(r.name) });
+  return listRecords<ToolCallRow>('tool-calls', { requestId, where: r => r.role === 'trader' && names.includes(r.name) });
 }
 
 function planSummary(id: string, plan: PlanResult): Pick<DecisionInput, 'intendedPrice' | 'intendedStop' | 'intendedTarget' | 'entryPlan'> {

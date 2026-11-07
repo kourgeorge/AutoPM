@@ -108,3 +108,61 @@ test('named queries skip unrelated disk payloads and stop when the consumer has 
   store.closeStorage();
   assert.equal(store.listRecords('calls', { name: 'changed' })[0].id, 'newer');
 });
+
+test('request queries read only that request\'s payloads, before and after a reload', () => {
+  store.resetStorage();
+  for (let i = 0; i < 5; i++) store.appendRecord('calls', 'other-' + i, 'x', { name: 'get_bars', requestId: 'r-other', result: 'x'.repeat(1000) });
+  store.appendRecord('calls', 'mine', 'y', { name: 'get_entry_plan', requestId: 'r-mine' });
+  for (const reload of [false, true]) {
+    if (reload) store.closeStorage();
+    store.readValue('account');
+    const original = fs.openSync;
+    let reads = 0;
+    fs.openSync = function(file, ...args) {
+      if (file === path.join(directory, 'db/calls.jsonl')) reads++;
+      return original.call(this, file, ...args);
+    };
+    try {
+      assert.deepEqual(store.listRecords('calls', { requestId: 'r-mine' }).map(r => r.id), ['mine']);
+      assert.ok(reads <= 1, 'one payload read, not six');
+    } finally { fs.openSync = original; }
+  }
+});
+
+test('an unfinished last line is dropped at startup; damage elsewhere still stops it', () => {
+  store.resetStorage();
+  store.appendRecord('torn', 'a', 'first', { n: 1 });
+  store.appendRecord('torn', 'b', 'second', { n: 2 });
+  store.closeStorage();
+  const file = path.join(directory, 'db/torn.jsonl');
+  fs.appendFileSync(file, '{"seq":99,"id":"c","at":"third","val');
+  assert.deepEqual(store.listRecords('torn').map(r => r.id), ['a', 'b']);
+  assert.ok(fs.readFileSync(file, 'utf8').endsWith('\n'), 'the torn tail was removed');
+  assert.ok(fs.readdirSync(path.join(directory, 'db')).some(f => f.startsWith('torn.jsonl.torn-')), 'a copy was kept');
+  store.appendRecord('torn', 'c', 'third', { n: 3 });
+  store.closeStorage();
+  assert.deepEqual(store.listRecords('torn').map(r => r.id), ['a', 'b', 'c']);
+  // A bad line in the middle is not a torn write.
+  store.closeStorage();
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  lines[1] = '{broken';
+  fs.writeFileSync(file, lines.join('\n'));
+  assert.throws(() => store.listRecords('torn'), /line 2 is not valid JSON/);
+  fs.rmSync(file);
+  for (const f of fs.readdirSync(path.join(directory, 'db'))) if (f.startsWith('torn.jsonl.torn-')) fs.rmSync(path.join(directory, 'db', f));
+  store.closeStorage();
+});
+
+test('a failed disk write rolls memory back and is not written again by the next transaction', () => {
+  store.resetStorage();
+  store.appendRecord('fail', 'kept', 'first', { n: 1 });
+  const original = fs.appendFileSync;
+  fs.appendFileSync = () => { throw new Error('disk full'); };
+  try {
+    assert.throws(() => store.saveRecord('fail', 'lost', { n: 2 }), /disk full/);
+  } finally { fs.appendFileSync = original; }
+  assert.equal(store.readRecord('fail', 'lost'), undefined);
+  store.saveRecord('fail', 'next', { n: 3 });
+  store.closeStorage();
+  assert.deepEqual(store.listRecords('fail').map(r => r.id), ['kept', 'next']);
+});
