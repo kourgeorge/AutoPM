@@ -16,7 +16,7 @@ import path from 'path';
 import { DATA_DIR, ensureDataDir } from './paths';
 import { writeFileAtomic } from './fsAtomic';
 
-interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number; name?: string }
+interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number; name?: string; requestId?: string }
 
 const DB_DIR = path.join(DATA_DIR, 'db');
 const SETTINGS_FILE = path.join(DB_DIR, 'settings.json');
@@ -92,14 +92,25 @@ function open(): void {
       if (!name.endsWith('.jsonl')) continue;
       const kind = name.slice(0, -6);
       const rows = new Map<string, Row>();
-      eachLine(recordFile(kind), (line, i, offset, length) => {
+      const file = recordFile(kind);
+      // A torn last line is a write the process died in the middle of: nothing after it was
+      // committed, so dropping it loses only that unfinished write. A bad line anywhere else is
+      // damage, and still stops startup.
+      let torn: { index: number; offset: number } | undefined;
+      eachLine(file, (line, i, offset, length) => {
+        if (torn) throw new Error(`${file} line ${torn.index + 1} is not valid JSON; repair or remove it before starting.`);
         let e: any;
         try { e = JSON.parse(line); }
-        catch { throw new Error(`${recordFile(kind)} line ${i + 1} is not valid JSON; repair or remove it before starting.`); }
+        catch { torn = { index: i, offset }; return; }
         if (e.deleted) rows.delete(e.id);
-        else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, offset, length, name: typeof e.value?.name === 'string' ? e.value.name : undefined });
+        else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, offset, length, ...indexed(e.value) });
         if (e.seq >= nextSeq) nextSeq = e.seq + 1;
       });
+      if (torn) {
+        fs.copyFileSync(file, file + '.torn-' + Date.now());
+        fs.truncateSync(file, torn.offset);
+        console.error(`[Storage] ${file}: dropped an unfinished last line (a copy of the file was kept beside it).`);
+      }
       const sorted = new Map([...rows.values()].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]));
       kinds.set(kind, sorted);
     }
@@ -113,11 +124,17 @@ function rowsOf(kind: string): Map<string, Row> {
   return rows;
 }
 
+/** The value fields kept in memory, so queries on them skip unrelated payloads before disk reads. */
+function indexed(value: any): Pick<Row, 'name' | 'requestId'> {
+  return { name: typeof value?.name === 'string' ? value.name : undefined,
+    requestId: typeof value?.requestId === 'string' ? value.requestId : undefined };
+}
+
 function put(kind: string, row: Row): void {
   const rows = rowsOf(kind);
   const old = rows.get(row.id);
   const value = JSON.parse(row.json!);
-  row.name = typeof value?.name === 'string' ? value.name : undefined;
+  Object.assign(row, indexed(value));
   rows.set(row.id, row);   // replacing a key keeps its position, so seq order holds
   lines.push({ kind, line: lineFor(row), row });
   undo.push(() => { if (old) rows.set(old.id, old); else rows.delete(row.id); });
@@ -136,19 +153,34 @@ export function transaction<T>(fn: () => T): T {
     throw err;
   } finally { depth--; }
   if (!ephemeral) {
-    for (const { kind, line, row } of lines) {
-      const file = recordFile(kind);
-      const offset = fs.existsSync(file) ? fs.statSync(file).size : 0;
-      fs.appendFileSync(file, line, { mode: 0o600 });
-      if (row) {
-        row.offset = offset;
-        row.length = Buffer.byteLength(line) - 1;
-        delete row.json;
+    try {
+      // One append per file: a crash can tear at most the last line of each, which `open`
+      // recovers from. Offsets are known before writing, so rows are updated only once it lands.
+      const byFile = new Map<string, typeof lines>();
+      for (const entry of lines) {
+        const file = recordFile(entry.kind);
+        byFile.set(file, [...(byFile.get(file) ?? []), entry]);
       }
-    }
-    for (const file of dirtyFiles) {
-      const own = Object.fromEntries(Object.entries(values).filter(([key]) => fileFor(key) === file));
-      writeFileAtomic(file, JSON.stringify(own, null, 2) + '\n');
+      for (const [file, entries] of byFile) {
+        let offset = fs.existsSync(file) ? fs.statSync(file).size : 0;
+        fs.appendFileSync(file, entries.map(e => e.line).join(''), { mode: 0o600 });
+        for (const { line, row } of entries) {
+          const length = Buffer.byteLength(line);
+          if (row) { row.offset = offset; row.length = length - 1; delete row.json; }
+          offset += length;
+        }
+      }
+      for (const file of dirtyFiles) {
+        const own = Object.fromEntries(Object.entries(values).filter(([key]) => fileFor(key) === file));
+        writeFileAtomic(file, JSON.stringify(own, null, 2) + '\n');
+      }
+    } catch (err) {
+      // Memory must not claim what the disk does not hold, and the failed lines must not ride
+      // along with the next transaction. Anything partly on disk is reloaded from it.
+      for (const step of undo.reverse()) step();
+      lines = []; undo = []; committed = []; dirtyFiles = new Set();
+      closeStorage();
+      throw err;
     }
   }
   lines = []; undo = []; dirtyFiles = new Set();
@@ -226,9 +258,9 @@ export function readRecords<T>(kind: string, limit?: number, after = 0): T[] {
 }
 
 /** Query one kind without retaining payloads that the caller has already consumed.
- * `name` uses indexed value.name metadata to skip unrelated payloads before disk reads.
+ * `name` and `requestId` use indexed value metadata to skip unrelated payloads before disk reads.
  */
-export interface RecordQuery<T> { name?: string; where?: (value: T) => boolean; desc?: boolean; limit?: number }
+export interface RecordQuery<T> { name?: string; requestId?: string; where?: (value: T) => boolean; desc?: boolean; limit?: number }
 export function* iterateRecords<T>(kind: string, opts: RecordQuery<T> = {}):
   Generator<{ seq: number; id: string; at: string; value: T }> {
   open();
@@ -238,6 +270,7 @@ export function* iterateRecords<T>(kind: string, opts: RecordQuery<T> = {}):
   for (const r of rows) {
     if (opts.limit !== undefined && count >= opts.limit) break;
     if (opts.name !== undefined && r.name !== opts.name) continue;
+    if (opts.requestId !== undefined && r.requestId !== opts.requestId) continue;
     const value = payload(kind, r) as T;
     if (!opts.where || opts.where(value)) {
       count++;

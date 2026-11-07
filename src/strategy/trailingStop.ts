@@ -87,6 +87,18 @@ export function trailPlans(data: TickData, policy: Policy, snapshots = getState(
  * is journalled as an `adjustment` by the guard, so the record shows the machine moved it, not
  * the trader.
  */
+/**
+ * A raise that failed, per symbol: the level it aimed for and when. The same raise is not tried
+ * again until RETRY_AFTER_FAILURE_MS has passed or the target moves. Without this a stop that
+ * cannot be moved (a missing OCO leg, a resting sell to review) wrote one journal row per tick —
+ * about 6,000 failed rows for WMT/HD/COST/IBM between 2026-11-02 and 11-04, burying real decisions.
+ * In memory: a restart retries once, which is what an operator who restarted wants.
+ */
+const failedRaise = new Map<string, { to: number; at: number }>();
+export const RETRY_AFTER_FAILURE_MS = 15 * 60_000;
+/** Test seam. */
+export function resetTrailFailures(): void { failedRaise.clear(); }
+
 export async function trailStops(data: TickData, policy: Policy): Promise<void> {
   const plans = trailPlans(data, policy);
   if (!plans.length || getState().paused) return;
@@ -99,6 +111,8 @@ export async function trailStops(data: TickData, policy: Policy): Promise<void> 
     // Re-read: the trader or a sweep may have moved it during an earlier await in this loop.
     const snap = getPositionSnapshot(key);
     if (!snap || !canTighten(snap.stopLevel, plan.to) || snap.stopLevel === plan.to) continue;
+    const failed = failedRaise.get(key);
+    if (failed && failed.to === plan.to && Date.now() - failed.at < RETRY_AFTER_FAILURE_MS) continue;
 
     const id = 'trail-' + crypto.randomUUID();
     const rationale = `Trailing stop raised from $${plan.from} to $${plan.to}: `
@@ -122,12 +136,14 @@ export async function trailStops(data: TickData, policy: Policy): Promise<void> 
       const uncertain = !result.ok && protectionIntents()[key]?.status === 'unknown';
       recordDecisionOutcome(id, { executed: result.ok, orderStatus: result.ok ? 'executed' : uncertain ? 'unknown' : 'failed',
         protectionStatus: result.ok ? 'confirmed' : 'unknown', venueStopId, venueStopMissing: result.ok ? null : result.reason });
-      if (result.ok) logger.trade(`[Trail] ${key} stop raised $${plan.from} → $${plan.to}`);
+      if (result.ok) { failedRaise.delete(key); logger.trade(`[Trail] ${key} stop raised $${plan.from} → $${plan.to}`); }
       else {
+        failedRaise.set(key, { to: plan.to, at: Date.now() });
         if (!uncertain && getPositionSnapshot(key)?.stopLevel === plan.to) upsertPositionSnapshot(key, { stopLevel: plan.from ?? undefined });
         logger.warn(`[Trail] ${key} stop could not be raised to $${plan.to}: ${result.reason}`);
       }
     } catch (err: any) {
+      failedRaise.set(key, { to: plan.to, at: Date.now() });
       recordDecisionOutcome(id, { orderStatus: 'unknown', protectionStatus: 'unknown', venueStopMissing: err?.message ?? String(err) });
       logger.warn(`[Trail] ${key}: ${err?.message ?? err}`);
     }

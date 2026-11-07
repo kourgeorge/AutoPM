@@ -152,7 +152,7 @@ export function savedRequestDetails(id: string) {
   const orders = new Set(actions.filter(a => a.result?.brokerOrderId && ['entry','exit'].includes(a.kind))
     .map(a => `${a.result!.brokerOrderId}:${canonicalSymbol(a.symbol)}:${a.kind === 'entry' ? 'buy' : 'sell'}`));
   const fills = readFills().filter(f => orders.has(`${f.brokerOrderId}:${canonicalSymbol(f.symbol)}:${f.side}`));
-  const calls = listRecords<any>('tool-calls', { where: c => c.requestId === id });
+  const calls = listRecords<any>('tool-calls', { requestId: id });
   const transitions = actions.flatMap(stepsOf).sort((a, b) => a.at.localeCompare(b.at));
   const trajectory = readRecord<any>('trajectories', id);
   return { request, orders: actions, transitions: transitions.slice(-100), decisions: decisions.slice(-100), fills: fills.slice(-100),
