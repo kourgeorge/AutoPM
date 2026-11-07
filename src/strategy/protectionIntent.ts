@@ -7,6 +7,8 @@ import { getState, patchPositionSnapshot, updateState } from '../state/state';
 import { broker } from '../broker';
 import { assertExecutionOwner } from '../core/runtime';
 import { pendingOrders, transitionOrder } from '../core/orders';
+import { BrokerRejection } from '../broker/errors';
+import { logger } from '../core/logger';
 
 interface ProtectionIntent {
   id: string; symbol: string; at: string; stop: number; target?: number;
@@ -15,11 +17,29 @@ interface ProtectionIntent {
 export function protectionIntents(): Record<string, ProtectionIntent> {
   return readValue('protectionIntents') ?? {};
 }
+/** Last refusal message per symbol, so a retry every sweep alerts once, not every 2 seconds. */
+const lastRefusal = new Map<string, string>();
 function save(intent: ProtectionIntent): void {
   saveValue('protectionIntents', { ...protectionIntents(), [canonicalSymbol(intent.symbol)]: intent });
 }
 
-/** A request is durable before transmission. Uncertain protection is never blindly retried. */
+/**
+ * The venue answered, and the answer was no: a 4xx with a status code, other than the
+ * retry-later family. Nothing rests at the broker from this request, so it is safe to try again.
+ * Same test the order executor uses to tell `failed` from `unknown`.
+ */
+export function isDefiniteRefusal(err: unknown): boolean {
+  return err instanceof BrokerRejection && err.status != null && err.status >= 400 && err.status < 500
+    && ![408, 409, 429].includes(err.status);
+}
+
+/**
+ * A request is durable before transmission. Uncertain protection is never blindly retried.
+ *
+ * A definite refusal is not uncertain: the intent is dropped so the next sweep may try again,
+ * and the operator is told the position is unprotected. Pausing there left the position with no
+ * stop and nothing that would ever place one until a human cleared it.
+ */
 export async function protect<T>(symbol: string, stop: number, target: number | undefined, send: (id: string) => Promise<T>): Promise<T> {
   const old = protectionIntents()[canonicalSymbol(symbol)];
   if (old && old.status !== 'confirmed') throw new Error('Protection outcome needs operator review: ' + old.id);
@@ -29,9 +49,23 @@ export async function protect<T>(symbol: string, stop: number, target: number | 
   save(intent);
   try {
     const result = await send(intent.id);
+    lastRefusal.delete(canonicalSymbol(symbol));
     save({ ...intent, status: 'confirmed' });
     return result;
   } catch (err: any) {
+    if (isDefiniteRefusal(err)) {
+      const key = canonicalSymbol(symbol);
+      transaction(() => {
+        const { [key]: _refused, ...rest } = protectionIntents();
+        saveValue('protectionIntents', old ? { ...rest, [key]: old } : rest);
+      });
+      if (lastRefusal.get(key) !== err.message) {
+        lastRefusal.set(key, err.message);
+        notifyAccount('protection_refused', `${symbol}: the broker refused protection (${err.venueMessage}). It will be retried; the position has no new stop until then.`);
+      }
+      logger.warn(`[Stops] ${symbol}: broker refused protection — ${err.message}`);
+      throw err;
+    }
     save({ ...intent, status: 'unknown', error: err.message });
     updateState({ paused: true });
     notifyAccount('protection_unknown', `${symbol}: protection needs review. Trading is paused.`);
