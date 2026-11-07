@@ -15,6 +15,7 @@ import { broker } from '../broker';
 import { logger } from '../core/logger';
 import { openedAtFromFills, readFills, recordFills } from './fills';
 import { getState, patchPositionSnapshot } from '../state/state';
+import { notifyAccount } from '../core/notifications';
 
 /**
  * How far back to ask.
@@ -69,6 +70,7 @@ export async function reconcileOnStartup(): Promise<void> {
 
   // After the catch-up, so a fill that landed while the daemon was down can date its position.
   backfillOpenedAt();
+  await checkRecordedStops();
 
   if (!last) return;
 
@@ -85,6 +87,31 @@ export async function reconcileOnStartup(): Promise<void> {
         `longer than one session may be unrecoverable — treat this window as incomplete.`,
     );
   }
+}
+
+/**
+ * Our own resting stop at a different price than the level recorded here.
+ *
+ * The trail and manual adjustments record the new level before the broker move, so an uncertain
+ * answer keeps the level the operator approved. A crash between the two leaves state above the
+ * stop that actually rests — and nothing else compares their prices, only that a stop exists.
+ * Reported, not repaired: which of the two is right is the operator's call.
+ */
+export async function checkRecordedStops(): Promise<string[]> {
+  let orders;
+  try { orders = await broker.getOpenOrders(); }
+  catch (err: any) { logger.warn(`[Reconcile] stop check skipped — orders unavailable: ${err?.message ?? err}`); return []; }
+  const found: string[] = [];
+  for (const snap of Object.values(getState().positionSnapshots)) {
+    if (!snap.stopOrderId || snap.stopLevel == null) continue;
+    const resting = orders.find(o => o.id === snap.stopOrderId && o.type === 'stop');
+    if (!resting || resting.stopPrice == null || Math.abs(resting.stopPrice - snap.stopLevel) <= 0.01) continue;
+    const text = `${snap.symbol}: the stop recorded here is $${snap.stopLevel} but our order ${resting.id} rests at $${resting.stopPrice}. The broker's level is the one that fires.`;
+    found.push(text);
+    logger.warn('[Reconcile] ' + text);
+    notifyAccount('stop_mismatch', text);
+  }
+  return found;
 }
 
 /**
