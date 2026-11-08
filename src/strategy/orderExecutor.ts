@@ -12,7 +12,9 @@ import { readFills } from '../review/fills';
 import { transaction } from '../core/storage';
 import { sameSymbol } from '../core/symbols';
 import { assertExecutionOwner } from '../core/runtime';
-import { isDefiniteRefusal } from './protectionIntent';
+import { isDefiniteRefusal, protectionIntents } from './protectionIntent';
+import { isStopLocked } from './stopOrders';
+import { canonicalSymbol } from '../core/symbols';
 import { blockedByPause } from '../core/pause';
 
 let sweep: Promise<void> | null = null;
@@ -35,7 +37,17 @@ async function reconcile(p: Order): Promise<void> {
       recordDecisionOutcome('order-' + p.id, { executed: true, protectionStatus: 'confirmed', venueStopId: stop.id, venueStopMissing: null });
       transitionOrder(p.id, 'executed', { result: {} }); return;
     }
-    if (p.status === 'executing') transitionOrder(p.id, 'unknown', { result: { error: 'Adjustment interrupted; review broker protection before retrying' } });
+    if (p.status === 'executing') { transitionOrder(p.id, 'unknown', { result: { error: 'Adjustment interrupted; review broker protection before retrying' } }); return; }
+    // Unlike an entry or exit, an adjustment's whole outcome is on the broker's order book. With
+    // no broker request still unresolved (every protective placement or replace is recorded as a
+    // protection intent first) and nothing working on the symbol, the book shown is final: the
+    // change did not happen. Left unknown, it held the symbol and blocked every later order
+    // (IBM target restore, 2026-11-08).
+    const intent = protectionIntents()[canonicalSymbol(p.symbol)];
+    if (p.status === 'unknown' && !isStopLocked(p.symbol) && (!intent || intent.status === 'confirmed') && Date.now() - lastChange(p) >= NEVER_ARRIVED_AFTER_MS) {
+      transitionOrder(p.id, 'failed', { result: { error: `${p.result?.error ? p.result.error + ' — ' : ''}no broker request is outstanding and the broker shows the change was not made` } });
+      logger.warn(`[Reconcile] ${p.kind} ${p.symbol} ${p.id}: the change is not at the broker and nothing is in flight — marked failed`);
+    }
     return;
   }
   let order = p.result?.brokerOrderId ? await broker.getOrder(p.result.brokerOrderId)
