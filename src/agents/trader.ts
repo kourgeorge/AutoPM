@@ -62,6 +62,8 @@ const traderTools = () => traderRegistry ??= new ToolRegistry(pickTools(TRADER_T
 // Old "review only" research tasks belong to the research worker (`researcher.ts`), which
 // takes them over at startup. The trader never runs one, even if one is still queued.
 const tradingRequests = () => pendingRequests('trader').filter(r => r.mode !== 'review_only');
+/** What may run while paused: the operator's own requests, never the scheduler's reviews. */
+const operatorRequests = () => tradingRequests().filter(isOperatorRequest);
 
 /** Policy activation validates the prompt; a later render error stops the cycle. */
 export function traderSystemPrompt(): string { return runtimeContract() + "\n\nTRADER INSTRUCTIONS\n" + renderPolicy(); }
@@ -93,13 +95,13 @@ export class Trader {
   wake(message?: string, reason: WakeReason = message ? 'message' : 'event'): { requestId?: string; status: string } {
     const command = message ? enqueueRequest('trader', message) : undefined;
     this.wakeReasons.add(reason);
-    if (this.paused) return { requestId: command?.id, status: 'queued_paused' };
+    if (this.paused && !(command && isOperatorRequest(command))) return { requestId: command?.id, status: 'queued_paused' };
     if (this.wakeUp) this.wakeUp(); else this.wakePending = true;
     return { requestId: command?.id, status: 'queued' };
   }
   private async loop(): Promise<void> {
     while (this.running) {
-      if (this.paused) {
+      if (this.paused && !operatorRequests().length) {
         ui.setTraderActivity({ state: 'idle', detail: 'paused' });
         await this.interruptibleSleep(PAUSED_RECHECK_MS); continue;
       }
@@ -112,7 +114,7 @@ export class Trader {
       } catch (err: any) { logger.error('[Trader] ' + err.message); }
       if (!this.running) break;
       if (this.paused) continue;
-      if (this.wakePending || (!this.paused && tradingRequests().length)) { this.wakePending = false; continue; }
+      if (this.wakePending || tradingRequests().length) { this.wakePending = false; continue; }
       // A failed cycle is retried by the next heartbeat or event, like any other.
       ui.setTraderActivity({ state: 'sleeping', detail: 'waiting for the heartbeat or an event' });
       await new Promise<void>(resolve => { this.wakeUp = () => { this.wakeUp = null; resolve(); }; });
@@ -126,7 +128,9 @@ export class Trader {
     });
   }
   private async runCycle(): Promise<{ inTokens: number; outTokens: number }> {
-    const command = tradingRequests()[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
+    // Paused, only the operator's requests run; the scheduler's review waits for resume.
+    if (this.paused && !operatorRequests().length) return { inTokens: 0, outTokens: 0 };
+    const command = (this.paused ? operatorRequests()[0] : tradingRequests()[0]) ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
     // An operator's request is a direct turn: a short briefing, answer what was asked, done.
     // Events wait for the scheduled review, which is queued straight after when any are urgent.
     const direct = isOperatorRequest(command);
@@ -142,7 +146,7 @@ export class Trader {
       // what let a routine review describe two unrequested sells as "operator-directed".
       messages: async () => [{ role: 'user', content: [{ type: 'text', text: direct ? await buildRequestContext(relayedText(command)) : await buildCycleContext(getState(), []) }] }],
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
-      beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
+      beforeTool: () => { if ((getState().paused && !direct) || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
     // Normally empty: sleep refuses once while decisions are open. This covers a second sleep, a turn limit or an error.
     try { journalUnresolved(command.id); } catch (err) { logger.warn(`[Trader] could not journal open decisions: ${err instanceof Error ? err.message : err}`); }

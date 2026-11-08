@@ -13,6 +13,7 @@ import { transaction } from '../core/storage';
 import { sameSymbol } from '../core/symbols';
 import { assertExecutionOwner } from '../core/runtime';
 import { isDefiniteRefusal } from './protectionIntent';
+import { blockedByPause } from '../core/pause';
 
 let sweep: Promise<void> | null = null;
 
@@ -115,17 +116,19 @@ async function execute(p: Order): Promise<void> {
     return;
   }
   if (Date.now() >= p.expiresAt) { transitionOrder(p.id, 'expired', { decidedBy: 'timeout' }); return; }
-  if (getState().paused) return;
+  // A pause holds the scheduler's own orders; the operator's still run.
+  const held = () => blockedByPause(p.requestedBy ?? 'system');
+  if (held()) return;
   // Only one account-changing order may be outstanding. This reserves exposure without
   // another independent accounting model for pending capital.
   if (pendingOrders().some(other => other.id !== p.id && ['executing','submitted','partial','unknown'].includes(other.status))) return;
   try {
-    const entry = p.kind === 'entry' ? await validateEntry(entrySignal(p), Number(p.params.qty), Number(p.params.maxQty ?? p.params.qty)) : null;
-    const exit = p.kind === 'exit' ? await validateExit(p.symbol, Number(p.params.qty)) : null;
-    const annotation = !entry && !exit ? await validateAnnotation(p.params as unknown as AnnotateInput) : null;
+    const entry = p.kind === 'entry' ? await validateEntry(entrySignal(p), Number(p.params.qty), Number(p.params.maxQty ?? p.params.qty), p.requestedBy ?? 'system') : null;
+    const exit = p.kind === 'exit' ? await validateExit(p.symbol, Number(p.params.qty), p.requestedBy ?? 'system') : null;
+    const annotation = !entry && !exit ? await validateAnnotation(p.params as unknown as AnnotateInput, p.requestedBy ?? 'system') : null;
     if (annotation && !annotation.ok) throw new Error(JSON.parse(annotation.response).error);
     // Re-check after network waits: a user may have paused or changed policy meanwhile.
-    if (getState().paused) return;
+    if (held()) return;
     if (p.policyHash !== getPolicyHash() || Date.now() >= p.expiresAt) {
       transitionOrder(p.id, 'expired', { result: { error: 'Order changed or expired during validation' } }); return;
     }

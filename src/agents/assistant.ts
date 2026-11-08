@@ -109,7 +109,7 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'set_trading_paused',
-    description: "Pause or resume trading. Paused: no queued order is sent and the trader does not run; orders already at the broker stay, and protection checks continue. Use only when the operator asked.",
+    description: "Pause or resume trading. Paused: the trader makes no scheduled reviews and none of its own orders are sent; what the operator asks for — your own orders and requests relayed to the trader — still runs. Orders already at the broker stay, and protection checks continue. Use only when the operator asked.",
     input_schema: { type: 'object', properties: { paused: { type: 'boolean' } }, required: ['paused'] },
   },
   {

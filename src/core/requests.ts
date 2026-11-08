@@ -42,7 +42,7 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     const command: AgentRequest = { id, role, actorId: parent?.actorId ?? actorId, parentId: parent?.requestId,
       text, createdAt: new Date().toISOString(), status: 'queued', orderIds: [], ...options };
     saveRecord('requests', id, command);
-    if (parent) recordToolResult({ ok: true, receipt: { requestId: id, status: getState().paused ? 'queued_paused' : 'queued' } });
+    if (parent) recordToolResult({ ok: true, receipt: { requestId: id, status: getState().paused && command.actorId === 'system' ? 'queued_paused' : 'queued' } });
     return command;
   });
 }

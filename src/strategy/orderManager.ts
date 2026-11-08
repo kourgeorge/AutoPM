@@ -18,6 +18,8 @@ import { getFundamentals, type Fundamentals } from '../collect/fundamentals';
 import { logger } from '../core/logger';
 import { isCryptoSymbol, sameSymbol } from '../core/symbols';
 import { getPositionSnapshot, getState, updateState, patchPositionSnapshot } from '../state/state';
+import { blockedByPause } from '../core/pause';
+import { agentContext } from '../core/agentContext';
 import { withStopLock } from './stopOrders';
 import { computeSignals, signalTally } from './signals';
 import { Bar, SignalResult } from '../core/types';
@@ -391,7 +393,7 @@ export type QueuedOrder = { status: import('../state/state').OrderStatus; orderI
  * is the same rule, same order, same message, whether the action ends up executed immediately
  * or held as an action for a human to decide.
  */
-export async function validateEntry(signal: SignalResult, qty: number, approvedMaxQty = qty): Promise<ValidatedEntry> {
+export async function validateEntry(signal: SignalResult, qty: number, approvedMaxQty = qty, actorId?: string): Promise<ValidatedEntry> {
   const { symbol, stopLoss, takeProfit, atr } = signal;
   let price = signal.price;
   const validationStarted = Date.now();
@@ -419,7 +421,7 @@ export async function validateEntry(signal: SignalResult, qty: number, approvedM
   }
 
   if ([stopLoss, takeProfit].some(level => Math.abs(level * 100 - Math.round(level * 100)) > 1e-8)) reject('price_precision', 'Stop and target prices must use whole cents');
-  if (getState().paused) reject('paused', 'Trading is paused');
+  if (blockedByPause(actorId)) reject('paused', 'Trading is paused');
   if (!getState().accountId) reject('account_unbound', 'Verify the brokerage account before trading');
   if (!getPolicy().strategy.watchlist.some(s => canonicalSymbol(s) === canonicalSymbol(symbol))) reject('outside_mandate', 'Symbol is outside the approved trading universe');
   if (isCryptoSymbol(symbol) || !Number.isInteger(qty)) reject('unsupported_asset', 'This worker supports long-only whole-share equities with broker protection');
@@ -683,12 +685,15 @@ export interface ValidatedExit {
   session?: Exclude<VenueSession, 'closed'>;
   /** Set only in extended hours. */
   limitPrice?: number;
+  /** Who asked for the exit; a pause stops only the scheduler's own. */
+  actorId?: string;
 }
 
 export type ExitedPosition = { status: 'submitted'; brokerOrderId: string; cancelled: string[]; qty: number; extendedHours?: boolean };
 
 
-export async function validateExit(symbol: string, qty?: number): Promise<ValidatedExit> {
+export async function validateExit(symbol: string, qty?: number, actorId?: string): Promise<ValidatedExit> {
+  actorId ??= agentContext.getStore()?.actorId;
   const positions = await broker.getPositions();
   // `sameSymbol`, for the same reason as `already_holding` above — with `===` a crypto
   // position could not be exited AT ALL: the venue reports `BTCUSD`, the caller says
@@ -711,7 +716,7 @@ export async function validateExit(symbol: string, qty?: number): Promise<Valida
       `qty must be a positive integer no greater than the ${pos.qty} held, got ${qty}`,
     );
   }
-  if (getState().paused) reject('paused', 'Trading is paused');
+  if (blockedByPause(actorId)) reject('paused', 'Trading is paused');
   if (!getState().accountId) reject('account_unbound', 'Verify the brokerage account before trading');
   if (!getPositionSnapshot(symbol)) reject('unmanaged_position', 'Adopt this position explicitly before the bot manages it');
   if (pos.qty <= 0) reject('unsupported_position', 'Short positions cannot be managed by this worker');
@@ -726,7 +731,7 @@ export async function validateExit(symbol: string, qty?: number): Promise<Valida
   // the venue's own qty and unrealized P&L — the numbers that make the decision — not the
   // model's account of them.
   const price = pos.marketValue != null && pos.qty !== 0 ? pos.marketValue / pos.qty : null;
-  return { pos, sellQty, price, pnl: pos.unrealizedPnL ?? null, session, ...(limitPrice != null ? { limitPrice } : {}) };
+  return { pos, sellQty, price, pnl: pos.unrealizedPnL ?? null, session, actorId, ...(limitPrice != null ? { limitPrice } : {}) };
 }
 
 function extendedSellLimit(print: number): number {
@@ -794,7 +799,7 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
     try {
       const heldNow = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
       if (!heldNow || heldNow.qty < sellQty) reject('position_changed', 'Position changed during cancellation; no sell submitted');
-      if (getState().paused) reject('paused_before_submission', 'Trading paused during cancellation; no sell was submitted');
+      if (blockedByPause(v.actorId)) reject('paused_before_submission', 'Trading paused during cancellation; no sell was submitted');
       if (v.session === 'extended') {
         // Re-priced from a print taken AFTER the cancellations, so the limit reflects the market
         // the sell actually meets. No fresh print means no sell; the executor reports the

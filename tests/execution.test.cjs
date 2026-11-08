@@ -546,3 +546,40 @@ test('removing a target keeps a stop that survives the cancel', async () => {
   assert.equal(placed, 0, 'no new stop is placed');
   assert.equal(state.getPositionSnapshot('IBM').takeProfitLevel, undefined);
 });
+
+test('a pause holds the scheduler\'s own orders but not the operator\'s', async () => {
+  const { agentContext } = require('../src/core/agentContext');
+  const traderTools = require('../src/tools/traderTools');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 'stop-1', takeProfitOrderId: 'tp-1' });
+  let book = [
+    { id: 'tp-1', groupId: 'tp-1', symbol: 'IBM', side: 'sell', type: 'limit', qty: 39, filled: 0, limitPrice: 281 },
+    { id: 'stop-1', groupId: 'tp-1', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 },
+  ];
+  broker.getOpenOrders = async () => book;
+  broker.cancelOrder = async () => { book = []; };
+  broker.placeOrder = async req => { placed++; book = [{ id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: req.qty, filled: 0, stopPrice: req.stopPrice }]; return { id: 'stop-2' }; };
+  state.updateState({ paused: true });
+
+  const scheduled = JSON.parse(await agentContext.run({ role: 'trader', requestId: 'cycle', actorId: 'system' },
+    () => traderTools.executeTraderTool('annotate_position', { symbol: 'IBM', stopLoss: 245, thesis: 'tighten on strength' })));
+  assert.equal(scheduled.ok, undefined); assert.match(scheduled.error, /paused/);
+
+  const asked = JSON.parse(await agentContext.run({ role: 'assistant', requestId: 'chat', actorId: 'alice' },
+    () => traderTools.executeTraderTool('annotate_position', { symbol: 'IBM', removeTarget: true, thesis: 'Operator asked to drop the target' })));
+  assert.equal(asked.ok, true, JSON.stringify(asked));
+  const order = actions.getOrder(asked.orderId);
+  if (order.status === 'pending') actions.decideOrder(order.id, 'approve', 'human', undefined, 'alice');
+  await executor.sweepOrders();
+  assert.equal(actions.getOrder(asked.orderId).status, 'executed');
+  assert.equal(state.getPositionSnapshot('IBM').takeProfitLevel, undefined);
+  assert.equal(state.getState().paused, true, 'the pause itself is left alone');
+});
+
+test('a scheduler order queued before a pause does not run during it', async () => {
+  const p = entry(true);
+  state.updateState({ paused: true });
+  await executor.sweepOrders();
+  assert.equal(actions.getOrder(p.id).status, 'approved');
+  assert.equal(placed, 0);
+});
