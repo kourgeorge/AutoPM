@@ -506,10 +506,16 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     await page.locator('#lesson-list .history-row-toggle').click();
     await page.screenshot({path:'/tmp/autotrade-review-tables.png',fullPage:true});
     await page.getByRole('tab',{name:'Live'}).click();
-    await page.locator('#message-text').fill('What is the request status?');
+    // Enough history that the conversation has to scroll, and a long message that wraps.
+    for(let i=0;i<12;i++) asAssistant(()=>ui.reply('Earlier reply '+i+'\n\nwith a second paragraph.'));
+    await expect(page.locator('#feed')).toContainText('Earlier reply 11');
+    await page.locator('#message-text').fill('What is the request status? '+'Please include every open request, '.repeat(8)+'and the end.');
     await page.locator('#message').getByRole('button',{name:'Send',exact:true}).click();
     await expect(page.locator('#thinking')).toBeVisible();
     await expect(page.locator('#feed .msg.operator').last()).toContainText('What is the request status?');
+    // The thinking bar appears under the feed after the send; the whole sent message must still show.
+    await page.waitForFunction(()=>{const f=document.querySelector('#feed'),m=[...f.querySelectorAll('.msg.operator')].pop();
+      return m.getBoundingClientRect().bottom<=f.getBoundingClientRect().bottom+1 && f.scrollHeight-f.scrollTop-f.clientHeight<2;},null,{timeout:3000});
     const input=page.getByRole('combobox',{name:'Message'}),menu=page.getByRole('listbox',{name:'Commands'});
     const queuedBefore=require('../src/core/requests').listRequests().length;
     await input.fill('/');
