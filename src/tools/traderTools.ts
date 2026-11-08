@@ -147,17 +147,18 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'annotate_position',
-    description: "Queue a stop/target adjustment for an already managed holding. Human adoption is required for unmanaged holdings. Stops can only tighten upward; targets can only move closer. The original entry thesis is preserved; this management rationale and broker confirmation are recorded separately.",
+    description: "Queue a stop/target adjustment for an already managed holding. Human adoption is required for unmanaged holdings. Stops can only tighten upward; targets can only move closer, or be removed with removeTarget when the operator asks. The original entry thesis is preserved; this management rationale and broker confirmation are recorded separately.",
     input_schema: {
       type: 'object',
       properties: {
         symbol:       { type: 'string', description: 'Ticker exactly as it appears in the portfolio.' },
         stopLoss:     { type: 'number', description: 'Absolute stop-loss price. Must be below the CURRENT price — an inherited position may be underwater, in which case a sane stop sits above its original entry.' },
         takeProfit:   { type: 'number', description: 'Absolute take-profit price. Must be above the current price.' },
+        removeTarget: { type: 'boolean', description: 'Cancel the take-profit order and keep only the stop. Only when the operator asked for it. stopLoss may be omitted to keep the recorded stop.' },
         entryPrice:   { type: 'number', description: 'Original entry price. Optional — defaults to the venue cost basis when this system has no record of the entry.' },
         thesis:       { type: 'string', description: 'One-sentence holding thesis: why you are still in, and what would invalidate it.' },
       },
-      required: ['symbol', 'stopLoss', 'thesis'],
+      required: ['symbol', 'thesis'],
     },
   },
   {
@@ -1038,17 +1039,23 @@ function journalRefusal(
  */
 async function toolAnnotatePosition(input: Record<string, unknown>): Promise<string> {
   const { symbol, stopLoss, takeProfit, thesis, entryPrice } = input as {
-    symbol: string; stopLoss: number; takeProfit?: number; thesis: string; entryPrice?: number;
+    symbol: string; stopLoss?: number; takeProfit?: number; thesis: string; entryPrice?: number;
   };
+  const removeTarget = input.removeTarget === true;
+  // Removing a target lets a winner run with no exit above the price: the operator's call, never
+  // the model's own — same rule as an operator_request exit.
+  if (removeTarget && (agentContext.getStore()?.actorId ?? 'system') === 'system') {
+    return JSON.stringify({ ok: false, error: 'removeTarget needs an instruction from the operator. A scheduled review may lower a target, not remove it.' });
+  }
 
-  const validated = await validateAnnotation({ symbol, stopLoss, takeProfit, thesis, entryPrice });
+  const validated = await validateAnnotation({ symbol, stopLoss, takeProfit, removeTarget, thesis, entryPrice });
   if (!validated.ok) return validated.response;
 
   // Automation level gates stop and target moves exactly like entry and exit — no exemption
   // for "protective" tightening. `stopLoss` is always present on this tool; `takeProfit` is
   // gated separately since a call may only be touching the stop.
   const stopManual = automationLevel('stop_adjust') === 'manual';
-  const targetManual = validated.takeProfit != null && automationLevel('target_adjust') === 'manual';
+  const targetManual = (validated.takeProfit != null || removeTarget) && automationLevel('target_adjust') === 'manual';
 
 
 
@@ -1059,13 +1066,13 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     automatic: !stopManual && !targetManual,
     symbol: validated.symbol,
     venue: config.venue,
-    params: { symbol, stopLoss, takeProfit: takeProfit ?? null, thesis, entryPrice: entryPrice ?? null },
+    params: { symbol, stopLoss: validated.stopLoss, takeProfit: takeProfit ?? null, ...(removeTarget ? { removeTarget: true } : {}), thesis, entryPrice: entryPrice ?? null },
     reason: thesis,
     timeoutMs: getPolicy().automation.timeoutMs,
   });
   return JSON.stringify({
     ok: true, pending: ['pending','approved','executing','submitted','partial','unknown'].includes(action.status), status: action.status, orderId: action.id,
-    symbol: validated.symbol, stopLoss: validated.stopLoss, takeProfit: validated.takeProfit,
+    symbol: validated.symbol, stopLoss: validated.stopLoss, takeProfit: validated.takeProfit, ...(removeTarget ? { removeTarget: true } : {}),
     note: `Adjustment queued as ${action.id}. ${action.automatic ? 'Automatic execution is enabled.' : 'Human approval is required.'} Broker confirmation will be reported separately.`,
   });
 }

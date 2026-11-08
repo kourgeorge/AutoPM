@@ -494,3 +494,55 @@ test('startup reports our own stop resting at a different price than recorded', 
   assert.equal(found.length, 1);
   assert.match(found[0], /AAPL.*\$116.*\$100/);
 });
+
+test('removing a target on Alpaca re-places the linked stop the cancel took with it', async () => {
+  const { agentContext } = require('../src/core/agentContext');
+  const traderTools = require('../src/tools/traderTools');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 'stop-1', takeProfitOrderId: 'tp-1' });
+  let book = [
+    { id: 'tp-1', groupId: 'tp-1', symbol: 'IBM', side: 'sell', type: 'limit', qty: 39, filled: 0, limitPrice: 281, status: 'accepted' },
+    { id: 'stop-1', groupId: 'tp-1', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84, status: 'held' },
+  ];
+  const cancelled = [];
+  broker.getOpenOrders = async () => book;
+  broker.cancelOrder = async id => { cancelled.push(id); book = []; };
+  broker.placeOrder = async req => { placed++; book = [{ id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: req.qty, filled: 0, stopPrice: req.stopPrice }]; return { id: 'stop-2' }; };
+
+  const scheduled = JSON.parse(await agentContext.run({ role: 'trader', requestId: 'cycle', actorId: 'system' },
+    () => traderTools.executeTraderTool('annotate_position', { symbol: 'IBM', removeTarget: true, thesis: 'let it run' })));
+  assert.equal(scheduled.ok, false, 'the scheduler cannot remove a target on its own');
+
+  const queued = JSON.parse(await agentContext.run({ role: 'assistant', requestId: 'chat', actorId: 'alice' },
+    () => traderTools.executeTraderTool('annotate_position', { symbol: 'IBM', removeTarget: true, thesis: 'Operator asked to drop the target; the stop stays' })));
+  assert.equal(queued.ok, true, JSON.stringify(queued));
+  assert.equal(queued.stopLoss, 241.84, 'the recorded stop is kept');
+  const order = actions.getOrder(queued.orderId);
+  if (order.status === 'pending') actions.decideOrder(order.id, 'approve', 'human', undefined, 'alice');
+  await executor.sweepOrders();
+
+  assert.deepEqual(cancelled, ['tp-1']);
+  assert.equal(actions.getOrder(queued.orderId).status, 'executed');
+  const snap = state.getPositionSnapshot('IBM');
+  assert.equal(snap.takeProfitLevel, undefined);
+  assert.equal(snap.takeProfitOrderId, undefined);
+  assert.equal(snap.stopOrderId, 'stop-2');
+  assert.equal(snap.stopLevel, 241.84);
+  assert.deepEqual(book.map(o => [o.type, o.stopPrice]), [['stop', 241.84]]);
+});
+
+test('removing a target keeps a stop that survives the cancel', async () => {
+  const { dropTakeProfit } = require('../src/strategy/stopOrders');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 's', takeProfitOrderId: 't' });
+  let book = [
+    { id: 't', groupId: 'g', symbol: 'IBM', side: 'sell', type: 'limit', qty: 39, filled: 0, limitPrice: 281 },
+    { id: 's', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 },
+  ];
+  broker.getOpenOrders = async () => book;
+  broker.cancelOrder = async id => { book = book.filter(o => o.id !== id); };
+  const r = await dropTakeProfit('IBM', 39, 241.84);
+  assert.deepEqual(r, { ok: true, brokerOrderId: 's' });
+  assert.equal(placed, 0, 'no new stop is placed');
+  assert.equal(state.getPositionSnapshot('IBM').takeProfitLevel, undefined);
+});
