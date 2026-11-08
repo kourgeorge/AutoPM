@@ -5,6 +5,7 @@ import { sameSymbol, isCryptoSymbol } from '../core/symbols';
 import { canTighten, canLowerTakeProfit, moveStopTo, moveOcoTo, dropTakeProfit } from './stopOrders';
 import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
 import { transaction } from '../core/storage';
+import { blockedByPause } from '../core/pause';
 
 export interface AnnotateInput {
   symbol: string;
@@ -37,8 +38,8 @@ export type AnnotationValidation =
  * `orderExecutor.ts` to re-run from scratch against whatever the position looks like by
  * the time a human decides, not against what it looked like when the action was created.
  */
-export async function validateAnnotation(input: AnnotateInput): Promise<AnnotationValidation> {
-  if (getState().paused) return { ok: false, response: JSON.stringify({ error: 'Trading is paused' }) };
+export async function validateAnnotation(input: AnnotateInput, actorId?: string): Promise<AnnotationValidation> {
+  if (blockedByPause(actorId)) return { ok: false, response: JSON.stringify({ error: 'Trading is paused' }) };
 
   const { symbol, thesis } = input;
   const removeTarget = input.removeTarget === true;

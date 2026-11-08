@@ -123,11 +123,11 @@ export function registerOperatorCommands(trader: Trader): void {
   ui.registerCommand({
     name: 'pause',
     api: true,
-    help: 'Pause queued trading orders and new trader cycles. Existing broker orders stay active.',
+    help: 'Pause the trader\'s own reviews and orders. Your own requests still run; existing broker orders stay active.',
     run: () => {
       if (trader.status.paused) return ui.reply('The trader is already paused.');
       trader.pause();
-      ui.reply('Trading paused and saved. Queued actions are blocked. Orders already accepted by the broker remain active; protection checks continue. Type /resume to continue.');
+      ui.reply('Trading paused and saved. The trader makes no scheduled reviews or orders of its own; what you ask for (in chat or to the trader) still runs. Orders already accepted by the broker remain active; protection checks continue. Type /resume to continue.');
     },
   });
 

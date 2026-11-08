@@ -493,7 +493,7 @@ function deskView(agent, s, approvals) {
     if (desk.startedAt) meta.push(`${desk.toolsSinceStart} tool call${desk.toolsSinceStart === 1 ? '' : 's'} · ${shortDuration(now - desk.startedAt)}`);
     if (agent === 'researcher' && s.researcher?.queued > 1) meta.push(`${s.researcher.queued - 1} more queued`);
   } else if (agent === 'trader') {
-    if (s.health?.paused) { state = 'idle'; doing = 'Paused · trading is off'; meta = ['Protection checks continue']; }
+    if (s.health?.paused) { state = 'idle'; doing = 'Paused · no reviews or orders of its own'; meta = ['Your requests still run', 'Protection checks continue']; }
     else if (state === 'sleeping') {
       const next = Date.parse(s.trader?.nextCheckAt), every = s.trader?.checkEveryMs, last = s.trader?.cycle?.lastMs;
       doing = Number.isFinite(next) ? (next > now ? `Resting · next check in ${roughDuration(next - now)}` : 'Resting · next check is due') : 'Resting until the next check or alert';
@@ -643,7 +643,7 @@ function renderStatus(s) {
   $('pause').textContent = s.health.paused ? 'Resume trading' : 'Pause trading';
   renderEngineVersion(s.engine);
   const issues = [...s.health.issues];
-  if (s.health.paused) issues.unshift('Trading is paused. Existing broker orders remain active, and protection checks continue.');
+  if (s.health.paused) issues.unshift('Trading is paused: the trader makes no reviews or orders of its own. Your requests still run, existing broker orders remain active, and protection checks continue.');
   if (s.health.dailyLossHalted) issues.push('The daily loss limit is latched. New entries are disabled for this session.');
   if (!s.engine) issues.push('The engine predates the version indicator, so it is running old code. Restart it (after npm run build if it runs from dist/).');
   else if (s.engine.behind) issues.push(`The engine is running ${s.engine.commits[0]?.hash}, but the folder is at ${s.engine.headNow}. Restart the engine${s.engine.build === 'dist' ? ' after npm run build' : ''} to run the new code.`);
