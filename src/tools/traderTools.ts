@@ -8,7 +8,7 @@ export { validateAnnotation, actAnnotation } from '../strategy/annotation';
 export type { AnnotateInput, AnnotationValidation } from '../strategy/annotation';
 import { ToolRegistry } from '../agents/toolRegistry';
 import { agentContext } from '../core/agentContext';
-import { listRequests, getRequest, operatorOrigin } from '../core/requests';
+import { listRequests, getRequest, operatorOrigin, isOperatorRequest } from '../core/requests';
 import { broker } from '../broker';
 import { BrokerRejection } from '../broker/errors';
 import {
@@ -376,11 +376,12 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'sleep',
-    description: "End this trader cycle. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again. It is refused once if a decision is still open this cycle: an entry plan or exit comparison you ran with no review recorded, a buy/reduce/exit review with no order sent, or — while the market is open and the account is below its investment target — one of the best-ranked scan candidates that fits the risk budget with neither an entry nor a recorded review. The refusal lists them.",
+    description: "End this trader cycle or request turn. Call it separately, after inspecting all earlier order results; remaining calls in the same batch will not execute. There is no timer to set: the heartbeat and urgent events wake you again. It is refused once if a decision is still open this cycle: an entry plan or exit comparison you ran with no review recorded, a buy/reduce/exit review with no order sent, or — while the market is open and the account is below its investment target — one of the best-ranked scan candidates that fits the risk budget with neither an entry nor a recorded review. The refusal lists them.",
     input_schema: {
       type: 'object',
       properties: {
         reason: { type: 'string', description: 'Why the cycle is complete.' },
+        answer: { type: 'string', description: "Required when this turn is an OPERATOR REQUEST: your reply to the operator, in plain words. Answer their question, or say what you did about their request — or, if you could not do it, what blocked it (rule, order id, missing tool) and what they can do instead. This is the reply they see in the chat; your other tool calls are not." },
       },
       required: ['reason'],
     },
@@ -400,7 +401,7 @@ async function dispatchTraderTool(
 ): Promise<string> {
   try {
     switch (name) {
-      case 'sleep': return toolSleep();
+      case 'sleep': return toolSleep(input);
       case 'get_lessons': {
         const rows = listLessons(100, input.includeRetired !== true, { symbol: input.symbol as string | undefined, category: input.category as string | undefined });
         return JSON.stringify({ count: rows.length, lessons: rows.map(l => ({ id: l.id, category: l.category ?? 'behaviour', symbol: l.symbol ?? null, text: l.text, at: l.at, active: l.active,
@@ -1218,16 +1219,23 @@ function resolveAckId(id: string): { id: string; symbol: string | null; correcte
  * it: the reason should be the trader's, not a placeholder. A second sleep always ends the cycle,
  * and the cycle end journals whatever is still open in the system's own words.
  */
-function toolSleep(): string {
+function toolSleep(input: Record<string, unknown> = {}): string {
   const requestId = agentContext.getStore()?.requestId;
   if (requestId && !sleepRefusedBefore(requestId)) {
     const open = unresolvedDecisions(requestId);
-    if (open.length) return JSON.stringify({ ok: false,
-      error: 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, send the order, or — for a candidate you cannot judge yet — request_research(symbol) for a full review. For an under-invested account with no scan, run get_watchlist_scan. Calling sleep again ends the cycle anyway and journals these as "no reason recorded".',
-      open: open.map(u => ({ symbol: u.symbol, problem: u.problem })) });
+    const unanswered = operatorAsked(requestId) && !String(input.answer ?? '').trim();
+    if (open.length || unanswered) return JSON.stringify({ ok: false,
+      error: [
+        unanswered ? 'The operator asked you something this cycle and is waiting for a reply. Call sleep again with `answer`: what you did about their request, or what blocked it and what they can do instead.' : '',
+        open.length ? 'Decisions are still open. For each one, record_candidate_review / record_position_review with your reason, send the order, or — for a candidate you cannot judge yet — request_research(symbol) for a full review. For an under-invested account with no scan, run get_watchlist_scan.' : '',
+        'Calling sleep again ends the cycle anyway' + (open.length ? ' and journals open decisions as "no reason recorded".' : '.'),
+      ].filter(Boolean).join(' '),
+      ...(open.length ? { open: open.map(u => ({ symbol: u.symbol, problem: u.problem })) } : {}) });
   }
   return JSON.stringify({ ok: true });
 }
+
+function operatorAsked(requestId: string): boolean { return isOperatorRequest(getRequest(requestId)); }
 
 function toolAckEvent(input: Record<string, unknown>): string {
   const { id: givenId, disposition, note, orderId } = input as {

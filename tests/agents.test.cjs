@@ -261,6 +261,48 @@ test('a finished child request is an event for a trader parent and a chat reply 
   } finally { stop(); }
 });
 
+test('an operator request is a direct turn: short briefing, its own answer in the chat, urgent events reviewed after', async () => {
+  const chat = commands.enqueueRequest('assistant', 'protect the ibm brackets');
+  const sent = agentContext.run({ role: 'assistant', requestId: chat.id, actorId: 'alice', toolCallId: 'relay-ibm' }, () => commands.enqueueRequest('trader', 'Protect IBM'));
+  events.publishDiscrete('position_drop', { symbol: 'IBM', cooldownKey: 'audit:ibm-drop', severity: 'urgent', headline: 'IBM fell', evidence: {} }, policy.getPolicy());
+  const answer = 'I could not protect IBM: exit order ad3 is unknown and blocks new stops for IBM. Mark it failed on the Orders page and the stop is re-armed.';
+  let round = 0, briefing = '';
+  const trader = new Trader();
+  trader.provider = { chat: async ({ messages }) => {
+    briefing ||= messages[0].content[0].text;
+    return round++ === 0 ? toolResponse([['sleep', { reason: 'done' }]]) : toolResponse([['sleep', { reason: 'done', answer }]]);
+  } };
+  await trader.runCycle();
+  assert.match(briefing, /OPERATOR REQUEST/);
+  assert.match(briefing, /Protect IBM/);
+  assert.match(briefing, /operator wrote: "protect the ibm brackets"/, 'the operator\'s own words travel with the relay');
+  assert.doesNotMatch(briefing, /=== MACHINE EVENTS|=== RECENT DECISIONS|PORTFOLIO CONTEXT/, 'no full-cycle briefing');
+  const first = JSON.parse(storage.readRecord('tool-calls', `${sent.id}:1:0`).result);
+  assert.equal(first.ok, false, 'a sleep with no answer is refused while the operator waits');
+  assert.match(first.error, /waiting for a reply/);
+  const done = storage.readRecord('requests', sent.id);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.result, answer);
+  assert.deepEqual(done.eventIds, [], 'a direct turn is not shown the event queue');
+  assert.ok(storage.readActivity(0, 1000).some(e => e.kind === 'reply' && e.text === 'The trader request you sent finished: ' + answer), 'the answer reaches the chat');
+  assert.equal(trader.wakePending, true, 'the urgent event gets a scheduled review straight after');
+
+  const scheduled = commands.enqueueRequest('trader', 'Review', 'system');
+  const ok = JSON.parse(await asTool('trader', scheduled.id, 'sleep-sched', 'sleep', { reason: 'nothing to do' }, () => traderTools.executeTraderTool('sleep', { reason: 'nothing to do' })));
+  assert.equal(ok.ok, true, 'no operator, no answer needed');
+});
+
+test('a direct question can be answered in plain text, with no tool call', async () => {
+  const sent = commands.enqueueRequest('trader', 'Why are you still holding COST?', 'alice');
+  const trader = new Trader();
+  trader.provider = { chat: async () => ({ stopReason: 'end_turn', content: [{ type: 'text', text: 'COST is above its stop and the trend holds; I keep it.' }], usage: { inputTokens: 1, outputTokens: 1 } }) };
+  await trader.runCycle();
+  const done = storage.readRecord('requests', sent.id);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.result, 'COST is above its stop and the trend holds; I keep it.');
+  assert.equal(trader.wakePending, false, 'nothing urgent, no extra review');
+});
+
 test('a repeated request reuses its action, and each status change adds a step to the action history', () => {
   const context = { role: 'trader', requestId: 'dedup-request', actorId: 'alice' };
   const make = () => agentContext.run(context, () => actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', reason: 'audit', timeoutMs: 60000, params: { qty: 1 } }));

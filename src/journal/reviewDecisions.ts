@@ -1,4 +1,5 @@
 import { listRecords } from '../core/storage';
+import { getRequest, isOperatorRequest } from '../core/requests';
 import { agentContext } from '../core/agentContext';
 import { sameSymbol } from '../core/symbols';
 import { decision, readDecisions, recordDecision } from './journal';
@@ -128,7 +129,8 @@ export function unresolvedDecisions(requestId: string): Unresolved[] {
       scanned.set(row.symbol!.toUpperCase(), row);
       if (![...symbols.keys()].some(s => sameSymbol(s, row.symbol!))) symbols.set(row.symbol!.toUpperCase(), 'get_watchlist_scan');
     }
-    if (gap.belowFloor && !tradersCalls(requestId, ['get_watchlist_scan']).length)
+    // An operator's request is answered on its own terms; the scheduled review owns the scan.
+    if (gap.belowFloor && !isOperatorRequest(getRequest(requestId)) && !tradersCalls(requestId, ['get_watchlist_scan']).length)
       out.push({ symbol: null, kind: 'skip', fields: {},
         problem: `the account is under-invested (${describeGap(gap)}) and you did not scan the watchlist this cycle` });
   }
@@ -157,6 +159,13 @@ export function unresolvedDecisions(requestId: string): Unresolved[] {
   return out;
 }
 
+/** The sleep that ended the request: its `answer` (the reply to the operator) and its `reason`. */
+export function endingSleep(requestId: string): { answer?: string; reason?: string } {
+  const ended = tradersCalls(requestId, ['sleep']).filter(c => parse<{ ok?: boolean }>(c.value.result)?.ok === true).pop();
+  const input = (ended?.value as { input?: { answer?: unknown; reason?: unknown } } | undefined)?.input;
+  const text = (v: unknown) => String(v ?? '').trim() || undefined;
+  return { answer: text(input?.answer), reason: text(input?.reason) };
+}
 /** True when the trader already had one sleep refused in this request. */
 export function sleepRefusedBefore(requestId: string): boolean {
   return tradersCalls(requestId, ['sleep']).some(c => parse<{ ok?: boolean }>(c.value.result)?.ok === false);
