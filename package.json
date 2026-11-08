@@ -29,7 +29,8 @@
     "start:engine+tui": "node dist/launch.js tui",
     "start:engine+web": "node dist/launch.js web",
     "dev:engine+tui": "node -r ts-node/register src/launch.ts tui",
-    "dev:engine+web": "node -r ts-node/register src/launch.ts web"
+    "dev:engine+web": "node -r ts-node/register src/launch.ts web",
+    "learn": "ts-node src/scripts/learn.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

@@ -4,6 +4,7 @@ import { attachUI } from './core/logger';
 import { Trader } from './agents/trader';
 import { AssistantAgent } from './agents/assistant';
 import { Researcher } from './agents/researcher';
+import { startLearning, stopLearning } from './learning/loop';
 import { logger } from './core/logger';
 import { FeatureScheduler } from './features/scheduler';
 import { createLiveRouter } from './features/router';
@@ -159,6 +160,7 @@ async function boot(): Promise<void> {
   researcher.start();
   scheduler.start();
   execution.start();
+  startLearning();
   await trader.start();
 }
 export async function run(): Promise<void> {
@@ -181,6 +183,7 @@ async function stopResources(signal: string): Promise<void> {
   logger.info('Shutting down: ' + signal);
   scheduler.stop();
   clearInterval(venueClockTimer);
+  stopLearning();
   const agentsStopped = Promise.all([trader.stop(), assistant.stop(), researcher.stop()]);
   // Stop intake, drain the sole mutation executor, then close the durable store.
   const deadline = setTimeout(() => process.exit(1), 25_000);

@@ -40,7 +40,7 @@ function attempt(fn) { return async event => { event?.preventDefault(); try { aw
 // ── Start-up and live updates ──────────────────────────────────────────────
 async function start() {
   started = true;
-  showView(['activity','broker','strategy','performance','usage','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
+  showView(['activity','broker','strategy','performance','signals','usage','review'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'live', false);
   $('suggestions').replaceChildren(...suggestions.map(([label, question]) => {
     const chip = text('button', label, 'chip'); chip.type = 'button'; chip.title = question;
     chip.onclick = attempt(() => sendMessage(question));
@@ -97,6 +97,7 @@ function showView(name, load = true) {
   if (load && (name === 'review' || name === 'performance')) refresh().catch(e => notice(e.message));
   if (load && name === 'activity') loadHistory();
   if (load && name === 'usage') loadUsage().catch(e => notice(e.message));
+  if (load && name === 'signals') loadLearning().catch(e => notice(e.message));
   if (load && name === 'broker') { loadBrokerBook().catch(e => notice(e.message)); loadHistory('fills'); }
 }
 for (const tab of document.querySelectorAll('[role=tab]')) {
@@ -446,7 +447,7 @@ const toolPhrases = {
   get_stock_bars:s=>`Looking at the ${s||'price'} chart`, get_stock_snapshot:s=>`Checking the ${s||''} price`.replace('  ',' '), get_stock_latest_quote:s=>`Checking the ${s||''} quote`.replace('  ',' '),
   get_price_stats:s=>`Measuring ${s||'price'} moves`, get_intraday_volume:s=>`Checking ${s||'today’s'} volume`, get_most_active_stocks:'Looking at the most active stocks',
   get_market_movers:'Looking at today’s biggest movers', get_portfolio_history:'Reading the equity history', get_journal:'Reading past decisions', get_pnl:'Adding up realized and open profit',
-  get_scorecard:'Reviewing the track record', get_benchmark:'Comparing with the market', get_lessons:'Reading saved lessons', write_lesson:'Writing down a lesson',
+  get_scorecard:'Reviewing the track record', get_signal_scorecard:'Checking which signals work', get_benchmark:'Comparing with the market', get_lessons:'Reading saved lessons', write_lesson:'Writing down a lesson',
   get_pending_events:'Reading new alerts', ack_event:'Marking an alert as handled', get_position_review:s=>`Reviewing the ${s||''} holding`.replace('  ',' '),
   get_thesis_status:s=>`Checking the ${s||''} investment case`.replace('  ',' '), compare_position_actions:s=>`Weighing keep, trim or sell for ${s||'a holding'}`,
   get_decision_followup:'Following up on an earlier decision', get_evidence:'Reading saved evidence', get_research_updates:s=>s?`Reading the ${s} research`:'Reading research results',
@@ -606,6 +607,7 @@ async function refresh() {
     if (performance) { renderScorecard(sc); loadBenchmark().catch(e => notice(e.message)); }
     if (view === 'activity') await loadHistory();
     if (view === 'usage') await loadUsage();
+    if (view === 'signals') await loadLearning();
     if (view === 'broker') { await loadBrokerBook(); await loadHistory('fills'); }
   } finally {
     refreshing = false;
@@ -1428,6 +1430,34 @@ async function loadUsageDay(day) {
     tokenCell(r.inputTokens + r.outputTokens), rowSummary(r.task || '—'), r.status || '—', r.requestId ? uiButton('Open', () => openAgentTask(r.requestId)) : '—']);
 }
 $('usage-days').onchange = attempt(loadUsage);
+// ── Signals (learning layer) ────────────────────────────────────────────────
+const icCell = p => p && p.meanIC != null ? `${p.meanIC >= 0 ? '+' : ''}${p.meanIC.toFixed(3)} (${p.tStat == null ? '—' : p.tStat.toFixed(1)})` : '—';
+const signalStatus = { testing: 'Waiting for test', shadow: 'Live trial (not counting)', active: 'Counting', rejected: 'Rejected', retired: 'Retired' };
+async function loadLearning() {
+  const r = await api('learning');
+  $('learning-enabled').checked = r.settings.enabled; $('learning-ideas').checked = r.settings.proposeIdeas;
+  if (!r.measured) { $('learning-how').textContent = r.note; return; }
+  $('learning-how').textContent = r.howToRead;
+  const counts = s => r.learned.filter(c => c.status === s).length;
+  const cells = [['Last measured', new Date(r.at).toLocaleString()], ['Ideas tried', String(r.learned.length)], ['In live trial', String(counts('shadow'))], ['Counting', String(counts('active'))]];
+  $('learning-summary').replaceChildren(...cells.map(([label, value]) => { const cell = text('div', ''); cell.append(text('span', label), text('strong', value)); return cell; }));
+  $('learning-changes').replaceChildren(...(r.recentChanges.length ? r.recentChanges : ['No changes on the last run.']).map(c => text('li', c)));
+  rows('learning-builtins', r.builtIns, s => [s.name, Number(s.weight).toFixed(2), icCell(s.olderYears), icCell(s.lastTwoYears), icCell(s.lastYear).replace(/ \(.*\)/, ''),
+    s.lastTwoYears.hitRate == null ? '—' : `${Math.round(s.lastTwoYears.hitRate * 100)}% of days`,
+    `${s.lastTwoYears.upMarketIC ?? '—'} / ${s.lastTwoYears.downMarketIC ?? '—'}`]);
+  rows('learning-learned', [...r.learned].reverse(), c => [c.name, signalStatus[c.status] || c.status, rowSummary(c.reason), icCell(c.olderYears), icCell(c.lastTwoYears),
+    c.live && c.live.days ? `${icCell(c.live).replace(/ \(.*\)/, '')} (${c.live.days})` : '—', rowSummary(c.idea), uiButton('View', () => showSignalCode(c.id))]);
+}
+async function showSignalCode(id) {
+  const c = await api('learning/code?id=' + encodeURIComponent(id));
+  alert(`${c.name}\n\n${c.code}`);
+}
+async function startLearningRun(propose) { await api('learning/run', { propose }); notice('Measuring signals. Results appear here in under a minute.'); setTimeout(() => loadLearning().catch(() => {}), 15000); setTimeout(() => loadLearning().catch(() => {}), 45000); }
+$('learning-run').onclick = attempt(() => startLearningRun(false));
+$('learning-propose').onclick = attempt(() => startLearningRun(true));
+$('learning-enabled').onchange = attempt(() => api('learning/settings', { enabled: $('learning-enabled').checked }));
+$('learning-ideas').onchange = attempt(() => api('learning/settings', { proposeIdeas: $('learning-ideas').checked }));
+
 let allowedSymbols = [];
 const symbolInput = $('symbol-input');
 function symbolFeedback(message = '', invalid = false) {
