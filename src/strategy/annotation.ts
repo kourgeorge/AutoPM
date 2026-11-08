@@ -174,6 +174,13 @@ export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true 
     }
     if (target != null) {
       const result = await moveOcoTo(v.symbol, v.heldQty, v.stopLoss, target);
+      if (!result.ok && result.settled) {
+        // Known outcome: a lone stop rests and no target. Record exactly that, so the app and the
+        // broker agree, and report it as a plain failure — not an unknown that pauses trading.
+        upsertPositionSnapshot(v.symbol, { takeProfitLevel: undefined, takeProfitOrderId: undefined });
+        recordDecisionOutcome(id, { executed: false, protectionStatus: 'confirmed', venueStopMissing: null, orderStatus: 'failed' });
+        return JSON.stringify({ ok: false, failed: true, decisionId: id, error: result.reason });
+      }
       recordDecisionOutcome(id, { executed: result.ok, protectionStatus: result.ok ? 'confirmed' : 'unknown',
         venueStopId: result.ok ? result.stopOrderId : null, venueStopMissing: result.ok ? null : result.reason,
         orderStatus: result.ok ? 'executed' : 'unknown' });

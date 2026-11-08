@@ -155,6 +155,7 @@ async function execute(p: Order): Promise<void> {
       await reconcile(getOrder(p.id)!);
     } else if (annotation?.ok) {
       const result = JSON.parse(await actAnnotation(annotation, p));
+      if (result.failed) { transitionOrder(p.id, 'failed', { result: { error: result.error } }); return; }
       const unconfirmed = result.error || result.venueOco?.stopOrderId === null || result.venueStop?.brokerOrderId === null;
       transitionOrder(p.id, unconfirmed ? 'unknown' : 'executed', { result: unconfirmed ? { error: result.error ?? 'Protection update is not confirmed at the broker' } : {} });
     }
