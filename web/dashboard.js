@@ -1187,75 +1187,18 @@ function renderRequests(list) {
     }));
 }
 // ── Broker page ────────────────────────────────────────────────────────────
-const brokerRoleLabels = { stop:'Protective stop', target:'Profit target', entry:'Agent entry', exit:'Agent exit', protection:'Agent protection', external:'Placed outside this app' };
 const brokerPrice = n => n == null ? '—' : money(n);
 async function loadBrokerBook() {
   const book = await api('broker-book');
   $('broker-book-updated').textContent = book.lastTickAt ? `Checked ${clock(book.lastTickAt)} · ${book.broker} ${book.venue}` : 'Waiting for account data';
-  if (!book.available) {
-    $('broker-book-status').textContent = 'Broker orders could not be read in the latest account check. Nothing below is known to be current.';
-    $('broker-book-summary').replaceChildren(); $('broker-book-rows').replaceChildren(); $('broker-coverage-rows').replaceChildren();
-    reviewSignatures['broker-book-rows'] = reviewSignatures['broker-coverage-rows'] = null;
-    return;
-  }
-  const sum = book.summary;
-  $('broker-book-status').textContent = [!book.positionsAvailable && 'Holdings could not be read, so orders are not matched to positions.',
-    sum.unprotected.length && `No full stop at the broker: ${sum.unprotected.join(', ')}.`,
-    sum.mismatches.length && `Broker level differs from the saved level: ${sum.mismatches.join(', ')}.`].filter(Boolean).join(' ');
-  $('broker-book-summary').replaceChildren(...[['Resting orders',sum.count],['Placed by this app',sum.byThisSystem],['Placed elsewhere',sum.external],['Without a holding',sum.withoutPosition]]
-    .map(([label,value]) => { const d = text('div',''); d.append(text('span',label),text('strong',String(value))); return d; }));
-  const signature = JSON.stringify(book.orders);
-  if (reviewSignatures['broker-book-rows'] !== signature) {
-    $('broker-book-rows').replaceChildren(...book.orders.flatMap(o => expandableRows(`broker:${o.id}`, `Details for ${o.symbol} ${o.side} ${o.type} order`,
-      [o.symbol, text('span',brokerRoleLabels[o.role],'badge '+(o.role==='external'?'':'executed')), `${o.side} / ${o.rawType}`, String(o.remaining),
-       brokerPrice(o.triggerPrice), o.currentPrice == null ? '—' : money(o.currentPrice) + (o.priceStale ? ' (stale)' : ''),
-       o.distancePct == null ? '—' : `${Math.abs(o.distancePct).toFixed(2)}% ${o.distancePct > 0 ? 'below' : 'above'}`,
-       o.resultIfFilled == null ? '—' : signedMoney(o.resultIfFilled), o.status], () => brokerOrderDetail(o))));
-    if (!book.orders.length) { const row = text('tr',''), cell = text('td','No orders are resting at the broker.','table-empty'); cell.colSpan = 11; row.append(cell); $('broker-book-rows').append(row); }
-    reviewSignatures['broker-book-rows'] = signature;
-  }
-  rows('broker-coverage-rows', book.coverage, c => [c.symbol, String(c.qty), c.managed ? 'Yes' : 'No', String(c.stopShares), brokerPrice(c.firstStop),
-    `${brokerPrice(c.recordedStop)} / ${brokerPrice(c.recordedTarget)}`,
-    text('span', {protected:'Protected', partial:'Partly protected', none:'No broker stop'}[c.status], 'badge '+(c.status==='protected'?'executed':'failed'))]);
-  if (!book.coverage.length) { const row = text('tr',''), cell = text('td',book.positionsAvailable ? 'No holdings.' : 'Holdings unavailable.','table-empty'); cell.colSpan = 7; row.append(cell); $('broker-coverage-rows').append(row); }
+  $('broker-book-status').textContent = book.available ? '' : 'Broker orders could not be read in the latest account check.';
+  const list = book.available ? book.orders : [];
+  rows('broker-book-rows', list, o => [o.symbol, o.side, o.rawType, String(o.remaining),
+    [o.stopPrice != null && `stop ${brokerPrice(o.stopPrice)}`, o.limitPrice != null && `limit ${brokerPrice(o.limitPrice)}`,
+     o.trailPercent != null && `trail ${o.trailPercent}%`, o.trailAmount != null && `trail ${money(o.trailAmount)}`].filter(Boolean).join(' · ') || 'market',
+    o.status]);
+  if (!list.length) { const row = text('tr',''), cell = text('td', book.available ? 'No orders are resting at the broker.' : '—','table-empty'); cell.colSpan = 6; row.append(cell); $('broker-book-rows').append(row); }
 }
-function brokerOrderDetail(o) {
-  const detail = text('div','','history-detail');
-  detail.append(text('h3','At the broker'), historyFacts([
-    ['Order ID', o.id], ['Client order ID', o.clientOrderId || '—'], ['Type', `${o.side} ${o.rawType}`],
-    ['Quantity', `${o.qty} (filled ${o.filled}, ${o.remaining} left)`], ['Limit price', brokerPrice(o.limitPrice)], ['Stop price', brokerPrice(o.stopPrice)],
-    ...(o.trailPercent != null ? [['Trail', o.trailPercent + '%']] : []), ...(o.trailAmount != null ? [['Trail', money(o.trailAmount)]] : []),
-    ['Time in force', o.tif || '—'], ['Broker status', o.status + (o.status === 'held' && o.pairedWith ? ' — normal for the stop half of a stop/target pair; it triggers at its stop price' : '')],
-    ['Linked order', o.pairedWith ? `${o.pairedWith.type} at ${brokerPrice(o.pairedWith.price)} — one cancels the other (${o.pairedWith.id})` : 'None']]));
-  detail.append(text('h3','What this app knows'));
-  const facts = [['Purpose', brokerRoleLabels[o.role]]];
-  if (o.recordedLevel != null) facts.push(['Saved level', brokerPrice(o.recordedLevel) + (o.levelMismatch ? ' — differs from the broker; the broker level is the one that fires' : '')]);
-  if (o.position) facts.push(['Holding', `${o.position.qty} shares, bought at ${brokerPrice(o.position.entryPrice)}, now ${brokerPrice(o.position.price)}${o.position.pnlPct == null ? '' : ' (' + signedPct(o.position.pnlPct) + ')'}`],
-    ['Covers the whole holding', o.position.covers ? 'Yes' : 'No']);
-  else facts.push(['Holding', 'No holding in this symbol']);
-  if (o.notional != null) facts.push(['Value at trigger', money(o.notional)]);
-  if (o.resultIfFilled != null) facts.push(['Gain or loss if filled', signedMoney(o.resultIfFilled) + ' vs. purchase price, before fees']);
-  if (o.protectionRequest) facts.push(['Protection request', `${o.protectionRequest.status} · ${historyDate(o.protectionRequest.at)}${o.protectionRequest.error ? ' · ' + o.protectionRequest.error : ''}`]);
-  detail.append(historyFacts(facts));
-  if (o.agentOrder) {
-    detail.append(text('h3','Agent order'), historyFacts([['Kind', o.agentOrder.kind], ['Status', o.agentOrder.status], ['Created', historyDate(o.agentOrder.createdAt)],
-      ['Approved by', o.agentOrder.automatic ? 'Automatic' : o.agentOrder.decidedBy || 'Not decided']]), text('p', o.agentOrder.reason));
-    const links = text('div','','record-links'); links.append(text('span','Order'), historyReference(o.agentOrder.id)); detail.append(links);
-  }
-  if (o.entryDecision) {
-    detail.append(text('h3','Why the position was opened'), text('p', o.entryDecision.rationale));
-    if (o.entryDecision.invalidation) detail.append(text('p', 'Invalidation: ' + o.entryDecision.invalidation, 'review-meta'));
-    detail.append(text('p', `Planned stop ${brokerPrice(o.entryDecision.intendedStop)} · planned target ${brokerPrice(o.entryDecision.intendedTarget)} · ${historyDate(o.entryDecision.at)}`, 'review-meta'));
-    const links = text('div','','record-links'); links.append(text('span','Decision'), historyReference(o.entryDecision.id)); detail.append(links);
-  }
-  if (o.managementDecision) {
-    detail.append(text('h3','Latest management decision'), text('p', o.managementDecision.rationale));
-    const links = text('div','','record-links'); links.append(text('span','Decision'), historyReference(o.managementDecision.id)); detail.append(links);
-  }
-  if (o.role === 'external') detail.append(text('p','This order was not placed by this app. The agent can see it but does not manage it.','review-warning'));
-  return detail;
-}
-$('broker-book-reconcile').onclick=attempt(async()=>{await api('reconcile',{});notice('Broker outcomes checked.',true);await refresh();});
 const lessonKind = lesson => ({stock:'About a stock',behaviour:'Own behaviour',mistake:'Mistake'})[lesson.category || 'behaviour'];
 function renderLessons(list) {
   // Keep unsaved edits intact even if focus moves away during a background refresh.

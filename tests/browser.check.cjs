@@ -395,14 +395,10 @@ test('dashboard without login: approvals, saved strategy, pause and mobile layou
     recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,positions:{MSFT:{symbol:'MSFT',qty:3,entryPrice:410,price:415,stale:false,stopLevel:null,pnlPct:1.2}},
       orders:[{id:'broker-stop-1',symbol:'MSFT',side:'sell',qty:3,filled:0,type:'stop',rawType:'stop',stopPrice:400,tif:'gtc',status:'new'}],watchlist:{AAPL:{symbol:'AAPL',price:100}},account:{equity:100000,cash:98000},portfolio:{},session:'open'});
     await page.getByRole('tab',{name:'Broker',exact:true}).click();
-    const brokerRow=page.locator('#broker-book-rows .history-row');
+    const brokerRow=page.locator('#broker-book-rows tr');
     await expect(brokerRow).toHaveCount(1);
-    await expect(brokerRow).toContainText('Placed outside this app');
-    await expect(brokerRow).toContainText('−$30.00'.replace('−','-'));
-    await expect(page.locator('#broker-coverage-rows')).toContainText('Protected');
-    await brokerRow.locator('.history-row-toggle').click();
-    await expect(page.locator('#broker-book-rows .history-expanded')).toContainText('broker-stop-1');
-    await expect(page.locator('#broker-book-rows .history-expanded')).toContainText('not placed by this app');
+    await expect(brokerRow).toContainText('MSFT');
+    await expect(brokerRow).toContainText('stop $400.00');
     await expect(page.locator('#broker-fills #history-fill-rows')).toContainText('Not reported');
     await expect(page.locator('#broker-recover')).toContainText('Recover an interrupted protection request');
     await expect(page.locator('#view-live #broker-panel')).toHaveCount(0);
