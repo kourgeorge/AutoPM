@@ -19,6 +19,9 @@ const { compileSignal, checkCode } = from('learning/sandbox');
 const evaluate = from('learning/evaluate');
 const { signalTally } = from('strategy/signals');
 const storage = from('core/storage');
+const { SandboxedSignal } = from('signals/sandboxed');
+const policy = () => from('policy/load').getPolicy();
+const sandboxed = (name, code) => [new SandboxedSignal('sig-' + name, name, code, 'test signal')];
 
 // A seeded random walk per stock, with a known "next week" driver hidden in the volume column.
 function rng(seed) { return () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }; }
@@ -65,11 +68,11 @@ test('saved weights change how much each signal counts', () => {
 
 test('a signal that knows next week scores a high IC; noise scores about zero', () => {
   const u = evaluate.buildUniverse(market());
-  const knows = evaluate.report(u, evaluate.scoreCandidate(u, 'knows', compileSignal('function signal(o,h,l,c,v){ return (v[v.length-1] - 1e6) / 1e6 }')), 0, '2099-01-01');
+  const knows = evaluate.report(u, evaluate.scoreSignals(u, sandboxed('knows', 'function signal(o,h,l,c,v){ return (v[v.length-1] - 1e6) / 1e6 }'), policy()), 0, '2099-01-01');
   assert.ok(knows.periods.learn.meanIC > 0.5, JSON.stringify(knows.periods.learn));
   assert.ok(knows.periods.learn.tStat > 10);
   // Deterministic "noise": a hash of the last close, unrelated to the future.
-  const noise = evaluate.report(u, evaluate.scoreCandidate(u, 'noise', compileSignal('function signal(o,h,l,c){ var x = Math.sin(c[c.length-1] * 12345.678) * 1000; return x - Math.floor(x) - 0.5 }')), 0, '2099-01-01');
+  const noise = evaluate.report(u, evaluate.scoreSignals(u, sandboxed('noise', 'function signal(o,h,l,c){ var x = Math.sin(c[c.length-1] * 12345.678) * 1000; return x - Math.floor(x) - 0.5 }'), policy()), 0, '2099-01-01');
   assert.ok(Math.abs(noise.periods.learn.meanIC) < 0.05, JSON.stringify(noise.periods.learn));
   assert.ok(Math.abs(noise.periods.learn.tStat) < 3, JSON.stringify(noise.periods.learn));
   assert.ok(Math.abs(noise.periods.exam.meanIC) < 0.05, JSON.stringify(noise.periods.exam));
@@ -78,7 +81,7 @@ test('a signal that knows next week scores a high IC; noise scores about zero', 
 test('signals only ever see bars up to the day being scored', () => {
   const u = evaluate.buildUniverse(market(12, 400));
   // Returns the window length; a window longer than 60 or reaching past the scored day would show here.
-  const sc = evaluate.scoreCandidate(u, 'len', compileSignal('function signal(o,h,l,c){ return c.length / 100 }'));
+  const sc = evaluate.scoreSignals(u, sandboxed('len', 'function signal(o,h,l,c){ return c.length / 100 }'), policy());
   const seen = new Set(sc.points.flatMap(p => p.scores));
   assert.deepEqual([...seen], [0.6]);
 });

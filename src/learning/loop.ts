@@ -29,9 +29,12 @@ import { etDate, etNow } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { ToolDefinition } from '../core/types';
 import { LEARNING_UNIVERSE, loadUniverse } from './history';
-import { buildUniverse, report, requiredT, scoreBuiltIns, scoreCandidate, similarity, HORIZON, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
+import { buildUniverse, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
 import { compileSignal, checkCode, WINDOW } from './sandbox';
-import { LEARNED_PREFIX, type LearningLive } from './live';
+import { LEARNED_PREFIX, SandboxedSignal } from '../signals/sandboxed';
+
+/** What the live engine reads (see `signals/registry.ts`): promoted signals and when they were set. */
+interface LearningLive { at: string; weights: Record<string, number>; active: { id: string; name: string; code: string; idea?: string }[] }
 
 export type CandidateStatus = 'testing' | 'rejected' | 'shadow' | 'active' | 'retired';
 export interface Candidate {
@@ -121,7 +124,7 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
   for (const c of all) {
     if (c.status === 'rejected' || c.status === 'retired') continue;
     let sc: Scored;
-    try { sc = scoreCandidate(u, c.name, compileSignal(c.code)); }
+    try { compileSignal(c.code); sc = scoreSignals(u, [new SandboxedSignal(c.id, c.name, c.code, c.idea)], policy); }
     catch (err: any) { changes.push(setStatus(c, c.status === 'testing' ? 'rejected' : 'retired', `its code failed: ${String(err.message).slice(0, 160)}`, at)); saveRecord(KIND, c.id, c); continue; }
     c.report = report(u, sc, 0, c.liveSince);
     const { learn, exam, live } = c.report.periods;
@@ -161,7 +164,7 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
     const before = prev?.weights?.[name] ?? 1;
     if (Math.abs(before - w) >= 0.05) changes.push(`${name} weight ${before.toFixed(2)} → ${w.toFixed(2)}`);
   }
-  saveValue('learningLive', { at, weights, active: active.map(c => ({ id: c.id, name: c.name, code: c.code })) } satisfies LearningLive);
+  saveValue('learningLive', { at, weights, active: active.map(c => ({ id: c.id, name: c.name, code: c.code, idea: c.idea })) } satisfies LearningLive);
   // Kept separately too: the composite reads it on every tick and needs only the numbers.
   saveValue('learningWeights', weights);
 

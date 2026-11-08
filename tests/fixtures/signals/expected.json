@@ -1,0 +1,6243 @@
+{
+ "policy": {
+  "emaFast": 9,
+  "emaSlow": 21,
+  "rsiPeriod": 14
+ },
+ "cases": [
+  {
+   "symbol": "AAPL",
+   "end": 5,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 5 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "AAPL",
+   "end": 12,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 12 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "AAPL",
+   "end": 19,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 1,
+     "detail": "RSI 13.7 (oversold)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 19 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0.333
+  },
+  {
+   "symbol": "AAPL",
+   "end": 26,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.56%, RSI 45.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0.6,
+     "detail": "1.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 6.6% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.15,
+     "detail": "z=0.30 vs SMA20 (257.65)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.18,
+     "detail": "RSI 45.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.21,
+     "detail": "-5.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.1,
+   "mrComposite": 0.08
+  },
+  {
+   "symbol": "AAPL",
+   "end": 33,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.33%, RSI 60.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.6x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.59,
+     "detail": "z=1.19 vs SMA20 (261.58)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.4,
+     "detail": "RSI 60.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.23,
+     "detail": "+5.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.16,
+   "mrComposite": -0.407
+  },
+  {
+   "symbol": "AAPL",
+   "end": 40,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.41,
+     "detail": "EMA spread -0.22%, RSI 49.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.8% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.398 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.03,
+     "detail": "z=-0.05 vs SMA20 (265.03)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.04,
+     "detail": "RSI 49.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.28,
+     "detail": "+6.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.162,
+   "mrComposite": -0.07
+  },
+  {
+   "symbol": "AAPL",
+   "end": 47,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.02,
+     "detail": "EMA spread +0.03%, RSI 46.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 6.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.09,
+     "detail": "histogram -0.248 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.39,
+     "detail": "z=-0.79 vs SMA20 (268.64)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.13,
+     "detail": "RSI 46.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.07,
+     "detail": "+1.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.074,
+   "mrComposite": 0.15
+  },
+  {
+   "symbol": "AAPL",
+   "end": 54,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.95,
+     "detail": "EMA spread -0.91%, RSI 39.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 17.2, price below EMA50 (263.54)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.38,
+     "detail": "histogram -0.980 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.76,
+     "detail": "z=-1.52 vs SMA20 (263.33)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.42,
+     "detail": "RSI 39.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.27,
+     "detail": "-6.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.366,
+   "mrComposite": 0.483
+  },
+  {
+   "symbol": "AAPL",
+   "end": 61,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.72%, RSI 40.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 24.3, price below EMA50 (260.36)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.9% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -1.014 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.5,
+     "detail": "z=-1.00 vs SMA20 (259.25)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.38,
+     "detail": "RSI 40.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.21,
+     "detail": "-4.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.28,
+   "mrComposite": 0.363
+  },
+  {
+   "symbol": "AAPL",
+   "end": 68,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.73,
+     "detail": "EMA spread -0.85%, RSI 49.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 21.2, price below EMA50 (258.19)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.0% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.14,
+     "detail": "histogram +0.347 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.23,
+     "detail": "z=0.46 vs SMA20 (253.63)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "RSI 49.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.13,
+     "detail": "-3.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.158,
+   "mrComposite": -0.033
+  },
+  {
+   "symbol": "AAPL",
+   "end": 75,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.51,
+     "detail": "EMA spread +0.42%, RSI 53.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 15.9, price above EMA50 (259.11)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +1.283 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.66,
+     "detail": "z=1.32 vs SMA20 (253.74)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.15,
+     "detail": "RSI 53.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.06,
+     "detail": "+1.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.242,
+   "mrComposite": -0.29
+  },
+  {
+   "symbol": "AAPL",
+   "end": 82,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.66%, RSI 62.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 12.8, price above EMA50 (262.37)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.4% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.69,
+     "detail": "histogram +1.871 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.94,
+     "detail": "z=1.88 vs SMA20 (259.45)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.52,
+     "detail": "RSI 62.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.36,
+     "detail": "+8.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.438,
+   "mrComposite": -0.607
+  },
+  {
+   "symbol": "AAPL",
+   "end": 89,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.68%, RSI 66.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 15.5, price above EMA50 (264.28)"
+    },
+    {
+     "name": "Volume",
+     "score": 0.6,
+     "detail": "1.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.36,
+     "detail": "histogram +1.001 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.06 vs SMA20 (266.36)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.64,
+     "detail": "RSI 66.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.4,
+     "detail": "+9.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.612,
+   "mrComposite": -0.68
+  },
+  {
+   "symbol": "AAPL",
+   "end": 96,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +3.08%, RSI 73.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 24.6, price above EMA50 (268.55)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.6,
+     "detail": "price above 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +2.035 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.94,
+     "detail": "z=1.88 vs SMA20 (276.68)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.94,
+     "detail": "RSI 73.4 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.57,
+     "detail": "+13.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.4,
+   "mrComposite": -0.817
+  },
+  {
+   "symbol": "AAPL",
+   "end": 103,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +3.14%, RSI 75.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 36.2, price above EMA50 (274.33)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.6,
+     "detail": "price above 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.893 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.72,
+     "detail": "z=1.44 vs SMA20 (287.46)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -1,
+     "detail": "RSI 75.7 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.49,
+     "detail": "+11.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.5,
+   "mrComposite": -0.737
+  },
+  {
+   "symbol": "AAPL",
+   "end": 110,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.95%, RSI 73.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 1,
+     "detail": "ADX 44.5, price above EMA50 (280.67)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.01,
+     "detail": "histogram +0.032 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.82,
+     "detail": "z=1.64 vs SMA20 (300.77)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.94,
+     "detail": "RSI 73.5 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.52,
+     "detail": "+12.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.582,
+   "mrComposite": -0.76
+  },
+  {
+   "symbol": "AAPL",
+   "end": 117,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.12,
+     "detail": "EMA spread +0.24%, RSI 48.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 38.2, price above EMA50 (283.71)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 6.9% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -3.467 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.61,
+     "detail": "z=-1.23 vs SMA20 (304.24)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.07,
+     "detail": "RSI 48.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.01,
+     "detail": "+0.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.084,
+   "mrComposite": 0.223
+  },
+  {
+   "symbol": "AAPL",
+   "end": 124,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.44,
+     "detail": "EMA spread -0.29%, RSI 47.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 24.8, price above EMA50 (286.49)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 7.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -1.842 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.5,
+     "detail": "z=-1.00 vs SMA20 (302.27)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.1,
+     "detail": "RSI 47.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.15,
+     "detail": "-3.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.128,
+   "mrComposite": 0.25
+  },
+  {
+   "symbol": "AAPL",
+   "end": 131,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.13,
+     "detail": "EMA spread -0.26%, RSI 60.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 26.2, price above EMA50 (289.17)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.8% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.05,
+     "detail": "histogram +0.158 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.81,
+     "detail": "z=1.62 vs SMA20 (294.80)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.41,
+     "detail": "RSI 60.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.09,
+     "detail": "-2.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.124,
+   "mrComposite": -0.377
+  },
+  {
+   "symbol": "AAPL",
+   "end": 138,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.06%, RSI 61.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 23.9, price above EMA50 (297.89)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.6x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +2.243 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.59,
+     "detail": "z=1.18 vs SMA20 (300.37)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.46,
+     "detail": "RSI 61.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.27,
+     "detail": "+6.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.28,
+   "mrComposite": -0.44
+  },
+  {
+   "symbol": "AAPL",
+   "end": 145,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +2.47%, RSI 58.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 29.5, price above EMA50 (306.06)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.6x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.0% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.749 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.3,
+     "detail": "z=0.59 vs SMA20 (311.49)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.34,
+     "detail": "RSI 58.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.39,
+     "detail": "+9.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.34,
+   "mrComposite": -0.343
+  },
+  {
+   "symbol": "AAPL",
+   "end": 152,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.34,
+     "detail": "EMA spread +0.67%, RSI 40.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.7,
+     "detail": "ADX 29.0, price below EMA50 (310.99)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.2,
+     "detail": "1.4x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 11.9% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.8,
+     "detail": "histogram -2.831 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.97,
+     "detail": "z=-1.94 vs SMA20 (323.90)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.38,
+     "detail": "RSI 40.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.07,
+     "detail": "-1.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.332,
+   "mrComposite": 0.473
+  },
+  {
+   "symbol": "AAPL",
+   "end": 159,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.27%, RSI 40.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 21.8, price below EMA50 (309.12)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 12.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.8,
+     "detail": "histogram -3.164 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.75,
+     "detail": "z=-1.49 vs SMA20 (321.22)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.39,
+     "detail": "RSI 40.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.17,
+     "detail": "-4.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.42,
+   "mrComposite": 0.437
+  },
+  {
+   "symbol": "AAPL",
+   "end": 166,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.62,
+     "detail": "EMA spread -0.65%, RSI 46.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 17.7, price above EMA50 (309.28)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 10.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.282 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.21,
+     "detail": "z=-0.42 vs SMA20 (314.34)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.13,
+     "detail": "RSI 46.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.16,
+     "detail": "-3.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.164,
+   "mrComposite": 0.167
+  },
+  {
+   "symbol": "AAPL",
+   "end": 173,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.81,
+     "detail": "EMA spread +0.62%, RSI 60.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 13.1, price above EMA50 (311.11)"
+    },
+    {
+     "name": "Volume",
+     "score": 0.3,
+     "detail": "1.3x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.42,
+     "detail": "histogram +1.360 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.56 vs SMA20 (311.32)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.43,
+     "detail": "RSI 60.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.3,
+     "detail": "+7.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.526,
+   "mrComposite": -0.577
+  },
+  {
+   "symbol": "AAPL",
+   "end": 180,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.20%, RSI 62.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 13.3, price above EMA50 (315.22)"
+    },
+    {
+     "name": "Volume",
+     "score": 0.3,
+     "detail": "1.2x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.34,
+     "detail": "histogram +1.141 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.11 vs SMA20 (316.63)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.51,
+     "detail": "RSI 62.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.41,
+     "detail": "+9.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.548,
+   "mrComposite": -0.64
+  },
+  {
+   "symbol": "AAPL",
+   "end": 187,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.02%, RSI 67.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 21.5, price above EMA50 (321.46)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.6,
+     "detail": "price above 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +1.562 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.78,
+     "detail": "z=1.55 vs SMA20 (325.59)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.71,
+     "detail": "RSI 67.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.41,
+     "detail": "+9.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.4,
+   "mrComposite": -0.633
+  },
+  {
+   "symbol": "AAPL",
+   "end": 194,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.74,
+     "detail": "EMA spread +0.87%, RSI 51.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 18.2, price above EMA50 (325.01)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.23,
+     "detail": "histogram -0.769 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.09,
+     "detail": "z=-0.18 vs SMA20 (331.62)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.06,
+     "detail": "RSI 51.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.07,
+     "detail": "+1.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.142,
+   "mrComposite": -0.013
+  },
+  {
+   "symbol": "AAPL",
+   "end": 201,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.73,
+     "detail": "EMA spread +0.86%, RSI 59.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 14.3, price above EMA50 (326.28)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.035 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.75,
+     "detail": "z=1.50 vs SMA20 (335.78)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.39,
+     "detail": "RSI 59.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.11,
+     "detail": "+2.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.226,
+   "mrComposite": -0.417
+  },
+  {
+   "symbol": "AAPL",
+   "end": 208,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.78,
+     "detail": "EMA spread +0.97%, RSI 59.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 15.0, price above EMA50 (328.63)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.123 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.68,
+     "detail": "z=1.35 vs SMA20 (337.96)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.38,
+     "detail": "RSI 59.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.05,
+     "detail": "+1.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.236,
+   "mrComposite": -0.37
+  },
+  {
+   "symbol": "AAPL",
+   "end": 215,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.77,
+     "detail": "EMA spread +0.93%, RSI 55.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 20.1, price above EMA50 (332.13)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.5,
+     "detail": "1.8x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.0% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.349 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.29,
+     "detail": "z=0.58 vs SMA20 (342.08)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.21,
+     "detail": "RSI 55.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.18,
+     "detail": "+4.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.074,
+   "mrComposite": -0.227
+  },
+  {
+   "symbol": "NVDA",
+   "end": 5,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 5 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "NVDA",
+   "end": 12,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 12 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "NVDA",
+   "end": 19,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.28,
+     "detail": "RSI 43.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 19 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0.093
+  },
+  {
+   "symbol": "NVDA",
+   "end": 26,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.53,
+     "detail": "EMA spread +0.47%, RSI 55.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.69,
+     "detail": "z=1.37 vs SMA20 (186.72)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.22,
+     "detail": "RSI 55.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.08,
+     "detail": "+1.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.166,
+   "mrComposite": -0.33
+  },
+  {
+   "symbol": "NVDA",
+   "end": 33,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.16,
+     "detail": "EMA spread -0.32%, RSI 52.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.32,
+     "detail": "z=0.64 vs SMA20 (185.11)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.11,
+     "detail": "RSI 52.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.08,
+     "detail": "+2.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.032,
+   "mrComposite": -0.17
+  },
+  {
+   "symbol": "NVDA",
+   "end": 40,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.47,
+     "detail": "EMA spread +0.34%, RSI 54.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.25,
+     "detail": "histogram +0.477 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.34,
+     "detail": "z=0.69 vs SMA20 (186.22)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.17,
+     "detail": "RSI 54.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.15,
+     "detail": "+3.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.144,
+   "mrComposite": -0.22
+  },
+  {
+   "symbol": "NVDA",
+   "end": 47,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.61,
+     "detail": "EMA spread -0.62%, RSI 43.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.9% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.5,
+     "detail": "histogram -0.908 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.43,
+     "detail": "z=-0.86 vs SMA20 (185.27)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.26,
+     "detail": "RSI 43.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.24,
+     "detail": "-5.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.282,
+   "mrComposite": 0.31
+  },
+  {
+   "symbol": "NVDA",
+   "end": 54,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.54,
+     "detail": "EMA spread -0.48%, RSI 47.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 15.5, price below EMA50 (185.73)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 7.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.125 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.23,
+     "detail": "z=-0.47 vs SMA20 (185.29)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.08,
+     "detail": "RSI 47.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.12,
+     "detail": "-2.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.228,
+   "mrComposite": 0.143
+  },
+  {
+   "symbol": "NVDA",
+   "end": 61,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.43%, RSI 41.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 18.7, price below EMA50 (184.02)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 11.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.49,
+     "detail": "histogram -0.857 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.65,
+     "detail": "z=-1.30 vs SMA20 (182.33)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.33,
+     "detail": "RSI 41.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.31,
+     "detail": "-7.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.358,
+   "mrComposite": 0.43
+  },
+  {
+   "symbol": "NVDA",
+   "end": 68,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.87%, RSI 47.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 22.6, price below EMA50 (181.21)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 7.0% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.427 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.19,
+     "detail": "z=-0.39 vs SMA20 (177.92)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.11,
+     "detail": "RSI 47.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.1,
+     "detail": "-2.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.28,
+   "mrComposite": 0.133
+  },
+  {
+   "symbol": "NVDA",
+   "end": 75,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.16%, RSI 61.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 19.1, price above EMA50 (182.33)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.8,
+     "detail": "histogram +2.032 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.95,
+     "detail": "z=1.90 vs SMA20 (177.87)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.47,
+     "detail": "RSI 61.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.14,
+     "detail": "+3.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.46,
+   "mrComposite": -0.52
+  },
+  {
+   "symbol": "NVDA",
+   "end": 82,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +3.62%, RSI 69.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 23.0, price above EMA50 (187.03)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +2.312 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.7,
+     "detail": "z=1.41 vs SMA20 (185.48)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.78,
+     "detail": "RSI 69.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.64,
+     "detail": "+15.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.34,
+   "mrComposite": -0.707
+  },
+  {
+   "symbol": "NVDA",
+   "end": 89,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +2.84%, RSI 53.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 24.3, price above EMA50 (190.46)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.5% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.04,
+     "detail": "histogram -0.086 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.06,
+     "detail": "z=0.11 vs SMA20 (197.22)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.14,
+     "detail": "RSI 53.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.54,
+     "detail": "+12.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.132,
+   "mrComposite": -0.247
+  },
+  {
+   "symbol": "NVDA",
+   "end": 96,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +3.39%, RSI 69.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 26.6, price above EMA50 (193.56)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.7% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.5,
+     "detail": "histogram +1.104 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.97,
+     "detail": "z=1.94 vs SMA20 (205.90)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.77,
+     "detail": "RSI 69.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.69,
+     "detail": "+16.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.5,
+   "mrComposite": -0.81
+  },
+  {
+   "symbol": "NVDA",
+   "end": 103,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +3.15%, RSI 57.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 30.7, price above EMA50 (199.53)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.2,
+     "detail": "1.3x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 7.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.08,
+     "detail": "histogram -0.183 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.25,
+     "detail": "z=0.49 vs SMA20 (214.39)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.31,
+     "detail": "RSI 57.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.35,
+     "detail": "+8.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.184,
+   "mrComposite": -0.303
+  },
+  {
+   "symbol": "NVDA",
+   "end": 110,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.40%, RSI 58.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 23.9, price above EMA50 (201.85)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.8% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -1.083 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.3,
+     "detail": "z=0.61 vs SMA20 (217.97)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.35,
+     "detail": "RSI 58.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.51,
+     "detail": "+12.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.12,
+   "mrComposite": -0.387
+  },
+  {
+   "symbol": "NVDA",
+   "end": 117,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.13%, RSI 44.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 17.2, price above EMA50 (202.85)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 13.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -2.745 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.68,
+     "detail": "z=-1.36 vs SMA20 (216.15)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.2,
+     "detail": "RSI 44.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.3,
+     "detail": "-7.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.2,
+   "mrComposite": 0.393
+  },
+  {
+   "symbol": "NVDA",
+   "end": 124,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.10%, RSI 42.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 16.6, price below EMA50 (204.88)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 13.9% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.61,
+     "detail": "histogram -1.228 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.81,
+     "detail": "z=-1.63 vs SMA20 (210.49)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.28,
+     "detail": "RSI 42.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.37,
+     "detail": "-8.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.382,
+   "mrComposite": 0.487
+  },
+  {
+   "symbol": "NVDA",
+   "end": 131,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -2.20%, RSI 41.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 19.9, price below EMA50 (205.51)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 12.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -1.029 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.65,
+     "detail": "z=-1.31 vs SMA20 (203.49)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.34,
+     "detail": "RSI 41.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.52,
+     "detail": "-12.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.28,
+   "mrComposite": 0.503
+  },
+  {
+   "symbol": "NVDA",
+   "end": 138,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.41,
+     "detail": "EMA spread +0.22%, RSI 56.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 16.3, price above EMA50 (207.49)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.0% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.79,
+     "detail": "histogram +1.677 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.77,
+     "detail": "z=1.53 vs SMA20 (202.22)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.25,
+     "detail": "RSI 56.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.14,
+     "detail": "+3.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.34,
+   "mrComposite": -0.387
+  },
+  {
+   "symbol": "NVDA",
+   "end": 145,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.65,
+     "detail": "EMA spread +0.71%, RSI 52.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 12.6, price below EMA50 (208.84)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +1.048 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.47,
+     "detail": "z=0.94 vs SMA20 (202.78)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.11,
+     "detail": "RSI 52.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.18,
+     "detail": "+4.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.13,
+   "mrComposite": -0.253
+  },
+  {
+   "symbol": "NVDA",
+   "end": 152,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.35,
+     "detail": "EMA spread -0.71%, RSI 53.1"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 13.7, price below EMA50 (207.15)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.6% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.092 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.23,
+     "detail": "z=0.46 vs SMA20 (203.85)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.12,
+     "detail": "RSI 53.1 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.25,
+     "detail": "+6.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.13,
+   "mrComposite": -0.2
+  },
+  {
+   "symbol": "NVDA",
+   "end": 159,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.46%, RSI 62.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 19.6, price above EMA50 (209.55)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.8,
+     "detail": "histogram +2.267 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.82,
+     "detail": "z=1.65 vs SMA20 (208.38)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.49,
+     "detail": "RSI 62.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.24,
+     "detail": "+5.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.46,
+   "mrComposite": -0.517
+  },
+  {
+   "symbol": "NVDA",
+   "end": 166,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.41%, RSI 50.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 16.7, price above EMA50 (210.72)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.8% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.15,
+     "detail": "histogram -0.317 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.07,
+     "detail": "z=0.14 vs SMA20 (213.18)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.03,
+     "detail": "RSI 50.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.12,
+     "detail": "+2.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.11,
+   "mrComposite": -0.073
+  },
+  {
+   "symbol": "NVDA",
+   "end": 173,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.71,
+     "detail": "EMA spread +0.81%, RSI 51.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 16.0, price above EMA50 (210.13)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.2,
+     "detail": "histogram -0.435 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.16,
+     "detail": "z=-0.31 vs SMA20 (219.03)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.07,
+     "detail": "RSI 51.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.22,
+     "detail": "+5.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.082,
+   "mrComposite": -0.043
+  },
+  {
+   "symbol": "NVDA",
+   "end": 180,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.45,
+     "detail": "EMA spread +0.90%, RSI 49.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 14.8, price above EMA50 (212.90)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 7.0% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.28,
+     "detail": "histogram -0.616 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.16,
+     "detail": "z=-0.31 vs SMA20 (220.16)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.01,
+     "detail": "RSI 49.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.11,
+     "detail": "-2.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.014,
+   "mrComposite": 0.093
+  },
+  {
+   "symbol": "NVDA",
+   "end": 187,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.74,
+     "detail": "EMA spread +0.88%, RSI 59.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 15.5, price above EMA50 (214.08)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.17,
+     "detail": "histogram +0.391 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.66,
+     "detail": "z=1.32 vs SMA20 (220.53)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.39,
+     "detail": "RSI 59.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.27,
+     "detail": "+6.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.222,
+   "mrComposite": -0.44
+  },
+  {
+   "symbol": "NVDA",
+   "end": 194,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.36%, RSI 60.1"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 15.8, price above EMA50 (218.23)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.24,
+     "detail": "histogram +0.546 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.62,
+     "detail": "z=1.24 vs SMA20 (223.51)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.4,
+     "detail": "RSI 60.1 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.26,
+     "detail": "+6.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.348,
+   "mrComposite": -0.427
+  },
+  {
+   "symbol": "NVDA",
+   "end": 201,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.5,
+     "detail": "EMA spread +1.19%, RSI 49.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 17.6, price above EMA50 (221.67)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.6x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 7.0% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.22,
+     "detail": "histogram -0.493 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.08,
+     "detail": "z=-0.17 vs SMA20 (227.50)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.02,
+     "detail": "RSI 49.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.15,
+     "detail": "+3.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.036,
+   "mrComposite": -0.017
+  },
+  {
+   "symbol": "NVDA",
+   "end": 208,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -1.07%, RSI 48.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 20.2, price above EMA50 (220.98)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.8% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -1.827 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.34,
+     "detail": "z=-0.68 vs SMA20 (226.87)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.05,
+     "detail": "RSI 48.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.13,
+     "detail": "-3.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.2,
+   "mrComposite": 0.173
+  },
+  {
+   "symbol": "NVDA",
+   "end": 215,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -1,
+     "detail": "EMA spread -1.99%, RSI 34.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 19.7, price below EMA50 (220.20)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.5,
+     "detail": "1.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 15.9% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.69,
+     "detail": "histogram -1.412 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.88,
+     "detail": "z=-1.76 vs SMA20 (221.46)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.62,
+     "detail": "RSI 34.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.47,
+     "detail": "-11.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.538,
+   "mrComposite": 0.657
+  },
+  {
+   "symbol": "KO",
+   "end": 5,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 5 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "KO",
+   "end": 12,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 12 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "KO",
+   "end": 19,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.48,
+     "detail": "RSI 61.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 19 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": -0.16
+  },
+  {
+   "symbol": "KO",
+   "end": 26,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.03%, RSI 70.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0.6,
+     "detail": "1.5x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.93,
+     "detail": "z=1.87 vs SMA20 (71.12)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.83,
+     "detail": "RSI 70.8 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.28,
+     "detail": "+6.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.5,
+   "mrComposite": -0.68
+  },
+  {
+   "symbol": "KO",
+   "end": 33,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.94%, RSI 65.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0.3,
+     "detail": "1.5x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.0% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.5,
+     "detail": "z=1.00 vs SMA20 (74.07)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.6,
+     "detail": "RSI 65.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.37,
+     "detail": "+8.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.26,
+   "mrComposite": -0.49
+  },
+  {
+   "symbol": "KO",
+   "end": 40,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.57%, RSI 70.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.02,
+     "detail": "histogram -0.020 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.61,
+     "detail": "z=1.21 vs SMA20 (76.81)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.81,
+     "detail": "RSI 70.2 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.45,
+     "detail": "+10.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.256,
+   "mrComposite": -0.623
+  },
+  {
+   "symbol": "KO",
+   "end": 47,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.86%, RSI 58.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.34,
+     "detail": "histogram -0.268 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.06,
+     "detail": "z=0.11 vs SMA20 (79.20)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.33,
+     "detail": "RSI 58.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.25,
+     "detail": "+6.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.092,
+   "mrComposite": -0.213
+  },
+  {
+   "symbol": "KO",
+   "end": 54,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.02,
+     "detail": "EMA spread +0.04%, RSI 49.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 24.9, price above EMA50 (75.13)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.578 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.57,
+     "detail": "z=-1.14 vs SMA20 (79.10)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.03,
+     "detail": "RSI 49.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.04,
+     "detail": "+1.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.036,
+   "mrComposite": 0.187
+  },
+  {
+   "symbol": "KO",
+   "end": 61,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -1,
+     "detail": "EMA spread -1.03%, RSI 37.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 21.3, price below EMA50 (75.42)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.584 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.77,
+     "detail": "z=-1.53 vs SMA20 (78.00)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.51,
+     "detail": "RSI 37.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.25,
+     "detail": "-5.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.32,
+   "mrComposite": 0.51
+  },
+  {
+   "symbol": "KO",
+   "end": 68,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.63,
+     "detail": "EMA spread -0.66%, RSI 47.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 22.7, price above EMA50 (75.77)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.096 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.14,
+     "detail": "z=-0.28 vs SMA20 (76.39)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.09,
+     "detail": "RSI 47.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.17,
+     "detail": "-4.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.106,
+   "mrComposite": 0.133
+  },
+  {
+   "symbol": "KO",
+   "end": 75,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.07,
+     "detail": "EMA spread +0.14%, RSI 48.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 16.0, price below EMA50 (76.72)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.6% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.152 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.08,
+     "detail": "z=0.17 vs SMA20 (76.23)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.05,
+     "detail": "RSI 48.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.06,
+     "detail": "-1.5% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.014,
+   "mrComposite": 0.01
+  },
+  {
+   "symbol": "KO",
+   "end": 82,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.63,
+     "detail": "EMA spread -0.67%, RSI 40.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 18.5, price below EMA50 (76.83)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.21,
+     "detail": "histogram -0.159 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.72,
+     "detail": "z=-1.44 vs SMA20 (76.01)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.38,
+     "detail": "RSI 40.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.03,
+     "detail": "-0.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.208,
+   "mrComposite": 0.377
+  },
+  {
+   "symbol": "KO",
+   "end": 89,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.69,
+     "detail": "EMA spread +0.78%, RSI 59.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 19.4, price above EMA50 (77.34)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.2% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.55,
+     "detail": "histogram +0.430 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.73,
+     "detail": "z=1.45 vs SMA20 (76.62)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.38,
+     "detail": "RSI 59.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.14,
+     "detail": "+3.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.288,
+   "mrComposite": -0.417
+  },
+  {
+   "symbol": "KO",
+   "end": 96,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.02%, RSI 63.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 22.8, price above EMA50 (77.72)"
+    },
+    {
+     "name": "Volume",
+     "score": 0.3,
+     "detail": "1.4x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.4% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.34,
+     "detail": "histogram +0.275 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.81,
+     "detail": "z=1.62 vs SMA20 (77.27)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.55,
+     "detail": "RSI 63.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.2,
+     "detail": "+4.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.428,
+   "mrComposite": -0.52
+  },
+  {
+   "symbol": "KO",
+   "end": 103,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.54%, RSI 64.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 32.1, price above EMA50 (78.19)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.8% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.246 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.59,
+     "detail": "z=1.18 vs SMA20 (79.27)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.57,
+     "detail": "RSI 64.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.37,
+     "detail": "+8.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.44,
+   "mrComposite": -0.51
+  },
+  {
+   "symbol": "KO",
+   "end": 110,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.1,
+     "detail": "EMA spread +0.20%, RSI 44.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 25.6, price above EMA50 (78.19)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.51,
+     "detail": "histogram -0.402 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.66,
+     "detail": "z=-1.32 vs SMA20 (80.03)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.23,
+     "detail": "RSI 44.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.01,
+     "detail": "-0.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.002,
+   "mrComposite": 0.3
+  },
+  {
+   "symbol": "KO",
+   "end": 117,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.96,
+     "detail": "EMA spread +0.91%, RSI 60.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 22.8, price above EMA50 (78.41)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.6% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.25,
+     "detail": "histogram +0.210 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.66,
+     "detail": "z=1.32 vs SMA20 (80.46)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.42,
+     "detail": "RSI 60.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.13,
+     "detail": "+3.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.342,
+   "mrComposite": -0.403
+  },
+  {
+   "symbol": "KO",
+   "end": 124,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.36,
+     "detail": "EMA spread +0.11%, RSI 51.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 16.9, price above EMA50 (79.05)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.196 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.04,
+     "detail": "z=0.08 vs SMA20 (80.18)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.06,
+     "detail": "RSI 51.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.04,
+     "detail": "-1.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.092,
+   "mrComposite": -0.02
+  },
+  {
+   "symbol": "KO",
+   "end": 131,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.95,
+     "detail": "EMA spread +0.90%, RSI 63.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 14.7, price above EMA50 (79.70)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.22,
+     "detail": "histogram +0.187 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.95,
+     "detail": "z=1.89 vs SMA20 (80.96)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.55,
+     "detail": "RSI 63.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.3,
+     "detail": "+7.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.454,
+   "mrComposite": -0.6
+  },
+  {
+   "symbol": "KO",
+   "end": 138,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.08%, RSI 55.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 20.9, price above EMA50 (80.67)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.0% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.077 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.38,
+     "detail": "z=0.77 vs SMA20 (81.86)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.21,
+     "detail": "RSI 55.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.03,
+     "detail": "+0.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.24,
+   "mrComposite": -0.207
+  },
+  {
+   "symbol": "KO",
+   "end": 145,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.04,
+     "detail": "EMA spread +0.08%, RSI 46.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 14.3, price below EMA50 (81.20)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.35,
+     "detail": "histogram -0.287 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.63,
+     "detail": "z=-1.27 vs SMA20 (82.63)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.13,
+     "detail": "RSI 46.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.04,
+     "detail": "+1.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.162,
+   "mrComposite": 0.24
+  },
+  {
+   "symbol": "KO",
+   "end": 152,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.92%, RSI 59.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 20.3, price above EMA50 (82.55)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.2,
+     "detail": "1.3x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.459 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.55,
+     "detail": "z=1.09 vs SMA20 (84.19)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.39,
+     "detail": "RSI 59.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.13,
+     "detail": "+3.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.2,
+   "mrComposite": -0.357
+  },
+  {
+   "symbol": "KO",
+   "end": 159,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.18%, RSI 57.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 20.6, price above EMA50 (83.48)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.08,
+     "detail": "histogram -0.067 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.26,
+     "detail": "z=0.52 vs SMA20 (85.39)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.3,
+     "detail": "RSI 57.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.18,
+     "detail": "+4.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.184,
+   "mrComposite": -0.247
+  },
+  {
+   "symbol": "KO",
+   "end": 166,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.84%, RSI 70.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 25.0, price above EMA50 (84.52)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.8% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.28,
+     "detail": "histogram +0.257 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.10 vs SMA20 (87.73)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.82,
+     "detail": "RSI 70.6 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.51,
+     "detail": "+12.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.356,
+   "mrComposite": -0.777
+  },
+  {
+   "symbol": "KO",
+   "end": 173,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.74,
+     "detail": "EMA spread +0.88%, RSI 50.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 26.9, price above EMA50 (85.82)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.9% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.37,
+     "detail": "histogram -0.328 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.18,
+     "detail": "z=-0.36 vs SMA20 (88.64)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.02,
+     "detail": "RSI 50.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.05,
+     "detail": "+1.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.214,
+   "mrComposite": 0.037
+  },
+  {
+   "symbol": "KO",
+   "end": 180,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.32,
+     "detail": "EMA spread +0.05%, RSI 51.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 19.8, price above EMA50 (86.12)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.378 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.29,
+     "detail": "z=-0.57 vs SMA20 (89.09)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.07,
+     "detail": "RSI 51.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.08,
+     "detail": "+1.8% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.084,
+   "mrComposite": 0.047
+  },
+  {
+   "symbol": "KO",
+   "end": 187,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.04,
+     "detail": "EMA spread -0.08%, RSI 52.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 14.0, price above EMA50 (86.83)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.2% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.208 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "z=-0.00 vs SMA20 (88.61)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.1,
+     "detail": "RSI 52.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.11,
+     "detail": "-2.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.012,
+   "mrComposite": 0.003
+  },
+  {
+   "symbol": "KO",
+   "end": 194,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -0.61%, RSI 39.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 13.8, price below EMA50 (87.07)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.2,
+     "detail": "1.2x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.7% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.36,
+     "detail": "histogram -0.314 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 1,
+     "detail": "z=-2.13 vs SMA20 (87.85)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.41,
+     "detail": "RSI 39.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.09,
+     "detail": "-2.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.312,
+   "mrComposite": 0.5
+  },
+  {
+   "symbol": "KO",
+   "end": 201,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.53,
+     "detail": "EMA spread +0.06%, RSI 62.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 16.3, price above EMA50 (87.39)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.6% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.23,
+     "detail": "histogram +0.204 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.17 vs SMA20 (87.43)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.51,
+     "detail": "RSI 62.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.07,
+     "detail": "+1.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.252,
+   "mrComposite": -0.527
+  },
+  {
+   "symbol": "KO",
+   "end": 208,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.89%, RSI 65.8"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 26.0, price above EMA50 (89.17)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.648 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.66,
+     "detail": "z=1.31 vs SMA20 (88.96)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.63,
+     "detail": "RSI 65.8 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.19,
+     "detail": "+4.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.44,
+   "mrComposite": -0.493
+  },
+  {
+   "symbol": "KO",
+   "end": 215,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.34%, RSI 62.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 28.1, price above EMA50 (89.94)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.4% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.08,
+     "detail": "histogram +0.077 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.54,
+     "detail": "z=1.07 vs SMA20 (91.10)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.5,
+     "detail": "RSI 62.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.39,
+     "detail": "+9.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.416,
+   "mrComposite": -0.477
+  },
+  {
+   "symbol": "XOM",
+   "end": 5,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 5 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "XOM",
+   "end": 12,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 12 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": 0
+  },
+  {
+   "symbol": "XOM",
+   "end": 19,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.89,
+     "detail": "RSI 72.3 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0,
+     "detail": "insufficient data: 19 bars, need 22"
+    }
+   ],
+   "trendComposite": 0,
+   "mrComposite": -0.297
+  },
+  {
+   "symbol": "XOM",
+   "end": 26,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +4.62%, RSI 80.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0.6,
+     "detail": "1.5x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.7% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.89,
+     "detail": "z=1.77 vs SMA20 (129.93)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -1,
+     "detail": "RSI 80.5 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.7,
+     "detail": "+16.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.38,
+   "mrComposite": -0.863
+  },
+  {
+   "symbol": "XOM",
+   "end": 33,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +5.22%, RSI 79.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.6,
+     "detail": "price above 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0,
+     "detail": "insufficient data"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.88,
+     "detail": "z=1.75 vs SMA20 (138.36)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -1,
+     "detail": "RSI 79.5 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.9,
+     "detail": "+21.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.32,
+   "mrComposite": -0.927
+  },
+  {
+   "symbol": "XOM",
+   "end": 40,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +3.21%, RSI 58.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.2x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 6.1% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.61,
+     "detail": "histogram -0.898 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.18,
+     "detail": "z=0.35 vs SMA20 (145.14)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.35,
+     "detail": "RSI 58.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.43,
+     "detail": "+10.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.022,
+   "mrComposite": -0.32
+  },
+  {
+   "symbol": "XOM",
+   "end": 47,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.29%, RSI 60.9"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0,
+     "detail": "insufficient data"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 4.9% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.49,
+     "detail": "histogram -0.741 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.38,
+     "detail": "z=0.76 vs SMA20 (149.72)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.43,
+     "detail": "RSI 60.9 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.31,
+     "detail": "+7.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.102,
+   "mrComposite": -0.373
+  },
+  {
+   "symbol": "XOM",
+   "end": 54,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.30%, RSI 61.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 37.0, price above EMA50 (139.97)"
+    },
+    {
+     "name": "Volume",
+     "score": 0.3,
+     "detail": "1.2x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.8% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.746 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.84,
+     "detail": "z=1.67 vs SMA20 (150.26)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.44,
+     "detail": "RSI 61.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.05,
+     "detail": "+1.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.38,
+   "mrComposite": -0.443
+  },
+  {
+   "symbol": "XOM",
+   "end": 61,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.32%, RSI 69.5"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 35.8, price above EMA50 (144.59)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.1x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 0.8% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.17,
+     "detail": "histogram +0.277 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.96,
+     "detail": "z=1.92 vs SMA20 (153.48)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.78,
+     "detail": "RSI 69.5 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.39,
+     "detail": "+9.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.434,
+   "mrComposite": -0.71
+  },
+  {
+   "symbol": "XOM",
+   "end": 68,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +2.89%, RSI 54.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 35.1, price above EMA50 (150.47)"
+    },
+    {
+     "name": "Volume",
+     "score": -0.5,
+     "detail": "1.5x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.9% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.149 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.12,
+     "detail": "z=0.25 vs SMA20 (159.07)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.17,
+     "detail": "RSI 54.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.25,
+     "detail": "+5.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.18,
+   "mrComposite": -0.18
+  },
+  {
+   "symbol": "XOM",
+   "end": 75,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.52,
+     "detail": "EMA spread -0.45%, RSI 42.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 25.5, price above EMA50 (152.55)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 13.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.8,
+     "detail": "histogram -2.084 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.79,
+     "detail": "z=-1.59 vs SMA20 (161.20)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.32,
+     "detail": "RSI 42.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.02,
+     "detail": "-0.6% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.184,
+   "mrComposite": 0.377
+  },
+  {
+   "symbol": "XOM",
+   "end": 82,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.8,
+     "detail": "EMA spread -2.07%, RSI 42.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 21.8, price below EMA50 (152.22)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.6x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 15.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -1.461 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.49,
+     "detail": "z=-0.98 vs SMA20 (157.41)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.31,
+     "detail": "RSI 42.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.3,
+     "detail": "-7.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.28,
+   "mrComposite": 0.367
+  },
+  {
+   "symbol": "XOM",
+   "end": 89,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.63,
+     "detail": "EMA spread -0.67%, RSI 49.1"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 14.3, price below EMA50 (153.41)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.26,
+     "detail": "histogram +0.403 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.05,
+     "detail": "z=0.10 vs SMA20 (152.29)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.03,
+     "detail": "RSI 49.1 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.21,
+     "detail": "-5.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.174,
+   "mrComposite": 0.063
+  },
+  {
+   "symbol": "XOM",
+   "end": 96,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.76,
+     "detail": "EMA spread -0.93%, RSI 48.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 14.9, price below EMA50 (153.30)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.3% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.089 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.1,
+     "detail": "z=0.19 vs SMA20 (150.08)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.07,
+     "detail": "RSI 48.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.05,
+     "detail": "-1.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.212,
+   "mrComposite": 0.007
+  },
+  {
+   "symbol": "XOM",
+   "end": 103,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.8,
+     "detail": "EMA spread +1.06%, RSI 52.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 14.6, price above EMA50 (154.86)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 5.1% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.930 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.29,
+     "detail": "z=0.57 vs SMA20 (152.75)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.09,
+     "detail": "RSI 52.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.16,
+     "detail": "+3.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.18,
+   "mrComposite": -0.18
+  },
+  {
+   "symbol": "XOM",
+   "end": 110,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.75,
+     "detail": "EMA spread -0.90%, RSI 46.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 12.3, price below EMA50 (153.89)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.6x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 8.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.591 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.23,
+     "detail": "z=-0.46 vs SMA20 (151.79)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.14,
+     "detail": "RSI 46.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.09,
+     "detail": "-2.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.27,
+   "mrComposite": 0.153
+  },
+  {
+   "symbol": "XOM",
+   "end": 117,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.67,
+     "detail": "EMA spread -0.75%, RSI 42.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 9.6, price below EMA50 (153.31)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 10.4% below 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": -0.09,
+     "detail": "histogram -0.133 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.61,
+     "detail": "z=-1.21 vs SMA20 (152.07)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.3,
+     "detail": "RSI 42.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.11,
+     "detail": "-2.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.252,
+   "mrComposite": 0.34
+  },
+  {
+   "symbol": "XOM",
+   "end": 124,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -1,
+     "detail": "EMA spread -2.57%, RSI 36.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 20.4, price below EMA50 (149.98)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 10.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.974 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.72,
+     "detail": "z=-1.43 vs SMA20 (146.39)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.55,
+     "detail": "RSI 36.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.42,
+     "detail": "-10.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.32,
+   "mrComposite": 0.563
+  },
+  {
+   "symbol": "XOM",
+   "end": 131,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -1,
+     "detail": "EMA spread -2.48%, RSI 36.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.7,
+     "detail": "ADX 25.7, price below EMA50 (146.20)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 11.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.270 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.44,
+     "detail": "z=-0.89 vs SMA20 (142.18)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.55,
+     "detail": "RSI 36.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.35,
+     "detail": "-8.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.42,
+   "mrComposite": 0.447
+  },
+  {
+   "symbol": "XOM",
+   "end": 138,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": -0.12,
+     "detail": "EMA spread -0.24%, RSI 56.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": -0.2,
+     "detail": "ADX 20.4, price below EMA50 (145.67)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.8,
+     "detail": "histogram +1.154 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.25 vs SMA20 (139.09)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.25,
+     "detail": "RSI 56.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.04,
+     "detail": "-1.0% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.096,
+   "mrComposite": -0.403
+  },
+  {
+   "symbol": "XOM",
+   "end": 145,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.48%, RSI 72.1"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 23.6, price above EMA50 (147.50)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.8,
+     "detail": "histogram +2.119 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.24 vs SMA20 (142.73)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.89,
+     "detail": "RSI 72.1 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.51,
+     "detail": "+12.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.58,
+   "mrComposite": -0.8
+  },
+  {
+   "symbol": "XOM",
+   "end": 152,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.45%, RSI 62.6"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 25.6, price above EMA50 (149.05)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.5% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.726 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.44,
+     "detail": "z=0.89 vs SMA20 (149.35)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.5,
+     "detail": "RSI 62.6 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.55,
+     "detail": "+13.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.38,
+   "mrComposite": -0.497
+  },
+  {
+   "symbol": "XOM",
+   "end": 159,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.03%, RSI 64.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 21.6, price above EMA50 (149.77)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.24,
+     "detail": "histogram +0.379 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.71,
+     "detail": "z=1.43 vs SMA20 (154.32)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.57,
+     "detail": "RSI 64.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.42,
+     "detail": "+10.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.348,
+   "mrComposite": -0.567
+  },
+  {
+   "symbol": "XOM",
+   "end": 166,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.59%, RSI 68.1"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 27.8, price above EMA50 (151.73)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, down day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.1% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +0.576 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.77,
+     "detail": "z=1.54 vs SMA20 (158.33)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.72,
+     "detail": "RSI 68.1 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.22,
+     "detail": "+5.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.38,
+   "mrComposite": -0.57
+  },
+  {
+   "symbol": "XOM",
+   "end": 173,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.00%, RSI 61.4"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 19.4, price above EMA50 (152.52)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 2.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.600 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.55,
+     "detail": "z=1.09 vs SMA20 (160.11)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.45,
+     "detail": "RSI 61.4 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.26,
+     "detail": "+6.1% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.22,
+   "mrComposite": -0.42
+  },
+  {
+   "symbol": "XOM",
+   "end": 180,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.19%, RSI 61.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 19.9, price above EMA50 (154.31)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.6% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.142 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.61,
+     "detail": "z=1.22 vs SMA20 (162.33)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.47,
+     "detail": "RSI 61.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.16,
+     "detail": "+3.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.28,
+   "mrComposite": -0.413
+  },
+  {
+   "symbol": "XOM",
+   "end": 187,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.08,
+     "detail": "EMA spread +0.16%, RSI 45.7"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 22.4, price above EMA50 (156.74)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": -0.3,
+     "detail": "price 6.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.63,
+     "detail": "histogram -0.993 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": 0.5,
+     "detail": "z=-1.01 vs SMA20 (162.05)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": 0.17,
+     "detail": "RSI 45.7 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.16,
+     "detail": "-3.9% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": -0.13,
+   "mrComposite": 0.277
+  },
+  {
+   "symbol": "XOM",
+   "end": 194,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 0.39,
+     "detail": "EMA spread +0.18%, RSI 55.3"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 16.5, price above EMA50 (158.69)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.8x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0,
+     "detail": "price 3.4% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": -0.1,
+     "detail": "histogram -0.253 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.22,
+     "detail": "z=0.44 vs SMA20 (162.69)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.21,
+     "detail": "RSI 55.3 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": 0.02,
+     "detail": "-0.4% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.098,
+   "mrComposite": -0.137
+  },
+  {
+   "symbol": "XOM",
+   "end": 201,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +1.31%, RSI 69.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.2,
+     "detail": "ADX 17.3, price above EMA50 (161.71)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "0.7x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.6,
+     "detail": "price above 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.45,
+     "detail": "histogram +0.782 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -1,
+     "detail": "z=2.42 vs SMA20 (163.85)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.77,
+     "detail": "RSI 69.2 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.15,
+     "detail": "+3.7% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.45,
+   "mrComposite": -0.64
+  },
+  {
+   "symbol": "XOM",
+   "end": 208,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.64%, RSI 70.0"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 26.6, price above EMA50 (165.76)"
+    },
+    {
+     "name": "Volume",
+     "score": 0,
+     "detail": "1.0x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.3,
+     "detail": "price 1.2% below 20d high"
+    },
+    {
+     "name": "MACD",
+     "score": 0.2,
+     "detail": "histogram +1.047 (falling)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.7,
+     "detail": "z=1.40 vs SMA20 (168.91)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.8,
+     "detail": "RSI 70.0 (neutral)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.51,
+     "detail": "+12.2% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.44,
+   "mrComposite": -0.67
+  },
+  {
+   "symbol": "XOM",
+   "end": 215,
+   "trend": [
+    {
+     "name": "EMA Momentum",
+     "score": 1,
+     "detail": "EMA spread +2.83%, RSI 73.2"
+    },
+    {
+     "name": "Trend Strength",
+     "score": 0.7,
+     "detail": "ADX 33.2, price above EMA50 (169.58)"
+    },
+    {
+     "name": "Volume",
+     "score": 0.6,
+     "detail": "1.9x avg vol, up day"
+    },
+    {
+     "name": "Breakout",
+     "score": 0.9,
+     "detail": "price above 20d high, ATR expanding"
+    },
+    {
+     "name": "MACD",
+     "score": 0.34,
+     "detail": "histogram +0.636 (rising)"
+    }
+   ],
+   "meanReversion": [
+    {
+     "name": "Z-Score Reversion",
+     "score": -0.83,
+     "detail": "z=1.65 vs SMA20 (175.98)"
+    },
+    {
+     "name": "Contrarian RSI",
+     "score": -0.93,
+     "detail": "RSI 73.2 (overbought)"
+    },
+    {
+     "name": "Monthly Reversal",
+     "score": -0.6,
+     "detail": "+14.3% over 21 bars (market cap unknown, no size adjustment, chase above +12%)"
+    }
+   ],
+   "trendComposite": 0.708,
+   "mrComposite": -0.787
+  }
+ ],
+ "crossSectional": [
+  [
+   "NVDA",
+   {
+    "name": "Cross-Sectional Rank",
+    "score": -1,
+    "detail": "rank 1/4 by 20d return (-18.6%)"
+   }
+  ],
+  [
+   "XOM",
+   {
+    "name": "Cross-Sectional Rank",
+    "score": -0.33,
+    "detail": "rank 2/4 by 20d return (-1.8%)"
+   }
+  ],
+  [
+   "AAPL",
+   {
+    "name": "Cross-Sectional Rank",
+    "score": 0.33,
+    "detail": "rank 3/4 by 20d return (1.7%)"
+   }
+  ],
+  [
+   "KO",
+   {
+    "name": "Cross-Sectional Rank",
+    "score": 1,
+    "detail": "rank 4/4 by 20d return (8.7%)"
+   }
+  ]
+ ]
+}
