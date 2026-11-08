@@ -383,13 +383,18 @@ function addEntries(entries) {
     oldest.remove();
   }
   renderWelcome();
+  // Show or hide the thinking bar first: it shrinks the feed, so scrolling before it appears
+  // stops short and leaves the end of the newest message hidden under it.
+  renderThinking();
   if (!$('welcome').hidden) { feedFollowing = false; feed.scrollTop = 0; }
   else if (atBottom || entries.some(e => e.kind === 'operator')) {
     feedFollowing = true;
     feed.scrollTo({top: feed.scrollHeight, behavior: reducedMotion.matches ? 'auto' : 'smooth'});
   }
-  renderThinking();
 }
+// While following, stay at the bottom when the feed shrinks later, e.g. the thinking bar
+// appearing on the next status poll.
+new ResizeObserver(() => { if (feedFollowing && $('welcome').hidden) $('feed').scrollTop = $('feed').scrollHeight; }).observe($('feed'));
 $('show-log').onchange = () => {
   $('feed').classList.toggle('hide-log', !$('show-log').checked);
   renderWelcome();
