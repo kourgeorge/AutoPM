@@ -14,6 +14,7 @@
 import type { Bar } from '../core/types';
 import type { Policy } from '../policy/types';
 import { adx, ema, macd, rsi } from './indicators';
+import { learnedSignalScores, signalWeights } from '../learning/live';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -232,6 +233,14 @@ function macdSignal(bars: Bar[]): SignalScore {
  * already run?" rather than "is this trending?".
  */
 export function computeSignals(bars: Bar[], policy: Policy): SignalScore[] {
+  // Model-written signals that passed the learning layer's tests (`learning/loop.ts`) join
+  // the trend family, because that composite is the one the entry gate reads. None exist
+  // under ephemeral storage, so the replay harness still sees exactly the five.
+  return [...builtInTrendSignals(bars, policy), ...learnedSignalScores(bars)];
+}
+
+/** The five hand-written trend signals only — what the learning layer measures as built-ins. */
+export function builtInTrendSignals(bars: Bar[], policy: Policy): SignalScore[] {
   return [
     emaMomentum(bars, policy),
     trendStrength(bars),
@@ -277,19 +286,27 @@ export function signalTally(signals: SignalScore[]): SignalTally {
   let bearish = 0;
   let neutral = 0;
   let sum = 0;
+  let weighted = 0;
+  let weightTotal = 0;
+  const signalWeight = signalWeights();
 
   for (const s of signals) {
     if (s.score > 0.1) bullish++;
     else if (s.score < -0.1) bearish++;
     else neutral++;
     sum += s.score;
+    // Learned weights (`learning/live.ts`); every signal counts 1 until the learning layer
+    // has measured it, which is the plain mean this used to be.
+    const w = signalWeight(s.name);
+    weighted += w * s.score;
+    weightTotal += w;
   }
 
   // Null, not 0: an unscored symbol and a symbol whose signals cancel out are different
   // claims, and 0 would read as the second.
   const composite = signals.length === 0
     ? null
-    : parseFloat((sum / signals.length).toFixed(3));
+    : parseFloat((weightTotal > 0 ? weighted / weightTotal : sum / signals.length).toFixed(3));
 
   return { bullish, bearish, neutral, total: signals.length, composite };
 }

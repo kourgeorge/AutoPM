@@ -9,6 +9,7 @@ import path from 'path';
 import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudget';
 import { aiConnectionStatus, saveAiConnection } from '../core/aiConnection';
 import { llmUsage, llmUsageForDay } from '../review/llmUsage';
+import { candidates, signalScorecard, saveLearningSettings, triggerLearning } from '../learning/loop';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
@@ -224,6 +225,8 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
   '/api/broker-orders': 'Orders resting at the broker from the last tick.',
   '/api/broker-book': 'Broker page: each resting order joined to its holding, agent order and decision; protection coverage.',
+  '/api/learning/code': 'The code of one model-written signal. ?id=sig-…',
+  '/api/learning': 'Learning layer: how well each signal (built-in and model-written) predicted next-week returns, current weights, idea statuses and recent changes.',
 };
 
 /** The readable routes, with what each returns. The live stream is left out: it never ends. */
@@ -482,6 +485,24 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('GET', '/api/llm-usage/day', ({ url }) => {
     try { return llmUsageForDay(url.searchParams.get('day') ?? ''); }
     catch (err) { throw new HttpError(400, err instanceof Error ? err.message : String(err)); }
+  });
+
+  add('GET', '/api/learning', () => signalScorecard());
+  add('GET', '/api/learning/code', ({ url }) => {
+    const c = candidates().find(x => x.id === url.searchParams.get('id'));
+    if (!c) throw new HttpError(404, 'No such signal');
+    return { id: c.id, name: c.name, code: c.code };
+  });
+  // Starts a run and returns at once; the run takes about ten seconds once history is saved.
+  add('POST', '/api/learning/run', async ({ body }) => {
+    const input = await body();
+    void triggerLearning({ propose: input.propose === true }).catch(() => undefined);
+    return { started: true };
+  });
+  add('POST', '/api/learning/settings', async ({ body }) => {
+    const input = await body();
+    for (const k of Object.keys(input)) if (!['enabled', 'proposeIdeas'].includes(k) || typeof input[k] !== 'boolean') throw new HttpError(400, 'Only enabled and proposeIdeas (true/false) can be set');
+    return saveLearningSettings(input as any);
   });
 
   add('GET', '/api/scorecard', ({ url }) => {

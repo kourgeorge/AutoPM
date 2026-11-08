@@ -49,7 +49,7 @@ export const TRADER_TOOLS = [
   'get_market_status', 'get_account', 'get_positions', 'get_open_orders', 'execute_entry',
   'annotate_position', 'execute_exit', 'get_pending_events', 'get_orders', 'ack_event', 'get_journal', 'get_pnl',
   'get_scorecard', 'get_benchmark', 'get_price_stats', 'write_lesson', 'get_macro_regime',
-  'get_signals', 'get_watchlist_scan', 'get_correlation', 'get_exposure', 'get_calendar',
+  'get_signals', 'get_signal_scorecard', 'get_watchlist_scan', 'get_correlation', 'get_exposure', 'get_calendar',
   'get_fundamentals', 'request_research', 'sleep', 'get_stock_bars', 'get_stock_snapshot',
   'get_stock_latest_quote', 'get_most_active_stocks', 'get_market_movers', 'get_news',
   'get_portfolio_history', 'web_search',

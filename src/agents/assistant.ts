@@ -202,7 +202,7 @@ function requestTrace(requestId: string): string {
 export const ASSISTANT_TOOL_NAMES = [
   'get_account', 'get_requests', 'get_lessons', 'get_orders', 'get_positions', 'get_open_orders',
   'get_market_status', 'get_pending_events', 'get_journal', 'get_pnl', 'get_scorecard', 'get_benchmark',
-  'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan', 'get_correlation',
+  'get_price_stats', 'get_macro_regime', 'get_signals', 'get_signal_scorecard', 'get_watchlist_scan', 'get_correlation',
   'get_exposure', 'get_calendar', 'get_fundamentals', 'get_strategy_settings', 'get_state',
   'get_request_trace', 'get_app_endpoints', 'read_app', 'send_to_trader', 'request_research', 'get_policy_playbook',
   // Acting on the account directly, under the same guards and approval rules as the trader.

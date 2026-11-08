@@ -1,3 +1,4 @@
+import { signalScorecard } from '../learning/loop';
 import { readAccount, readPositions, readOrders } from '../core/accountRead';
 import { DECISION_TOOL_DEFINITIONS, DECISION_TOOL_NAMES, executeDecisionTool, THESIS_SCHEMA } from './decisionTools';
 import { evidenceResult, validateEvidenceIds } from '../journal/evidence';
@@ -310,7 +311,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_signals',
-    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 (strongly bearish) to +1 (strongly bullish), plus tally.composite (their mean, the number to threshold on), the reversal filter, ATR and the last close. All five measure trend and are highly correlated, so their COUNTS inflate: 5/5 bullish is closer to one confirmation counted five times, which is why the composite keeps the magnitude the vote throws away. reversal is separate and NOT in the composite — it is contrarian and monthly, its score is negative when the name has already run, and chasing: true means the move has cleared the chase threshold for its market-cap bucket. This is the SAME deterministic computation that fills the signal evidence on an entry_signal event, run on demand: use it for a candidate that has not fired an event, so a signal breakdown you report is one you actually measured. Never state which signals are bullish or bearish, or quote a composite or a reversal reading, without this tool or get_pending_events.',
+    description: 'Compute the five entry signals — EMA Momentum, Trend Strength, Volume, Breakout, MACD — for any symbol, each scored -1 (strongly bearish) to +1 (strongly bullish), plus any model-written signals the learning layer has promoted (named "Learned: …"), plus tally.composite (their weighted mean — weights come from the learning layer and are 1 until it has measured evidence; the number to threshold on), the reversal filter, ATR and the last close. All five measure trend and are highly correlated, so their COUNTS inflate: 5/5 bullish is closer to one confirmation counted five times, which is why the composite keeps the magnitude the vote throws away. reversal is separate and NOT in the composite — it is contrarian and monthly, its score is negative when the name has already run, and chasing: true means the move has cleared the chase threshold for its market-cap bucket. This is the SAME deterministic computation that fills the signal evidence on an entry_signal event, run on demand: use it for a candidate that has not fired an event, so a signal breakdown you report is one you actually measured. Never state which signals are bullish or bearish, or quote a composite or a reversal reading, without this tool or get_pending_events.',
     input_schema: {
       type: 'object',
       properties: {
@@ -318,6 +319,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       },
       required: ['symbol'],
     },
+  },
+  {
+    name: 'get_signal_scorecard',
+    description: 'How well each signal has actually predicted returns, measured by the learning layer on ~60 large US stocks over ten years of daily bars: for every built-in signal and every model-written candidate, the daily rank agreement (IC) between its score and the next five trading days\' return, its t-figure, hit rate, top-minus-bottom spread, and the same split by up and down markets; for older years, the last two years and (for candidates) live days since creation. Also the current composite weights, each candidate\'s status (testing, shadow, active, rejected, retired) with the reason, and recent changes. Read `howToRead` first. Use it before leaning on a signal: a composite built from signals with IC near zero is not evidence of an edge. Never claim a signal works or does not without reading this.',
+    input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'get_watchlist_scan',
@@ -415,6 +421,7 @@ async function dispatchTraderTool(
       case 'get_open_orders':     return await toolGetOpenOrders();
       case 'get_macro_regime':    return await toolGetMacroRegime();
       case 'get_signals':         return await toolGetSignals(input);
+      case 'get_signal_scorecard': return JSON.stringify(signalScorecard());
       case 'get_watchlist_scan': {
         const scan = input.snapshotId ? { rows: [] } : await riskAwareWatchlistScan();
         const page = recordPage(name, scan, 'rows', input);
@@ -479,7 +486,7 @@ async function dispatchTraderTool(
   }
 }
 
-const OBSERVATION_TOOLS = new Set(['get_market_status','get_account','get_positions','get_open_orders','get_macro_regime','get_signals','get_watchlist_scan','get_entry_plan','get_correlation','get_exposure','get_calendar','get_fundamentals','get_pending_events', ...ALPACA_DATA_TOOL_NAMES, 'web_search']);
+const OBSERVATION_TOOLS = new Set(['get_market_status','get_account','get_positions','get_open_orders','get_macro_regime','get_signals','get_signal_scorecard','get_watchlist_scan','get_entry_plan','get_correlation','get_exposure','get_calendar','get_fundamentals','get_pending_events', ...ALPACA_DATA_TOOL_NAMES, 'web_search']);
 export const TRADER_REGISTRY = new ToolRegistry(TRADER_TOOL_DEFINITIONS, async (name, input) => {
   const result = await dispatchTraderTool(name, input);
   return OBSERVATION_TOOLS.has(name) ? evidenceResult(name, result, typeof input.symbol === 'string' ? canonicalSymbol(input.symbol) : undefined) : result;
