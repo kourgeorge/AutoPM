@@ -523,7 +523,8 @@ export async function moveOcoTo(
         return { ok: true, ...placed };
       } catch (err: any) { return { ok: false, reason: err.message }; }
     }
-    if (existingStopId || existingTpId) return { ok: false, reason: 'One protective leg is missing; inspect broker orders before replacing the pair' };
+    if (existingStopId && !existingTpId) return addTakeProfit(symbol, qty, existingStopId, nextStop, nextTakeProfit);
+    if (existingTpId) return { ok: false, reason: 'One protective leg is missing; inspect broker orders before replacing the pair' };
 
     const armed = await armOco(symbol, qty, nextStop, nextTakeProfit);
     if (armed.ok) {
@@ -534,6 +535,41 @@ export async function moveOcoTo(
     }
     return armed;
   });
+}
+
+/**
+ * Give a stop-only position a target: the lone stop becomes a linked stop + target pair.
+ *
+ * No venue turns a resting stop into one leg of a pair, and a second full-quantity sell next to
+ * it is refused, so the stop is cancelled (confirmed) and the pair placed straight after — a gap
+ * of a second or two with no stop resting. If the pair is refused, a lone stop is put back at
+ * the same price, so the position never stays without one because of this call.
+ *
+ * Runs inside `moveOcoTo`'s lock. Only this app's own recorded stop is cancelled.
+ */
+async function addTakeProfit(symbol: string, qty: number, stopId: string, nextStop: number, nextTakeProfit: number): Promise<OcoArmResult> {
+  const plan = ocoOrderFor(symbol, qty, nextStop, nextTakeProfit);
+  if (!plan.ok) return plan;
+  const orders = await broker.getOpenOrders();
+  const stop = orders.find(o => o.id === stopId && sameSymbol(o.symbol, symbol) && o.side === 'sell' && o.type === 'stop');
+  if (!stop) return { ok: false, reason: 'Recorded stop is not confirmed at the broker' };
+  const other = orders.find(o => o.id !== stopId && sameSymbol(o.symbol, symbol) && o.side === 'sell');
+  if (other) return { ok: false, reason: `another sell order ${other.id} rests for ${symbol}; review it before adding a target` };
+  try {
+    await guardedBroker().cancelOrder(stopId);
+  } catch (err: any) {
+    return { ok: false, reason: `the broker did not confirm cancelling the stop (order ${stopId}) to replace it with a stop + target pair: ${err?.venueMessage ?? err?.message ?? err}` };
+  }
+  patchPositionSnapshot(symbol, { stopOrderId: undefined });
+  const armed = await armOco(symbol, qty, nextStop, nextTakeProfit);
+  if (armed.ok) {
+    patchPositionSnapshot(symbol, { stopOrderId: armed.stopOrderId, takeProfitOrderId: armed.takeProfitOrderId });
+    return armed;
+  }
+  const back = await armStop(symbol, qty, nextStop);
+  if (back.ok) patchPositionSnapshot(symbol, { stopOrderId: back.brokerOrderId });
+  return { ok: false, reason: `placing the stop + target pair failed (${armed.reason}); `
+    + (back.ok ? `a lone stop at $${nextStop} was put back (order ${back.brokerOrderId})` : `putting a lone stop back also failed: ${back.reason}`) };
 }
 
 /**

@@ -583,3 +583,56 @@ test('a scheduler order queued before a pause does not run during it', async () 
   assert.equal(actions.getOrder(p.id).status, 'approved');
   assert.equal(placed, 0);
 });
+
+test('a target is put back on a stop-only position as a linked pair', async () => {
+  const { moveOcoTo } = require('../src/strategy/stopOrders');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 'stop-2' });
+  let book = [{ id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 }];
+  const cancelled = [];
+  broker.getOpenOrders = async () => book;
+  broker.cancelOrder = async id => { cancelled.push(id); book = book.filter(o => o.id !== id); };
+  broker.placeOco = async req => {
+    book = [{ id: 'tp-9', groupId: 'tp-9', symbol: 'IBM', side: 'sell', type: 'limit', qty: req.qty, filled: 0, limitPrice: req.takeProfitPrice },
+      { id: 'stop-9', groupId: 'tp-9', symbol: 'IBM', side: 'sell', type: 'stop', qty: req.qty, filled: 0, stopPrice: req.stopPrice }];
+    return { stopOrderId: 'stop-9', takeProfitOrderId: 'tp-9' };
+  };
+  const r = await moveOcoTo('IBM', 39, 241.84, 281);
+  assert.deepEqual(r, { ok: true, stopOrderId: 'stop-9', takeProfitOrderId: 'tp-9' });
+  assert.deepEqual(cancelled, ['stop-2']);
+  const snap = state.getPositionSnapshot('IBM');
+  assert.equal(snap.stopOrderId, 'stop-9'); assert.equal(snap.takeProfitOrderId, 'tp-9');
+});
+
+test('if the pair is refused, the lone stop is put back', async () => {
+  const { moveOcoTo } = require('../src/strategy/stopOrders');
+  const { BrokerRejection } = require('../src/broker/errors');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 'stop-2' });
+  let book = [{ id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 }];
+  broker.getOpenOrders = async () => book;
+  broker.cancelOrder = async id => { book = book.filter(o => o.id !== id); };
+  broker.placeOco = async () => { throw new BrokerRejection(422, 'refused', null, {}); };
+  broker.placeOrder = async req => { placed++; book = [{ id: 'stop-3', symbol: 'IBM', side: 'sell', type: 'stop', qty: req.qty, filled: 0, stopPrice: req.stopPrice }]; return { id: 'stop-3' }; };
+  const r = await moveOcoTo('IBM', 39, 241.84, 281);
+  assert.equal(r.ok, false); assert.match(r.reason, /lone stop .* was put back/);
+  assert.equal(state.getPositionSnapshot('IBM').stopOrderId, 'stop-3');
+  assert.deepEqual(book.map(o => o.stopPrice), [241.84]);
+});
+
+test('an unknown adjustment the broker book shows was not made is marked failed, freeing the symbol', async () => {
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 'stop-2' });
+  broker.getOpenOrders = async () => [{ id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 }];
+  const p = actions.createOrder({ kind: 'target_adjust', symbol: 'IBM', venue: 'paper', params: { symbol: 'IBM', stopLoss: 241.84, takeProfit: 281 }, reason: 'restore target', timeoutMs: 60000, automatic: true });
+  actions.transitionOrder(p.id, 'executing');
+  actions.transitionOrder(p.id, 'unknown', { result: { error: 'Protection update is not confirmed at the broker' } });
+  await withClock(async tick => {
+    await executor.sweepOrders();
+    assert.equal(actions.getOrder(p.id).status, 'unknown', 'given time first');
+    tick(executor.NEVER_ARRIVED_AFTER_MS + 1000);
+    await executor.sweepOrders();
+  });
+  assert.equal(actions.getOrder(p.id).status, 'failed');
+  assert.equal(actions.pendingOrders().length, 0);
+});
