@@ -612,6 +612,20 @@ async function refresh() {
     if (refreshAgain) { refreshAgain = false; scheduleRefresh(); }
   }
 }
+/** The commits the engine started with, so a pull without a restart (or a build) is visible. */
+function renderEngineVersion(v) {
+  const el = $('engine-version');
+  if (!v) { el.textContent = 'engine version unknown'; el.title = 'This engine does not report a version: it predates the version indicator. Restart it on the latest code.'; el.classList.add('behind'); return; }
+  const head = v.commits[0];
+  el.textContent = head ? `engine ${head.hash}${v.behind ? ' · restart needed' : ''}` : 'engine version unknown';
+  el.classList.toggle('behind', !!v.behind || !head);
+  const lines = v.commits.map(c => `${c.hash}  ${c.subject}`);
+  el.title = [
+    head ? `Running since ${clock(v.startedAt)} from ${v.build === 'dist' ? 'compiled dist/ files' : 'source (ts-node)'}.` : (v.error || 'Git is unavailable.'),
+    v.behind ? `The folder is now at ${v.headNow}, newer than the running engine. Restart the engine${v.build === 'dist' ? ' after npm run build' : ''} to run it.` : '',
+    '', 'Last commits:', ...lines,
+  ].filter((l, i) => l || i > 1).join('\n');
+}
 function renderStatus(s) {
   $('account-id').textContent = s.health.runtime.accountId || 'CONNECTING TO ACCOUNT';
   $('venue').textContent = s.env.venue; $('venue').className = 'badge ' + s.env.venue;
@@ -627,9 +641,12 @@ function renderStatus(s) {
   $('trading').className = s.health.paused ? 'warn' : s.health.ready ? 'up' : 'down';
   $('updated').textContent = s.lastTickAt ? `Updated ${clock(s.lastTickAt)}${s.market.session ? ' · market ' + s.market.session : ''}` : 'Waiting for data';
   $('pause').textContent = s.health.paused ? 'Resume trading' : 'Pause trading';
+  renderEngineVersion(s.engine);
   const issues = [...s.health.issues];
   if (s.health.paused) issues.unshift('Trading is paused. Existing broker orders remain active, and protection checks continue.');
   if (s.health.dailyLossHalted) issues.push('The daily loss limit is latched. New entries are disabled for this session.');
+  if (!s.engine) issues.push('The engine predates the version indicator, so it is running old code. Restart it (after npm run build if it runs from dist/).');
+  else if (s.engine.behind) issues.push(`The engine is running ${s.engine.commits[0]?.hash}, but the folder is at ${s.engine.headNow}. Restart the engine${s.engine.build === 'dist' ? ' after npm run build' : ''} to run the new code.`);
   $('health').textContent = issues.join('\n');
   const pf = s.portfolio;
   $('exposure').textContent = pf?.grossDeployedPct != null ? `Deployed ${pf.grossDeployedPct.toFixed(1)}% · largest holding ${pf.maxWeightSymbol ?? '—'} ${pf.maxWeightPct?.toFixed(1) ?? '—'}%${pf.maxSectorName && pf.maxSectorWeightPct != null ? ` · top sector ${pf.maxSectorName} ${pf.maxSectorWeightPct.toFixed(1)}%` : ''}${pf.drawdownFromPeakPct != null ? ` · ${pf.drawdownFromPeakPct.toFixed(2)}% below peak` : ''}` : '';

@@ -18,6 +18,7 @@ import { renderPolicy } from '../policy/render';
 import { getMarketStatusSnapshot } from '../tools/traderTools';
 import { config } from './config';
 import { activeAiConfig } from './aiConnection';
+import { engineVersion } from './version';
 
 const DEFAULT_LESSONS = 5;
 
@@ -62,6 +63,8 @@ export function registerOperatorCommands(trader: Trader): void {
         `Venue      ${config.venue} (${config.broker}), model ${activeAiConfig().model}`,
         `Trader     ${t.paused ? 'PAUSED — /resume to continue' : 'running'}, ${t.cycles} cycle${t.cycles === 1 ? '' : 's'} this run`,
         `Automation ${automationSummary()}`,
+        (() => { const v = engineVersion(), head = v.commits[0];
+          return `Engine     ${head ? `${head.hash} ${head.subject}` : v.error ?? 'version unknown'}${v.behind ? ` — folder is at ${v.headNow}; restart to run it` : ''}`; })(),
       ];
       if (tick) {
         const a = tick.account;

@@ -1,4 +1,5 @@
 import { enqueueRequest, getRequest, listRequests, type AgentRequest } from '../core/requests';
+import { engineVersion } from '../core/version';
 import { recordOperatorCommand } from '../features/alertLog';
 import { listLessons, reviewLesson } from '../journal/lessons';
 /** Local dashboard and operator API. Listens on this computer only; there is one user, so no login. */
@@ -309,6 +310,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       pendingEvents: snap.events.length,
       policyVersion: tick?.policyVersion ?? null,
       lastTickAt: tick?.tickAt ?? null,
+      engine: engineVersion(),
     };
   });
 

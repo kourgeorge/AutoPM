@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import type { OperatorUI } from './ui/surface';
 import { DATA_DIR } from './core/paths';
 import { acquireEngineLock } from './core/engineLock';
+import { recordEngineVersion } from './core/version';
 
 // The engine always runs without a terminal. Clients have their own entry points.
 process.env.HEADLESS = '1';
@@ -12,6 +13,8 @@ process.env.API_PORT = process.env.ENGINE_PORT ?? '8788';
 async function main(): Promise<void> {
   let ui: OperatorUI | undefined;
   try {
+    // First: the commits this process starts with, before anything else can be loaded.
+    recordEngineVersion();
     const release = acquireEngineLock(DATA_DIR);
     process.once('exit', release);
     // Before runtime signal handlers exist, a canceled paired startup still releases its lock.
