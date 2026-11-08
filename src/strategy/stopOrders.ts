@@ -458,7 +458,8 @@ export async function moveStopTo(
 
 export type OcoArmResult =
   | { ok: true; stopOrderId: string; takeProfitOrderId: string }
-  | { ok: false; reason: string };
+  /** `settled`: the broker's book is known — the change was not made and the old protection is back. */
+  | { ok: false; reason: string; settled?: boolean };
 
 /** Place a durable linked pair. An uncertain request pauses trading and cannot be repeated. */
 export async function armOco(
@@ -561,15 +562,36 @@ async function addTakeProfit(symbol: string, qty: number, stopId: string, nextSt
     return { ok: false, reason: `the broker did not confirm cancelling the stop (order ${stopId}) to replace it with a stop + target pair: ${err?.venueMessage ?? err?.message ?? err}` };
   }
   patchPositionSnapshot(symbol, { stopOrderId: undefined });
-  const armed = await armOco(symbol, qty, nextStop, nextTakeProfit);
+  // A cancel the broker has confirmed can still hold the shares for a moment: the pair placed
+  // straight after was refused while the lone stop a second later went through (IBM,
+  // 2026-11-08 17:26). So wait until no sell order shows for the symbol, and try the pair twice.
+  let armed: OcoArmResult = { ok: false, reason: 'not tried' };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await sharesReleased(symbol);
+    armed = await armOco(symbol, qty, nextStop, nextTakeProfit);
+    // An uncertain placement is never repeated: it may already rest at the broker.
+    if (armed.ok || protectionIntents()[canonicalSymbol(symbol)]?.status === 'unknown') break;
+    await pause(RELEASE_POLL_MS * 4);
+  }
   if (armed.ok) {
     patchPositionSnapshot(symbol, { stopOrderId: armed.stopOrderId, takeProfitOrderId: armed.takeProfitOrderId });
     return armed;
   }
+  if (protectionIntents()[canonicalSymbol(symbol)]?.status === 'unknown') return armed;
   const back = await armStop(symbol, qty, nextStop);
   if (back.ok) patchPositionSnapshot(symbol, { stopOrderId: back.brokerOrderId });
-  return { ok: false, reason: `placing the stop + target pair failed (${armed.reason}); `
-    + (back.ok ? `a lone stop at $${nextStop} was put back (order ${back.brokerOrderId})` : `putting a lone stop back also failed: ${back.reason}`) };
+  return { ok: false, settled: back.ok, reason: `placing the stop + target pair failed (${armed.reason}); `
+    + (back.ok ? `a lone stop at $${nextStop} was put back (order ${back.brokerOrderId}), and no target rests` : `putting a lone stop back also failed: ${back.reason}`) };
+}
+
+const RELEASE_POLL_MS = 250;
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+/** Wait (up to ~3 s) until the broker lists no sell order for the symbol. */
+async function sharesReleased(symbol: string): Promise<void> {
+  for (let i = 0; i < 12; i++) {
+    if (!(await broker.getOpenOrders()).some(o => sameSymbol(o.symbol, symbol) && o.side === 'sell')) return;
+    await pause(RELEASE_POLL_MS);
+  }
 }
 
 /**

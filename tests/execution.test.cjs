@@ -636,3 +636,40 @@ test('an unknown adjustment the broker book shows was not made is marked failed,
   assert.equal(actions.getOrder(p.id).status, 'failed');
   assert.equal(actions.pendingOrders().length, 0);
 });
+
+test('the pair waits until the cancelled stop has released the shares', async () => {
+  const { moveOcoTo } = require('../src/strategy/stopOrders');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281, stopOrderId: 'stop-2' });
+  const stop = { id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 };
+  let book = [stop], lingering = 0;
+  // The broker confirms the cancel but keeps listing the stop for a few more reads.
+  broker.getOpenOrders = async () => { if (lingering > 0) { lingering--; return [stop]; } return book; };
+  broker.cancelOrder = async () => { book = []; lingering = 3; };
+  broker.placeOco = async req => {
+    book = [{ id: 'tp-9', groupId: 'tp-9', symbol: 'IBM', side: 'sell', type: 'limit', qty: 39, filled: 0, limitPrice: 281 },
+      { id: 'stop-9', groupId: 'tp-9', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 }];
+    return { stopOrderId: 'stop-9', takeProfitOrderId: 'tp-9' };
+  };
+  const r = await moveOcoTo('IBM', 39, 241.84, 281);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(placed, 0, 'no fallback stop was needed');
+});
+
+test('a refused target restore fails plainly: no pause, no lock, record matches the broker', async () => {
+  const { BrokerRejection } = require('../src/broker/errors');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 39 * 260 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, stopOrderId: 'stop-2' });
+  let book = [{ id: 'stop-2', symbol: 'IBM', side: 'sell', type: 'stop', qty: 39, filled: 0, stopPrice: 241.84 }];
+  broker.getOpenOrders = async () => book;
+  broker.cancelOrder = async id => { book = book.filter(o => o.id !== id); };
+  broker.placeOco = async () => { throw new BrokerRejection(422, 'refused', null, {}); };
+  broker.placeOrder = async req => { placed++; book = [{ id: 'stop-3', symbol: 'IBM', side: 'sell', type: 'stop', qty: req.qty, filled: 0, stopPrice: req.stopPrice }]; return { id: 'stop-3' }; };
+  const p = actions.createOrder({ kind: 'target_adjust', symbol: 'IBM', venue: 'paper', params: { symbol: 'IBM', stopLoss: 241.84, takeProfit: 281, thesis: 'restore target' }, reason: 'restore target', timeoutMs: 60000, automatic: true });
+  await executor.sweepOrders();
+  assert.equal(actions.getOrder(p.id).status, 'failed', JSON.stringify(actions.getOrder(p.id).result));
+  assert.equal(state.getState().paused, false);
+  assert.equal(actions.pendingOrders().length, 0);
+  const snap = state.getPositionSnapshot('IBM');
+  assert.equal(snap.takeProfitLevel, undefined); assert.equal(snap.stopOrderId, 'stop-3');
+});
