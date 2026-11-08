@@ -2,13 +2,16 @@ import crypto from 'crypto';
 import { broker } from '../broker';
 import { getState, getPositionSnapshot, upsertPositionSnapshot, type Order } from '../state/state';
 import { sameSymbol, isCryptoSymbol } from '../core/symbols';
-import { canTighten, canLowerTakeProfit, moveStopTo, moveOcoTo } from './stopOrders';
+import { canTighten, canLowerTakeProfit, moveStopTo, moveOcoTo, dropTakeProfit } from './stopOrders';
 import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
 import { transaction } from '../core/storage';
 
 export interface AnnotateInput {
   symbol: string;
-  stopLoss: number;
+  /** May be omitted only with `removeTarget`, which then restates the recorded stop. */
+  stopLoss?: number | null;
+  /** Cancel the take-profit and keep only the stop. Operator-only; checked by the tool. */
+  removeTarget?: boolean | null;
   takeProfit?: number | null;
   thesis: string;
   entryPrice?: number | null;
@@ -21,6 +24,7 @@ export type AnnotationValidation =
       symbol: string;
       stopLoss: number;
       takeProfit: number | null;
+      removeTarget: boolean;
       thesis: string;
       effectiveEntry: number;
       heldQty: number;
@@ -36,8 +40,13 @@ export type AnnotationValidation =
 export async function validateAnnotation(input: AnnotateInput): Promise<AnnotationValidation> {
   if (getState().paused) return { ok: false, response: JSON.stringify({ error: 'Trading is paused' }) };
 
-  const { symbol, stopLoss, thesis } = input;
+  const { symbol, thesis } = input;
+  const removeTarget = input.removeTarget === true;
   const takeProfit = input.takeProfit ?? null;
+  if (removeTarget && takeProfit != null) return { ok: false, response: JSON.stringify({ error: 'Give either a new takeProfit or removeTarget, not both' }) };
+  const recordedStop = getPositionSnapshot(symbol)?.stopLevel;
+  const stopLoss = input.stopLoss ?? (removeTarget ? recordedStop : undefined);
+  if (stopLoss == null) return { ok: false, response: JSON.stringify({ error: removeTarget ? `${symbol} has no recorded stop; give stopLoss` : 'stopLoss is required' }) };
   const providedEntryPrice = input.entryPrice ?? undefined;
   if ([stopLoss, takeProfit].some(level => level != null && (!Number.isFinite(level) || Math.abs(level * 100 - Math.round(level * 100)) > 1e-8))) return { ok: false, response: JSON.stringify({ error: 'Stop and target prices must use whole cents' }) };
 
@@ -58,6 +67,7 @@ export async function validateAnnotation(input: AnnotateInput): Promise<Annotati
   const snap = getPositionSnapshot(symbol);
   if (held.qty <= 0 || !Number.isInteger(held.qty) || isCryptoSymbol(symbol)) return { ok: false, response: JSON.stringify({ error: 'Only whole-share long equities can be managed' }) };
   if (!snap) return { ok: false, response: JSON.stringify({ error: 'Adopt this position explicitly before the bot manages it' }) };
+  if (removeTarget && snap.takeProfitLevel == null && !snap.takeProfitOrderId) return { ok: false, response: JSON.stringify({ error: `${symbol} has no take-profit to remove` }) };
 
   const effectiveEntry = snap?.entryPrice ?? providedEntryPrice ?? held.avgCost;
 
@@ -125,6 +135,7 @@ export async function validateAnnotation(input: AnnotateInput): Promise<Annotati
     symbol,
     stopLoss,
     takeProfit,
+    removeTarget,
     thesis,
     effectiveEntry,
     heldQty: held.qty,
@@ -144,15 +155,22 @@ export async function actAnnotation(v: Extract<AnnotationValidation, { ok: true 
   if (!old) throw new Error('Position is no longer managed');
   transaction(() => {
     recordDecision(decision('adjustment', 'trader', {
-      symbol: v.symbol, rationale: v.thesis, intendedStop: v.stopLoss, intendedTarget: v.takeProfit,
+      symbol: v.symbol, rationale: v.thesis, intendedStop: v.stopLoss, intendedTarget: v.removeTarget ? null : v.takeProfit,
       orderId: action?.id, requestId: action?.requestId, actorId: action?.requestedBy,
       orderStatus: 'executing', protectionStatus: 'pending',
     }), id);
     upsertPositionSnapshot(v.symbol, { stopLevel: v.stopLoss,
       ...(v.takeProfit != null ? { takeProfitLevel: v.takeProfit } : {}), managementDecisionId: id });
   });
-  const target = v.takeProfit ?? old.takeProfitLevel;
+  const target = v.removeTarget ? null : v.takeProfit ?? old.takeProfitLevel;
   try {
+    if (v.removeTarget) {
+      const result = await dropTakeProfit(v.symbol, v.heldQty, v.stopLoss);
+      recordDecisionOutcome(id, { executed: result.ok, protectionStatus: result.ok ? 'confirmed' : 'unknown',
+        venueStopId: result.ok ? result.brokerOrderId : null, venueStopMissing: result.ok ? null : result.reason,
+        orderStatus: result.ok ? 'executed' : 'unknown' });
+      return JSON.stringify({ ok: result.ok, decisionId: id, targetRemoved: result.ok, venueStop: result.ok ? result : { brokerOrderId: null, note: result.reason } });
+    }
     if (target != null) {
       const result = await moveOcoTo(v.symbol, v.heldQty, v.stopLoss, target);
       recordDecisionOutcome(id, { executed: result.ok, protectionStatus: result.ok ? 'confirmed' : 'unknown',

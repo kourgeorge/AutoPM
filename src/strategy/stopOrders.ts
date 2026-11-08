@@ -537,6 +537,74 @@ export async function moveOcoTo(
 }
 
 /**
+ * Cancel this app's take-profit and keep the position protected by its stop alone.
+ *
+ * The venues disagree about what cancelling one leg of a linked pair does. Alpaca's OCO parent
+ * IS the take-profit, and cancelling it takes the stop child with it; an IBKR OCA leg is
+ * cancelled alone. So the stop is read back after the cancel rather than assumed: if it still
+ * rests, it is kept; if it went with the target, a lone stop is placed at the same price at
+ * once. That leaves a gap of a second or two with no stop resting on Alpaca — there is no way
+ * to turn a linked pair into a lone stop without one.
+ *
+ * The recorded target level is cleared only once the broker has confirmed the cancel, so a
+ * refused cancel leaves the book and the record agreeing (target still there).
+ */
+export async function dropTakeProfit(symbol: string, qty: number, stopLevel: number): Promise<ArmResult> {
+  return withStopLock(symbol, async () => {
+    const snap = getPositionSnapshot(symbol);
+    const orders = await broker.getOpenOrders();
+    const target = orders.find(o => o.id === snap?.takeProfitOrderId && sameSymbol(o.symbol, symbol) && o.side === 'sell' && o.type === 'limit');
+    const foreign = restingTakeProfit(orders.filter(o => o.id !== target?.id), symbol);
+    if (foreign) return { ok: false, reason: `a sell limit ${foreign.id} rests for ${symbol} that this app did not place; cancel it at the broker` };
+    const stopId = snap?.stopOrderId;
+    if (!target) {
+      // Nothing of ours rests: only the record is left to clear. The sweep arms a lone stop if
+      // none rests now that the position no longer counts as a pair.
+      patchPositionSnapshot(symbol, { takeProfitLevel: undefined, takeProfitOrderId: undefined });
+      const stop = orders.find(o => o.id === stopId && o.type === 'stop');
+      return stop ? { ok: true, brokerOrderId: stop.id } : { ok: false, reason: 'target record cleared; no stop rests yet — the protection pass places one shortly' };
+    }
+    try {
+      await guardedBroker().cancelOrder(target.id);
+    } catch (err: any) {
+      return { ok: false, reason: `the broker did not confirm cancelling the target (order ${target.id}): ${err?.venueMessage ?? err?.message ?? err}` };
+    }
+    patchPositionSnapshot(symbol, { takeProfitLevel: undefined, takeProfitOrderId: undefined });
+    logger.trade(`Target for ${symbol} cancelled (order ${target.id}); keeping the stop at $${stopLevel}`);
+
+    // Did the stop go with it? Give a linked cancel a moment to reach the stop leg.
+    // A stop still showing `pending_cancel` is on its way out and still reserves the shares,
+    // so a new stop cannot be placed until it is gone.
+    let survivor: OpenOrder | undefined;
+    for (let i = 0; i < 12; i++) {
+      const row = (await broker.getOpenOrders()).find(o => o.id === stopId && o.type === 'stop');
+      const leaving = row != null && /cancel/i.test(String(row.status ?? ''));
+      survivor = row && !leaving ? row : undefined;
+      if (!row || (!leaving && !(target.groupId && row.groupId === target.groupId))) break;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    if (survivor) {
+      if (survivor.stopPrice === stopLevel) return { ok: true, brokerOrderId: survivor.id };
+      try {
+        const { id } = await protect(symbol, stopLevel, undefined, async () => {
+          const placed = await guardedBroker().replaceStopOrder(survivor!.id, stopLevel);
+          patchPositionSnapshot(symbol, { stopOrderId: placed.id });
+          return placed;
+        });
+        return { ok: true, brokerOrderId: id };
+      } catch (err: any) {
+        return { ok: false, reason: `target removed, but the stop could not be moved to $${stopLevel}: ${err?.venueMessage ?? err?.message ?? err}` };
+      }
+    }
+    patchPositionSnapshot(symbol, { stopOrderId: undefined });
+    const armed = await armStop(symbol, qty, stopLevel);
+    if (armed.ok) patchPositionSnapshot(symbol, { stopOrderId: armed.brokerOrderId });
+    else return { ok: false, reason: `target removed, and the broker cancelled the linked stop with it; placing a new stop at $${stopLevel} failed: ${armed.reason}` };
+    return armed;
+  });
+}
+
+/**
  * Failure reasons already logged, per symbol, so a position that cannot be armed does not
  * write the same warning on every sweep for the rest of the day. Cleared when the symbol
  * arms, or when it is no longer held — which also bounds the map at the size of the book.
