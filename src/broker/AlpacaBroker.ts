@@ -33,6 +33,8 @@ function num(v: unknown): number | undefined {
 const ALPACA_SIDE = { buy: 'buy', sell: 'sell', sell_short: 'sell' } as const;
 
 export class AlpacaBroker implements IBroker {
+  /** Alpaca answers a client-order-id lookup for every order it ever accepted. */
+  readonly provesOrderAbsence = true;
   async getPositions(): Promise<Position[]> {
     const res = await trading.get('/v2/positions');
     return (res.data as any[]).map((p) => ({

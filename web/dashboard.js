@@ -453,6 +453,8 @@ const toolPhrases = {
   record_position_review:s=>`Saving the ${s||''} holding review`.replace('  ',' '), record_candidate_review:s=>`Saving the ${s||''} verdict`.replace('  ',' '), record_research_review:s=>`Saving the ${s||''} research`.replace('  ',' '),
   execute_entry:s=>`Sending a ${s||''} buy order`.replace('  ',' '), execute_exit:s=>`Sending a ${s||''} sell order`.replace('  ',' '), annotate_position:s=>`Adding a note to ${s||'a holding'}`,
   request_research:s=>`Asking Research to study ${s||'a stock'}`, send_to_trader:'Passing your request to the Trader', sleep:'Finishing this check',
+  adopt_holding:s=>`Taking over ${s||'a holding'}`, rearm_protection:s=>`Re-arming the ${s||''} stop`.replace('  ',' '), confirm_protection:s=>`Linking the ${s||''} stop`.replace('  ',' '),
+  reconcile_orders:'Re-checking orders with the broker', set_trading_paused:'Pausing or resuming trading',
   get_requests:'Checking requests between agents', get_request_trace:'Tracing an earlier request', get_state:'Reading the engine state',
   get_policy_playbook:'Reading the trading playbook', get_strategy_settings:'Reading your settings', update_trading_settings:'Changing your settings',
   get_app_endpoints:'Looking at the dashboard pages', read_app:'Reading a dashboard page', get_saved_context:'Reading saved notes', get_tool_result:'Reading an earlier result',

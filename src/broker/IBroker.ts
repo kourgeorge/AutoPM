@@ -150,6 +150,12 @@ export interface ExecutionOrder {
 }
 
 export interface IBroker {
+  /**
+   * True when `findOrder(clientOrderId)` returning null PROVES the venue never accepted that
+   * order. Alpaca keeps every order it accepted and looks it up by client id, so absence is an
+   * answer. TWS only lists what this session has seen, so on IBKR absence proves nothing.
+   */
+  readonly provesOrderAbsence: boolean;
   getPositions(): Promise<Position[]>;
   getOrder(id: string): Promise<ExecutionOrder | null>;
   findOrder(clientOrderId: string): Promise<ExecutionOrder | null>;
