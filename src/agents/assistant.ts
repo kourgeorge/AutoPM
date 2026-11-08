@@ -67,11 +67,11 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'send_to_trader',
-    description: 'Queue an operator instruction for the trader and return its durable request ID and actual status. Paused traders keep the request queued; busy traders handle it in a later cycle. Use get_requests and get_orders for outcomes.',
+    description: 'Send the operator\'s request to the trader and return its durable request ID and actual status. The trader handles it as a direct turn (not a full portfolio review) and its reply is posted to this chat when it finishes. Paused traders keep the request queued; a busy trader takes it after its current turn.',
     input_schema: {
       type: 'object',
       properties: {
-        message: { type: 'string', description: 'Instruction for the trader.' },
+        message: { type: 'string', description: "The operator's request for the trader, as close to their own words as possible. Do not expand it into a broader task." },
       },
       required: ['message'],
     },
@@ -189,7 +189,7 @@ const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
 You can read everything the app itself shows: get_app_endpoints lists the engine's pages and read_app reads one. Use them for questions about the app — AI model usage, tokens and cost (/api/llm-usage), service health, the broker book, saved prompts, agent requests — before saying you cannot see something. Never say data is out of reach without checking get_app_endpoints first.
 When the operator asks you to research or assess a stock, call request_research; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
-Relay an instruction only when the operator asks the trader to act. send_to_trader returns a durable request ID and queue status. Report that status accurately; use get_requests and get_orders for the outcome.
+Relay a request when the operator asks the trader to act or asks something only the trader can judge (its view on a holding, why it did something). Pass their request as they said it; do not widen it. send_to_trader returns a durable request ID and queue status: say it was sent and that the trader's reply will appear in this chat. Do not predict the outcome.
 You cannot place trades, approve orders or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
 For pause/resume and approvals, direct the operator to the account controls.
 A one-off instruction goes to the trader. A lasting settings change is saved with update_trading_settings.

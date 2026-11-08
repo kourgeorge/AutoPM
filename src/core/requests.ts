@@ -55,6 +55,13 @@ export function operatorOrigin(request: AgentRequest): string | undefined {
   const parent = request.parentId ? getRequest(request.parentId) : undefined;
   return parent?.role === 'assistant' ? parent.text : undefined;
 }
+/**
+ * A trader request the operator started — typed to the trader, or relayed by the assistant —
+ * rather than the scheduler's own review. It runs as a direct turn: answer what was asked.
+ */
+export function isOperatorRequest(request: AgentRequest | undefined): boolean {
+  return request != null && request.role === 'trader' && request.actorId !== 'system';
+}
 const finishedListeners = new Set<(request: AgentRequest) => void>();
 /** Told once, when a request first reaches completed or failed. */
 export function onRequestFinished(listener: (request: AgentRequest) => void): () => void {

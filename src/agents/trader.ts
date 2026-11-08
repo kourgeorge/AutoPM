@@ -1,13 +1,13 @@
 import { withAccountRead } from '../core/accountRead';
 import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
-import { journalUnresolved } from '../journal/reviewDecisions';
+import { journalUnresolved, endingSleep } from '../journal/reviewDecisions';
 import { getLastTick } from '../features/lastTick';
 import { describeGap, investmentGap } from '../strategy/investment';
 import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
-import { enqueueRequest, pendingRequests, updateRequest, getRequest, operatorOrigin, type WakeReason, type AgentRequest } from '../core/requests';
+import { enqueueRequest, pendingRequests, updateRequest, getRequest, operatorOrigin, isOperatorRequest, type WakeReason, type AgentRequest } from '../core/requests';
 import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
 import { createLiveModelProvider } from '../core/modelProvider';
@@ -127,26 +127,36 @@ export class Trader {
   }
   private async runCycle(): Promise<{ inTokens: number; outTokens: number }> {
     const command = tradingRequests()[0] ?? enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
+    // An operator's request is a direct turn: a short briefing, answer what was asked, done.
+    // Events wait for the scheduled review, which is queued straight after when any are urgent.
+    const direct = isOperatorRequest(command);
     const hash = getPolicyHash();
     this.controller = new AbortController();
     const wokenBy = [...this.wakeReasons]; this.wakeReasons.clear();
     // A resumed request keeps the events and wake reasons its saved conversation began with.
-    updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? getPendingEvents().map(e => e.id), wokenBy: command.wokenBy ?? wokenBy });
+    updateRequest(command.id, { status: 'running', eventIds: command.eventIds ?? (direct ? [] : getPendingEvents().map(e => e.id)), wokenBy: command.wokenBy ?? wokenBy });
     const turn = await runAgentLoop({
       context: { role: 'trader', requestId: command.id, actorId: command.actorId },
       provider: this.provider, registry: traderTools(), systemPrompt: traderSystemPrompt(), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: await buildCycleContext(getState(), command.actorId === 'system' ? [] : [relayedText(command)]) }] }],
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: direct ? await buildRequestContext(relayedText(command)) : await buildCycleContext(getState(), []) }] }],
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if (getState().paused || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
     // Normally empty: sleep refuses once while decisions are open. This covers a second sleep, a turn limit or an error.
     try { journalUnresolved(command.id); } catch (err) { logger.warn(`[Trader] could not journal open decisions: ${err instanceof Error ? err.message : err}`); }
     const actions = getRequest(command.id)?.orderIds ?? [];
+    const queued = actions.length ? `Orders queued: ${actions.join(', ')}. Each action records its own outcome.` : '';
     // The request is the agent's work, so it ends with the turn. Each queued action tracks its own outcome.
+    // An operator's request is answered in the trader's own words — its sleep answer, else its
+    // last text, else its sleep reason. "Review completed" alone told them nothing.
+    const ended = endingSleep(command.id);
+    const reply = direct ? ended.answer ?? (turn.text.trim() || ended.reason) : turn.text.trim() || undefined;
     updateRequest(command.id, { status: turn.status,
-      result: turn.error ?? (actions.length ? `Orders queued: ${actions.join(', ')}. Each action records its own outcome.` : turn.text || 'Review completed; no trade action was queued.') });
+      result: turn.error ?? ([reply, queued].filter(Boolean).join(' ') || 'Review completed; no trade action was queued.') });
+    // A direct turn left the event queue alone; anything urgent there gets its review now.
+    if (direct && getPendingEvents().some(e => e.severity === 'critical' || e.severity === 'urgent')) this.wakePending = true;
     return { inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }
@@ -699,6 +709,32 @@ function buildLessons(state: ReturnType<typeof getState>): string {
  * daemon; this is the user half, and every block in it is prose the model will read as fact —
  * so it has to be readable without starting a trading loop to see it.
  */
+/**
+ * The briefing for an operator's request. Short on purpose: the request, the account and the
+ * broker's orders — which is what most questions and instructions turn on. Everything else
+ * (positions in depth, journal, lessons, events, scans) is a tool call away, read only when the
+ * request needs it. The full cycle briefing made every question into a portfolio review.
+ */
+async function renderRequestContext(message: string): Promise<string> {
+  const lines: string[] = [`=== OPERATOR REQUEST: ${new Date().toISOString()} ===`, `> ${message}`, '=== END OPERATOR REQUEST ==='];
+  lines.push('This is a direct request, not a scheduled review. Do what it asks — answer the question, or carry out the instruction — and read only what you need for that, with the tools. Do not review the rest of the portfolio, scan the watchlist or handle machine events: the scheduled review does those.');
+  lines.push('Same rules as always: every order goes through the trade tools and their guards, and you never claim an order, fill or stop you have not read back.');
+  lines.push('When done, reply to the operator: either end with sleep(reason, answer) or simply answer in plain text without a tool call. The answer is the only thing they see — say what you did, or exactly what blocked you (rule, order id, missing tool) and what they can do instead.');
+  const events = getPendingEvents().filter(e => e.severity === 'critical' || e.severity === 'urgent');
+  if (events.length) lines.push(`(${events.length} urgent machine event(s) are pending; a scheduled review runs right after this request. Mention one only if it bears on the request.)`);
+  lines.push('');
+  const orderCtx = buildPendingOrders();
+  if (orderCtx) { lines.push(orderCtx); lines.push(''); }
+  lines.push(await buildAccountStatus());
+  lines.push('');
+  lines.push(await buildBrokerOrders());
+  return lines.join('\n');
+}
+
+export function buildRequestContext(message: string): Promise<string> {
+  return withAccountRead(async () => boundedCycleContext(await renderRequestContext(message)));
+}
+
 async function renderCycleContext(
   state: ReturnType<typeof getState>,
   pendingMessages: string[],
