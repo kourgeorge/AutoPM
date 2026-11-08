@@ -585,6 +585,12 @@ test('the deposit that funded the account is its starting balance, not a flow th
   http.get = async url => ({ data: url.includes('activities') ? [opening] : { timestamp: days.slice(1).map(d => Date.parse(d)/1000), equity: [100000, 100000, 101000] } });
   bars.collectBars = async () => ({ value: days.map((t, i) => ({ t, c: 100 + i })), source: 'audit', stale: false });
   try { assert.equal((await compare()).changePctA, null); } finally { http.get = realGet; bars.collectBars = realBars; }
+  // ...unless a look just before the journal finds the unfunded days and the matching opening balance.
+  http.get = async (url, cfg) => ({ data: url.includes('activities') ? [opening]
+    : cfg?.params?.start ? { timestamp: days.map(d => Date.parse(d)/1000), equity: [0, 100000, 100000, 101000] }
+    : { timestamp: days.slice(1).map(d => Date.parse(d)/1000), equity: [100000, 100000, 101000] } });
+  bars.collectBars = async () => ({ value: days.map((t, i) => ({ t, c: 100 + i })), source: 'audit', stale: false });
+  try { assert.equal((await compare()).changePctA, 1); } finally { http.get = realGet; bars.collectBars = realBars; }
 });
 
 test('lessons accept optional real evidence, refuse invented ids, and can be retired without deleting history', () => {

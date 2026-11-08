@@ -185,6 +185,45 @@ interface Leg {
  * that silently reports 0 % for the portfolio leg would read as "flat" rather than "unknown"
  * and that is the one misreading this whole file is built to prevent.
  */
+/** Daily equity by ET date, plus the first funded day when the history shows unfunded days before it. */
+function parseEquityHistory(data: any): { series: Map<string, number>; opening?: Leg['opening'] } {
+  const stamps: unknown[] = Array.isArray(data?.timestamp) ? data.timestamp : [];
+  const equity: unknown[] = Array.isArray(data?.equity) ? data.equity : [];
+  const series = new Map<string, number>();
+  let unfunded = false, opening: Leg['opening'];
+  for (let i = 0; i < Math.min(stamps.length, equity.length); i++) {
+    const value = Number(equity[i]);
+    // Zero equity is what Alpaca reports for sessions before the account was funded. It is
+    // not a $0 portfolio, and treating it as a level would manufacture a −100 % day.
+    if (!Number.isFinite(value) || value <= 0) { if (series.size === 0) unfunded = true; continue; }
+    const date = etDate(Number(stamps[i]) * 1000);
+    if (!date) continue;
+    if (series.size === 0 && unfunded) opening = { date, value };
+    series.set(date, value);
+  }
+  return { series, ...(opening ? { opening } : {}) };
+}
+
+/**
+ * The account's first funded day near `date`, looked up on its own. Alpaca books the funding
+ * journal days after the balance first shows, so a window can start between the two: it then
+ * holds the journal but none of the unfunded days that would reveal the opening balance.
+ */
+async function openingNear(date: string): Promise<Leg['opening']> {
+  const day = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(day)) return undefined;
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10) + 'T00:00:00Z';
+  try {
+    const res = await alpacaTrading.get('/v2/account/portfolio/history', {
+      params: { start: iso(day - 14 * 86_400_000), end: iso(day + 86_400_000), timeframe: '1D' },
+    });
+    return parseEquityHistory(res.data).opening;
+  } catch (err: any) {
+    logger.warn(`[benchmark] opening balance lookup failed: ${err?.message ?? err}`);
+    return undefined;
+  }
+}
+
 async function fetchEquityCurve(days: number): Promise<Leg> {
   if (config.broker !== 'alpaca') {
     return {
@@ -198,21 +237,7 @@ async function fetchEquityCurve(days: number): Promise<Leg> {
       params: { period: `${days}D`, timeframe: '1D' },
     });
 
-    const stamps: unknown[] = Array.isArray(res.data?.timestamp) ? res.data.timestamp : [];
-    const equity: unknown[] = Array.isArray(res.data?.equity) ? res.data.equity : [];
-
-    const series = new Map<string, number>();
-    let unfunded = false, opening: Leg['opening'];
-    for (let i = 0; i < Math.min(stamps.length, equity.length); i++) {
-      const value = Number(equity[i]);
-      // Zero equity is what Alpaca reports for sessions before the account was funded. It is
-      // not a $0 portfolio, and treating it as a level would manufacture a −100 % day.
-      if (!Number.isFinite(value) || value <= 0) { if (series.size === 0) unfunded = true; continue; }
-      const date = etDate(Number(stamps[i]) * 1000);
-      if (!date) continue;
-      if (series.size === 0 && unfunded) opening = { date, value };
-      series.set(date, value);
-    }
+    const { series, opening } = parseEquityHistory(res.data);
 
     return {
       series,
@@ -269,6 +294,10 @@ async function cashFlowsInWindow(from: string, opening?: Leg['opening']): Promis
       const stamp = String(a?.date ?? a?.transaction_time ?? '').slice(0, 10);
       return stamp !== '' && stamp >= from;
     });
+    if (!opening && inWindow.length) {
+      const earliest = inWindow.map(a => String(a?.date ?? '').slice(0, 10)).sort()[0];
+      opening = await openingNear(earliest);
+    }
     return { count: inWindow.length - (openingFunding(inWindow, opening) ? 1 : 0) };
   } catch (err: any) {
     logger.warn(`[benchmark] activities lookup failed: ${err?.message ?? err}`);
