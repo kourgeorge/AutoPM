@@ -21,9 +21,10 @@
  */
 import type { Bar } from '../core/types';
 import type { Policy } from '../policy/types';
-import { builtInTrendSignals } from '../strategy/signals';
-import { computeMeanReversionSignals } from '../strategy/meanReversion';
-import { WINDOW, windowAt, type CompiledSignal } from './sandbox';
+import { Signal, SignalContext } from '../signals/signal';
+import { BUILT_IN_SIGNALS } from '../signals/registry';
+import { SandboxedSignal } from '../signals/sandboxed';
+import { WINDOW, windowAt } from './sandbox';
 
 export const HORIZON = 5;
 const EXAM_YEARS = 2;
@@ -111,20 +112,40 @@ function grid(u: Universe, names: string[], scoreSymbol: (symbol: string, bars: 
   return { names, points };
 }
 
-/** The built-in trend and mean-reversion signals, one column per signal name. */
-export function scoreBuiltIns(u: Universe, policy: Policy): Scored {
-  const sample = u.bars.get(u.symbols[0])!;
-  const names = [...builtInTrendSignals(sample.slice(-WINDOW), policy), ...computeMeanReversionSignals(sample.slice(-WINDOW), policy)].map(s => s.name);
-  return grid(u, names, (_s, bars, idx) => idx.map(i => {
-    const w = bars.slice(i - WINDOW + 1, i + 1);
-    const byName = new Map([...builtInTrendSignals(w, policy), ...computeMeanReversionSignals(w, policy)].map(s => [s.name, s.score]));
-    return names.map(n => byName.get(n) ?? null);
-  }));
+/**
+ * Any list of signals, one column each. Built-ins run in-process on a shared context per
+ * stock-day; model-written ones go to the sandbox in one batch per stock.
+ * A "no reading" is null and is left out of that day's ranking, never counted as 0.
+ */
+export function scoreSignals(u: Universe, signals: readonly Signal[], policy: Policy): Scored {
+  return grid(u, signals.map(s => s.name), (_s, bars, idx) => {
+    const cols = signals.map(sig => sig instanceof SandboxedSignal
+      ? sig.runMany(idx.map(i => windowAt(bars, i)))
+      : idx.map(i => {
+          const r = sig.evaluate(ctxAt(bars, i, policy));
+          return r ? r.score : null;
+        }));
+    return idx.map((_, k) => cols.map(c => c[k]));
+  });
 }
 
-/** One model-written signal. Throws when its code fails. */
-export function scoreCandidate(u: Universe, name: string, compiled: CompiledSignal): Scored {
-  return grid(u, [name], (_s, bars, idx) => compiled.run(idx.map(i => windowAt(bars, i)), 20_000).map(v => [v]));
+/** Contexts for one stock-day, shared by every built-in scored on it. */
+const ctxMemo = new WeakMap<Bar[], Map<number, SignalContext>>();
+function ctxAt(bars: Bar[], i: number, policy: Policy): SignalContext {
+  let m = ctxMemo.get(bars);
+  if (!m) { m = new Map(); ctxMemo.set(bars, m); }
+  let c = m.get(i);
+  if (!c) {
+    c = new SignalContext(bars.slice(i - WINDOW + 1, i + 1), policy);
+    if (m.size > 2_000) m.clear();
+    m.set(i, c);
+  }
+  return c;
+}
+
+/** The hand-written signals of every family. */
+export function scoreBuiltIns(u: Universe, policy: Policy): Scored {
+  return scoreSignals(u, BUILT_IN_SIGNALS, policy);
 }
 
 function ranks(xs: number[]): number[] {
