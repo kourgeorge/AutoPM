@@ -133,6 +133,8 @@ const IB_SIDE: Record<string, 'buy' | 'sell'> = {
 };
 
 export class IBKRBroker implements IBroker {
+  /** TWS cannot prove a historical order is absent (see `lookupOrder`). */
+  readonly provesOrderAbsence = false;
   private readonly api: IBApiNext;
   private readonly account: string;
   private readonly observedOrders = new Map<string, IbOrder>();

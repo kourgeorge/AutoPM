@@ -7,6 +7,10 @@ import { getPolicyHash, getPolicySnapshot } from '../policy/load';
 import { summarizeStrategy } from '../policy/summary';
 import { updateTradingSettings, type TradingSettingsUpdate } from '../policy/mutate';
 import { appEndpoints, readAppEndpoint } from '../server/api';
+import { adoptHolding } from '../strategy/adopt';
+import { confirmProtection, clearUnplacedProtection } from '../strategy/protectionIntent';
+import { sweepOrders } from '../strategy/orderExecutor';
+import { serviceStatus } from '../server/status';
 /**
  * Assistant Agent — the user-facing conversational layer.
  *
@@ -24,7 +28,8 @@ import { getPolicy } from '../policy/load';
 import { renderPolicy } from '../policy/render';
 import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
-import { getState } from '../state/state';
+import { getState, updateState } from '../state/state';
+import { agentContext } from '../core/agentContext';
 import { TRADER_TOOL_DEFINITIONS, executeTraderTool } from '../tools/traderTools';
 import { toolKind } from '../tools/toolKinds';
 import { CHART_TOOL_DEFINITIONS, executeChartTool } from '../tools/chartTools';
@@ -75,6 +80,37 @@ const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [
       },
       required: ['message'],
     },
+  },
+  {
+    name: 'adopt_holding',
+    description: "Hand an existing broker holding the app does not manage yet to the app, with a stop and optional target. The app then places the broker protection itself on its next protection pass. Same as Adopt holding on the dashboard. Use only when the operator asked for it and gave or agreed the stop.",
+    input_schema: { type: 'object', properties: {
+      symbol: { type: 'string' },
+      stop: { type: 'number', description: 'Stop price, whole cents, below the current price.' },
+      target: { type: 'number', description: 'Optional take-profit price, above the stop.' },
+    }, required: ['symbol', 'stop'] },
+  },
+  {
+    name: 'rearm_protection',
+    description: "Clear an uncertain protection request for a managed holding, after checking the broker shows no open order for it, so the app places a fresh stop on its next pass. Refused while any broker order rests for the symbol. Same as Re-arm on the dashboard.",
+    input_schema: { type: 'object', properties: { symbol: { type: 'string' } }, required: ['symbol'] },
+  },
+  {
+    name: 'confirm_protection',
+    description: "Link a stop (and optional target) that already rests at the broker to a managed holding, after an interrupted protection request. The broker order must match the intended price and the held quantity. Same as Confirm protection on the dashboard.",
+    input_schema: { type: 'object', properties: {
+      symbol: { type: 'string' }, stopOrderId: { type: 'string' }, targetOrderId: { type: 'string' },
+    }, required: ['symbol', 'stopOrderId'] },
+  },
+  {
+    name: 'reconcile_orders',
+    description: "Re-check every unfinished order against the broker now (the app also does this every few seconds) and return the service health: issues, unresolved orders, protection requests and unprotected holdings.",
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'set_trading_paused',
+    description: "Pause or resume trading. Paused: no queued order is sent and the trader does not run; orders already at the broker stay, and protection checks continue. Use only when the operator asked.",
+    input_schema: { type: 'object', properties: { paused: { type: 'boolean' } }, required: ['paused'] },
   },
   {
     name: 'get_policy_playbook',
@@ -169,6 +205,11 @@ export const ASSISTANT_TOOL_NAMES = [
   'get_price_stats', 'get_macro_regime', 'get_signals', 'get_watchlist_scan', 'get_correlation',
   'get_exposure', 'get_calendar', 'get_fundamentals', 'get_strategy_settings', 'get_state',
   'get_request_trace', 'get_app_endpoints', 'read_app', 'send_to_trader', 'request_research', 'get_policy_playbook',
+  // Acting on the account directly, under the same guards and approval rules as the trader.
+  'get_position_review', 'get_thesis_status', 'compare_position_actions', 'get_entry_plan', 'get_evidence',
+  'get_market_context', 'get_economic_calendar', 'get_company_filings', 'get_research_updates', 'get_intraday_volume',
+  'execute_entry', 'execute_exit', 'annotate_position',
+  'adopt_holding', 'rearm_protection', 'confirm_protection', 'reconcile_orders', 'set_trading_paused',
   'update_trading_settings', 'get_stock_bars', 'get_stock_snapshot', 'get_stock_latest_quote',
   'get_most_active_stocks', 'get_market_movers', 'get_news', 'get_portfolio_history', 'web_search',
   'show_price_history', 'show_performance_comparison',
@@ -189,10 +230,12 @@ const SYSTEM_PROMPT = `You are AutoTrade's account assistant.
 Answer questions using the account tools and cite the recorded reasons and outcomes.
 You can read everything the app itself shows: get_app_endpoints lists the engine's pages and read_app reads one. Use them for questions about the app — AI model usage, tokens and cost (/api/llm-usage), service health, the broker book, saved prompts, agent requests — before saying you cannot see something. Never say data is out of reach without checking get_app_endpoints first.
 When the operator asks you to research or assess a stock, call request_research; do not relay research to the trader. Say the research has started and that its summary will appear in this chat when it finishes; do not predict its verdict.
-Relay a request when the operator asks the trader to act or asks something only the trader can judge (its view on a holding, why it did something). Pass their request as they said it; do not widen it. send_to_trader returns a durable request ID and queue status: say it was sent and that the trader's reply will appear in this chat. Do not predict the outcome.
-You cannot place trades, approve orders or adopt holdings. The operator adopts a holding themselves: in the terminal with /adopt SYMBOL STOP [TARGET], in the browser dashboard with Adopt holding. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
-For pause/resume and approvals, direct the operator to the account controls.
-A one-off instruction goes to the trader. A lasting settings change is saved with update_trading_settings.
+Do what the operator asks yourself, with your own tools. You have the same broker and trade tools as the trader: execute_entry, execute_exit and annotate_position queue orders under the same guards and the same approval setting, and adopt_holding, rearm_protection, confirm_protection, reconcile_orders and set_trading_paused are the dashboard's account controls. Act only on what the operator actually asked for — never trade on your own initiative, and ask before an order whose size or levels they did not give or agree.
+For an entry, read get_position_review for the stock, then get_entry_plan with supported levels, then execute_entry. For an exit the operator asked for, use basis operator_request. A stop can only be tightened; an unmanaged holding is adopted with adopt_holding. ok:true is a queue receipt: read get_orders / get_open_orders before saying an order filled or a stop rests at the broker. If a guard or the broker refuses, say exactly what refused and why.
+A holding with no confirmed stop: read get_open_orders and get_orders, then fix the cause — reconcile_orders for a stuck order, rearm_protection for an uncertain protection request with nothing resting, confirm_protection for a stop that rests but is not linked, adopt_holding for an unmanaged holding. The app's protection pass places the stop itself; say it is placed only after reading it back.
+Use send_to_trader only when the operator wants the trader's own judgement or asks for the trader by name. Pass their request as they said it; the trader's reply appears in this chat.
+You cannot approve or reject orders waiting for approval; the operator does that in the account controls. You can save strategy settings changes with update_trading_settings, except approval/automation settings.
+A one-off instruction you carry out yourself. A lasting settings change is saved with update_trading_settings.
 To explain why a position was entered or exited, read get_orders for that symbol (includeDecided), then get_request_trace with the order's requestId: say who started the request, the stated reason, and whether the turn shows evidence for it. If the recorded reason contradicts the action — a hold sentence on a sell, "operator-directed" when the scheduler started it, or no reason at all — say so plainly; do not present it as a deliberate decision.
 get_state shows pause, account and outstanding orders. get_journal explains decisions, newest kept when trimmed; get_scorecard reports closed-trade statistics; get_benchmark supplies verified account performance. Raw equity growth is not investment return.
 Read get_strategy_settings afresh before describing current settings or suggesting a change. Its summary is the presentation baseline; use its correctly scaled values, not remembered defaults or old conversation results.
@@ -201,7 +244,7 @@ Explain risk per trade as planned loss at the stop and position size as money in
 Settings questions do not wake the trader. When the operator asks to change a setting, save it with update_trading_settings and report the before and after values from its result. When you are only suggesting values, label them as suggestions and ask before saving. Never claim a change was saved unless the tool returned ok:true; if it returned errors, say what was rejected.
 Read get_policy_playbook when quoting or explaining account strategy prose. Lessons are advisory observations and must not override strategy or platform behavior.
 Use chart tools when the operator asks to see history or a comparison. Their results state whether a comparison is available.
-Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued order filled or that a paused trader started immediately.
+Give a final answer after reading tool results. If a tool fails, state its recorded error without inventing a cause. Do not claim a queued order filled, a stop rests at the broker, or a paused trader started immediately, without reading it back.
 Keep answers concise. Tools available: ${ASSISTANT_TOOLS.map(t => t.name).join(', ')}.`;
 
 /** The account assistant's system prompt. */
@@ -214,7 +257,13 @@ export class AssistantAgent {
   private stopped = false;
   private readonly registry = new ToolRegistry(ASSISTANT_TOOLS, (name, input) => this.dispatchTool(name, input));
 
-  constructor(private readonly wake: (msg: string) => unknown) {}
+  constructor(
+    private readonly wake: (msg: string) => unknown,
+    /** Pause and resume go through the trader so its loop stops and starts with the flag. */
+    private readonly control: { setPaused(paused: boolean): void } = { setPaused: paused => updateState({ paused }) },
+  ) {}
+  /** Who the operator command is recorded under: the chat user the current turn answers. */
+  private actor(): string { return agentContext.getStore()?.actorId ?? 'operator'; }
 
   handleMessage(userText: string, actorId = 'operator'): AgentRequest {
     if (this.stopped) throw new Error('The service is stopping');
@@ -298,6 +347,30 @@ export class AssistantAgent {
     if (name === 'send_to_trader') {
       const message = input.message as string;
       return JSON.stringify({ ok: true, receipt: this.wake(message) });
+    }
+
+    if (name === 'adopt_holding') {
+      const target = input.target == null ? undefined : Number(input.target);
+      const r = await adoptHolding(String(input.symbol ?? ''), Number(input.stop), target, this.actor());
+      return JSON.stringify({ ok: true, ...r, note: 'Managed now. The protection pass places the broker stop shortly; read get_open_orders to confirm it rests.' });
+    }
+    if (name === 'rearm_protection') {
+      await clearUnplacedProtection(String(input.symbol ?? ''), this.actor());
+      return JSON.stringify({ ok: true, note: 'Uncertain request cleared. The protection pass places a fresh stop shortly; read get_open_orders to confirm it rests.' });
+    }
+    if (name === 'confirm_protection') {
+      await confirmProtection(String(input.symbol ?? ''), String(input.stopOrderId ?? ''), input.targetOrderId as string | undefined, this.actor());
+      return JSON.stringify({ ok: true, note: 'Protection linked. Trading stays paused until resumed.' });
+    }
+    if (name === 'reconcile_orders') {
+      await sweepOrders();
+      const health = serviceStatus();
+      return JSON.stringify({ ok: true, ready: health.ready, issues: health.issues, unresolved: health.unresolved, protection: health.protection, unprotected: health.unprotected });
+    }
+    if (name === 'set_trading_paused') {
+      if (typeof input.paused !== 'boolean') return JSON.stringify({ ok: false, error: 'paused must be true or false' });
+      this.control.setPaused(input.paused);
+      return JSON.stringify({ ok: true, paused: getState().paused });
     }
 
     if (name === 'update_trading_settings') {

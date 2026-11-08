@@ -16,6 +16,10 @@ import { isDefiniteRefusal } from './protectionIntent';
 
 let sweep: Promise<void> | null = null;
 
+/** How long a sent order may take to show up at the venue before its absence counts. */
+export const NEVER_ARRIVED_AFTER_MS = 2 * 60_000;
+const lastChange = (p: Order) => Math.max(p.createdAt, Date.parse(p.history?.at(-1)?.at ?? '') || 0);
+
 /** No side effect is retried without a broker read establishing its outcome. */
 async function reconcile(p: Order): Promise<void> {
   ensureOrderDecision(p);
@@ -45,6 +49,15 @@ async function reconcile(p: Order): Promise<void> {
       filledPrice: fills.reduce((sum, f) => sum + f.price * f.qty, 0) / qty, status: 'filled' };
   }
   if (!order) {
+    // Asked by our own client id, a venue that keeps every accepted order says "never seen it":
+    // nothing was sent, so the action failed. Left unknown, it held the symbol's lock forever —
+    // no stop was re-armed and no exit could be sent (IBM, 2026-11-06 → 11-08). The wait covers
+    // an order still on its way to the venue.
+    if (!p.result?.brokerOrderId && p.clientOrderId && broker.provesOrderAbsence && Date.now() - lastChange(p) >= NEVER_ARRIVED_AFTER_MS) {
+      transitionOrder(p.id, 'failed', { result: { ...p.result, error: `${p.result?.error ? p.result.error + ' — ' : ''}the broker has no order ${p.clientOrderId}, so it never arrived; nothing was sent` } });
+      logger.warn(`[Reconcile] ${p.kind} ${p.symbol} ${p.id}: the broker has no order ${p.clientOrderId} — marked failed; protection for ${p.symbol} can be re-armed`);
+      return;
+    }
     if (p.status !== 'unknown') transitionOrder(p.id, 'unknown', { result: { ...p.result, error: 'Broker outcome is unknown; this action will not be resubmitted' } });
     return;
   }

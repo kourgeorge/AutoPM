@@ -94,7 +94,7 @@ if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => {
 const trader = new Trader();
 // A finished child request is an event for the trader that asked for it.
 onRequestFinished(request => { if (publishRequestFinished(request)) trader.wake(); });
-const assistant = new AssistantAgent(msg => trader.wake(msg));
+const assistant = new AssistantAgent(msg => trader.wake(msg), { setPaused: paused => paused ? trader.pause() : trader.resume() });
 const researcher = new Researcher();
 
 // All user input goes to the assistant — except `/` commands, which the UI handles itself

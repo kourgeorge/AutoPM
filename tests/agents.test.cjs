@@ -61,10 +61,10 @@ beforeEach(() => {
 });
 after(() => storage.closeStorage());
 
-test('assistant rejects undeclared mutations and malformed tool inputs', async () => {
+test('assistant rejects trader-only tools and malformed tool inputs', async () => {
   let handoffs = 0;
   const assistant = new AssistantAgent(() => { handoffs++; });
-  for (const name of ['execute_exit','execute_entry','write_lesson','ack_event']) {
+  for (const name of ['write_lesson','ack_event','sleep','record_position_review']) {
     const result = JSON.parse(await assistant.executeTool(name, { symbol: 'AAPL' }));
     assert.match(result.error, /not permitted/);
   }
@@ -73,6 +73,27 @@ test('assistant rejects undeclared mutations and malformed tool inputs', async (
   }
   assert.equal(handoffs, 0);
   assert.equal(lessons.readLessons().length, 0);
+});
+
+test('assistant acts on the account directly: trade tools go through the same guards, controls are its own', async () => {
+  let handoffs = 0, pausedTo = null;
+  const assistant = new AssistantAgent(() => { handoffs++; }, { setPaused: p => { pausedTo = p; state.updateState({ paused: p }); } });
+  const names = assistant.registry.definitions.map(t => t.name);
+  for (const name of ['execute_entry','execute_exit','annotate_position','get_entry_plan','get_position_review','adopt_holding','rearm_protection','confirm_protection','reconcile_orders','set_trading_paused'])
+    assert.ok(names.includes(name), 'assistant has ' + name);
+  const run = (name, input) => agentContext.run({ role: 'assistant', requestId: 'chat-1', actorId: 'alice', toolCallId: 'chat-1:' + name }, () => assistant.executeTool(name, input));
+
+  const exit = JSON.parse(await run('execute_exit', { symbol: 'AAPL', basis: 'operator_request', reason: 'The operator asked to sell the whole AAPL position now.' }));
+  assert.equal(exit.rejectedBy, 'guard', 'an exit is still checked by the guard: nothing is held');
+  assert.equal(exit.rule, 'no_position');
+
+  assert.equal(JSON.parse(await run('set_trading_paused', { paused: true })).paused, true);
+  assert.equal(pausedTo, true);
+  assert.equal(JSON.parse(await run('set_trading_paused', { paused: false })).paused, false);
+
+  const adopt = JSON.parse(await run('adopt_holding', { symbol: 'AAPL', stop: 90 }));
+  assert.equal(adopt.ok, false, 'adoption keeps its own checks (no such holding)');
+  assert.equal(handoffs, 0, 'none of this goes through the trader');
 });
 
 test('assistant settings reads are fresh, local and unaffected by conflicting playbook prose', async () => {

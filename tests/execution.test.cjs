@@ -92,6 +92,41 @@ test('unknown broker outcomes block another account action', async () => {
   assert.equal(placed, 0);
 });
 
+test('an unknown exit the broker never received is marked failed, and the stop is re-armed', async () => {
+  const { sweepStops } = require('../src/strategy/stopOrders');
+  held = [{ symbol: 'IBM', qty: 39, avgCost: 253.78, marketValue: 9555 }];
+  state.openPositionSnapshot({ symbol: 'IBM', stopLevel: 241.84, takeProfitLevel: 281 });
+  const p = actions.createOrder({ kind: 'exit', symbol: 'IBM', venue: 'paper', params: { qty: 39 }, reason: 'test', timeoutMs: 60000, automatic: true });
+  actions.transitionOrder(p.id, 'executing');
+  actions.transitionOrder(p.id, 'unknown', { result: { error: 'Broker has not confirmed cancellation of f1159a95' } });
+  state.updateState({ paused: false });
+  let oco = 0;
+  broker.placeOco = async () => { oco++; return { stopOrderId: 'stop-new', takeProfitOrderId: 'tp-new' }; };
+  await withClock(async tick => {
+    await executor.sweepOrders();
+    assert.equal(actions.getOrder(p.id).status, 'unknown', 'a fresh unknown is given time to reach the venue');
+    tick(executor.NEVER_ARRIVED_AFTER_MS + 1000);
+    await executor.sweepOrders();
+  });
+  assert.equal(actions.getOrder(p.id).status, 'failed');
+  assert.match(actions.getOrder(p.id).result.error, /never arrived/);
+  assert.equal(placed, 0, 'nothing is resubmitted');
+  await sweepStops();
+  assert.equal(oco, 1, 'with the lock gone, the sweep re-arms the bracket');
+  assert.equal(state.getPositionSnapshot('IBM').stopOrderId, 'stop-new');
+});
+
+test('on a venue that cannot prove absence, an unknown order stays unknown', async () => {
+  const proves = Object.getOwnPropertyDescriptor(broker, 'provesOrderAbsence');
+  Object.defineProperty(broker, 'provesOrderAbsence', { value: false, configurable: true });
+  try {
+    const p = entry(true);
+    actions.transitionOrder(p.id, 'executing');
+    await withClock(async tick => { tick(executor.NEVER_ARRIVED_AFTER_MS * 10); await executor.sweepOrders(); });
+    assert.equal(actions.getOrder(p.id).status, 'unknown');
+  } finally { if (proves) Object.defineProperty(broker, 'provesOrderAbsence', proves); else delete broker.provesOrderAbsence; }
+});
+
 test('unconfirmed stop cancellation fails the unsent exit without an unknown sell', async () => {
   held = [{ symbol: 'AAPL', qty: 2, marketValue: 200 }];
   state.openPositionSnapshot({ symbol: 'AAPL', stopLevel: 95, stopOrderId: 'stop-1' });

@@ -13,7 +13,8 @@
 export type ToolKind = 'read' | 'act' | 'record' | 'handoff' | 'housekeeping';
 
 const KINDS: Record<Exclude<ToolKind, 'read'>, string[]> = {
-  act: ['execute_entry', 'execute_exit', 'annotate_position', 'update_trading_settings'],
+  act: ['execute_entry', 'execute_exit', 'annotate_position', 'update_trading_settings',
+    'adopt_holding', 'rearm_protection', 'confirm_protection', 'reconcile_orders', 'set_trading_paused'],
   record: ['record_position_review', 'record_candidate_review', 'record_research_review', 'write_lesson'],
   handoff: ['request_research', 'send_to_trader'],
   housekeeping: ['ack_event', 'sleep'],
