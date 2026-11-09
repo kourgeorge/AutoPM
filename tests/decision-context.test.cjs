@@ -108,6 +108,12 @@ test('saved contexts and receipts preserve every character and pages preserve fu
   while (next !== null) { const page = recordPage('scan', { rows: [] }, 'rows', { snapshotId: first.snapshotId, offset: next }); all.push(...page.rows); next = page.nextOffset; }
   assert.deepEqual(all, rows);
   assert.throws(() => recordPage('wrong', {}, 'rows', { snapshotId: first.snapshotId }), /Unknown snapshot/);
+  // Models often pass the receipt id of their previous page call instead of the first one.
+  storage.saveRecord('tool-calls', 'page-2', { name: 'scan', input: { snapshotId: first.snapshotId, offset: 20 } });
+  storage.saveRecord('tool-calls', 'page-3', { name: 'scan', input: { snapshotId: 'page-2', offset: 25 } });
+  const chained = recordPage('scan', { rows: [] }, 'rows', { snapshotId: 'page-3', offset: 25 });
+  assert.equal(chained.snapshotId, first.snapshotId); assert.deepEqual(chained.rows, rows.slice(25));
+  assert.throws(() => recordPage('scan', {}, 'rows', { snapshotId: 'typo' }), /Copy snapshotId exactly/);
   const scoped = recordPage('filings', { symbol: 'AAPL', rows: [] }, 'rows', {});
   assert.throws(() => recordPage('filings', {}, 'rows', { symbol: 'MSFT', snapshotId: scoped.snapshotId }), /different symbol/);
   const exchanges = [{ role: 'user', content: [{ type: 'text', text: 'Review positions' }] }];
