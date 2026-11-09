@@ -70,7 +70,6 @@ export interface OperatorUI {
   setAssistantActivity(lane: Lane): void;
   setCycle(cycle: Cycle): void;
   setDailyUsage(usage: DailyUsage): void;
-  setStatus(text: string): void;
   captureStreams(): void;
   close(): void;
 }

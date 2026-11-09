@@ -780,7 +780,7 @@ function liveRouting(): void {
   };
 
   warm(busy, at(0));
-  const { snapshot, fired } = tickBoth(busy, at(0));
+  const { fired } = tickBoth(busy, at(0));
 
   // The world is asserted before the router, so a detector change that silently drains the
   // input cannot make the coalescing checks pass by delivering nothing.

@@ -18,7 +18,6 @@ require.cache[brokerPath] = {
       return { accountId: 'startup-account', equity: 10000, cash: 10000, buyingPower: 10000, previousCloseEquity: 10000 };
     },
     getPositions: async () => [], getOpenOrders: async () => [], getFills: async () => [],
-    isMarketOpen: async () => false,
     placeOrder: mutate, cancelOrder: mutate, replaceOrder: mutate, placeOco: mutate,
   } },
 };

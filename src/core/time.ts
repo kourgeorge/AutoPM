@@ -61,7 +61,7 @@ export type MarketSession = 'closed' | 'premarket' | 'open' | 'afterhours';
  * market-hours rule; applied around the clock it turns every overnight into a stale-data
  * storm, one event per watched symbol.
  *
- * Deliberately clock-only, not `broker.isMarketOpen()`: that is a network call per 60s tick,
+ * Deliberately clock-only, not `broker.marketSession()`: that is a network call per 60s tick,
  * is unknown on failure, and would make `snapshotFrom` async — breaking the replay harness's
  * virtual clock. The cost is holidays and half-days, which this reports as `open`. That bias
  * is the safe one: a false `open` fires a burst of events once and the cooldown absorbs it,

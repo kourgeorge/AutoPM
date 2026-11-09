@@ -322,21 +322,6 @@ async function collectPriceYahoo(
   }
 }
 
-export async function collectPrice(
-  symbol: string,
-  maxAgeMs: number = DEFAULT_MAX_AGE_MS,
-): Promise<Maybe<number>> {
-  // Single-symbol path: try Alpaca snapshot, fall back to Yahoo.
-  try {
-    const snaps = await fetchAlpacaSnapshots([symbol]);
-    const hit = snaps.get(symbol);
-    if (hit) return observePrice(hit, ALPACA_SOURCE, maxAgeMs);
-  } catch {
-    // Alpaca unavailable — fall through to Yahoo
-  }
-  return collectPriceYahoo(symbol, maxAgeMs);
-}
-
 export async function collectPrices(
   symbols: string[],
   maxAgeMs: number = DEFAULT_MAX_AGE_MS,

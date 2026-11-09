@@ -56,8 +56,6 @@ export type EventKind =
   | 'request_finished'
   | 'operator_command'
   | 'portfolio_review'
-  | 'policy_changed'
-  | 'policy_reverted'
   | 'portfolio_drawdown'
   | 'concentration_breach';
 

@@ -1,4 +1,3 @@
-import { subscribeActivity } from './core/storage';
 import { ui } from './ui/ui';
 import { attachUI } from './core/logger';
 import { Trader } from './agents/trader';
@@ -22,7 +21,7 @@ import { pendingOrders } from './core/orders';
 import type { EventRow } from './ui/dashboard';
 import { getMarketStatusSnapshot } from './tools/traderTools';
 import { registerOperatorCommands } from './core/operatorCommands';
-import { HeadlessUI } from './ui/headless';
+import type { HeadlessUI } from './ui/headless';
 import { startApiServer } from './server/api';
 import { initializeAccount, stopRuntime } from './core/runtime';
 import { closeStorage } from './core/storage';
@@ -86,12 +85,6 @@ function decisionToActivityRow(r: DecisionRecord): EventRow {
 
 }
 
-// Assistant replies go to the chat; trader results (core/requests.ts) go to the log pane.
-if (!(ui instanceof HeadlessUI)) subscribeActivity(entry => {
-  if (entry.kind === 'reply') ui.reply(entry.text);
-  else if (entry.kind === 'log' && /^\[(Trader|Research)\] /.test(entry.text)) ui.log(entry.level ?? 'INFO', entry.text);
-});
-
 const trader = new Trader();
 // A finished child request is an event for the trader that asked for it.
 onRequestFinished(request => { if (publishRequestFinished(request)) trader.wake(); });
@@ -104,12 +97,12 @@ registerOperatorCommands(trader);
 
 // Both independent clients use this engine API. Register commands before accepting requests;
 // the separate web process owns browser assets and the TUI owns its terminal lifecycle.
-const api = ui instanceof HeadlessUI ? startApiServer({ ui, trader, serveWeb: false, messageService: (text, actor) => assistant.handleMessage(text, actor) }) : null;
+// daemon.ts sets HEADLESS=1 before loading this file, so `ui` is always the headless UI.
+const api = startApiServer({ ui: ui as HeadlessUI, trader, serveWeb: false, messageService: (text, actor) => assistant.handleMessage(text, actor) });
 
 // L2 — the deterministic tick loop, and the ONLY path that wakes anyone. Machine wakes
-// carry no message: `pendingMessages` renders under `=== OPERATOR INSTRUCTIONS ===`, and a
-// machine event is not an operator instruction. The events themselves travel via the
-// registry, read at cycle start.
+// carry no message: a machine event is not an operator instruction. The events themselves
+// travel via the registry, read at cycle start.
 const scheduler = new FeatureScheduler({
   route: createLiveRouter({
     wakeTrader: () => trader.wake(),
@@ -188,7 +181,7 @@ async function stopResources(signal: string): Promise<void> {
   // Stop intake, drain the sole mutation executor, then close the durable store.
   const deadline = setTimeout(() => process.exit(1), 25_000);
   deadline.unref();
-  await api?.close();
+  await api.close();
   await agentsStopped;
   await execution.stop();
   await notifications.stop();

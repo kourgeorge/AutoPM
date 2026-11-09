@@ -21,19 +21,18 @@ import { serviceStatus } from '../server/status';
  * The trader never talks to the user directly — that's this agent's job.
  */
 
-import { readRecord, listRecords } from '../core/storage';
+import { listRecords } from '../core/storage';
 import { createLiveModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
 import { getPolicy } from '../policy/load';
 import { renderPolicy } from '../policy/render';
-import { logger } from '../core/logger';
 import { ui } from '../ui/ui';
 import { getState, updateState } from '../state/state';
 import { agentContext } from '../core/agentContext';
 import { TRADER_TOOL_DEFINITIONS, executeTraderTool } from '../tools/traderTools';
 import { toolKind } from '../tools/toolKinds';
 import { CHART_TOOL_DEFINITIONS, executeChartTool } from '../tools/chartTools';
-import type { ChatMessage, ContentBlock, ToolDefinition } from '../core/types';
+import type { ChatMessage, ToolDefinition } from '../core/types';
 
 /** Read helpers and action/relay tools owned by the assistant. */
 const ASSISTANT_OWN_TOOLS: ToolDefinition[] = [

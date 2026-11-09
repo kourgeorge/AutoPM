@@ -7,9 +7,7 @@ export function startWebServer(engine: URL, port: number): http.Server {
   if (engine.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(engine.hostname)) throw new Error('The web server requires a local engine');
   const upstreamRequests = new Set<http.ClientRequest>();
   const server = http.createServer((req, res) => {
-    const bound = (server.address() as { port: number }).port;
     const allowedHosts = process.env.WEB_ALLOWED_HOSTS?.split(',').map(h => h.trim()) || [];
-    const origins = [`http://127.0.0.1:${bound}`, `http://localhost:${bound}`, `http://192.168.1.77:${bound}`, ...allowedHosts.map(h => `http://${h}:${bound}`)];
     const fail = (code: number, error: string) => {
       if (res.headersSent) { res.destroy(); return; }
       res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error }));

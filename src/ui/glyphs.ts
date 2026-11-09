@@ -79,5 +79,3 @@ export function makeGlyphs(unicodeOk: boolean): Glyphs {
   if (process.env.AUTOTRADE_ASCII === '1') return ASCII;
   return unicodeOk ? UNICODE : ASCII;
 }
-
-export { ASCII as ASCII_GLYPHS, UNICODE as UNICODE_GLYPHS };

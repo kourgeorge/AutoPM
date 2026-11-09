@@ -600,7 +600,7 @@ test('unconfirmed stop adjustments preserve the original entry thesis and journa
   stops.moveStopTo = async () => ({ ok: false, reason: 'Broker refused the adjustment' });
   state.openPositionSnapshot({ symbol: 'AAPL', entryPrice: 100, stopLevel: 95, entryDecisionId: 'original-entry', openedAt: new Date().toISOString() });
   try {
-    await traderTools.actAnnotation({ ok: true, symbol: 'AAPL', stopLoss: 96, takeProfit: null, thesis: 'Tighten protection', effectiveEntry: 100, heldQty: 5, snapEntryPriceMissing: false });
+    await traderTools.actAnnotation({ ok: true, symbol: 'AAPL', stopLoss: 96, takeProfit: null, thesis: 'Tighten protection', heldQty: 5 });
     const record = journal.readDecisions().at(-1), position = state.getPositionSnapshot('AAPL');
     assert.equal(position.entryDecisionId, 'original-entry');
     assert.equal(position.managementDecisionId, record.id);

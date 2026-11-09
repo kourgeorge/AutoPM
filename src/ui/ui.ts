@@ -263,7 +263,11 @@ export class TerminalUI implements OperatorUI {
    */
   private lastBlank = true;
 
-  constructor(private readonly remote = false) {
+  /**
+   * Always a client of the separate engine (`src/tui.ts`): the operator's echo comes back from
+   * the engine, and every account action is sent there rather than run in this process.
+   */
+  constructor() {
     this.screen = blessed.screen({
       smartCSR: true,
       title: 'AutoTrade',
@@ -419,7 +423,6 @@ export class TerminalUI implements OperatorUI {
     });
 
     this.input.onSubmit((line) => {
-      if (!this.remote) this.appendUserMessage(line);
       // Matched HERE, before anything reaches the assistant: the decision to act on an action
       // must not pass through a language model, and the assistant has no decide tool precisely
       // so it cannot answer on the operator's behalf. Anything that doesn't match the command
@@ -427,8 +430,7 @@ export class TerminalUI implements OperatorUI {
       const trimmed = line.trim();
       if (trimmed.startsWith('/')) return this.runCommand(trimmed);
       const match = DECIDE_COMMAND.exec(trimmed);
-      if (match && this.remote) { this.onSubmit?.(trimmed); return; }
-      if (match) return this.decide(match[1].toLowerCase() as 'approve' | 'reject', match[2], match[3]);
+      if (match) { this.onSubmit?.(trimmed); return; }
       this.onSubmit?.(line);
     });
 
@@ -627,18 +629,6 @@ export class TerminalUI implements OperatorUI {
     this.paint();
   }
 
-  /**
-   * Back-compat shim for callers that still push a bare string.
-   *
-   * It lands on the TRADER lane, which is where every historical caller meant it to go — and
-   * why it is a shim rather than the API: the assistant writing 'ready' used to erase
-   * 'sleeping — next cycle in 7 min', because one line held two agents' states.
-   */
-  setStatus(text: string): void {
-    this.traderLane = { state: 'idle', detail: text };
-    this.paint();
-  }
-
   // ── Private ──────────────────────────────────────────────────────────────
 
   private togglePanel(): void {
@@ -702,7 +692,7 @@ export class TerminalUI implements OperatorUI {
     this.registerCommand({
       name: 'quit',
       aliases: ['exit', 'q'],
-      help: this.remote ? (process.env.AUTOTRADE_PAIRED === '1' ? 'Close this paired session and stop its engine.' : 'Close this terminal client; the engine keeps running.') : 'Shut down cleanly (same as Ctrl+C).',
+      help: process.env.AUTOTRADE_PAIRED === '1' ? 'Close this paired session and stop its engine.' : 'Close this terminal client; the engine keeps running.',
       run: () => this.quitHandler(),
     });
     this.registerCommand({
@@ -756,13 +746,7 @@ export class TerminalUI implements OperatorUI {
       run: async (args) => {
         const symbol = args.trim().split(/\s+/)[0];
         if (!symbol) return this.log('WARN', 'Usage: /rearm <symbol>');
-        try {
-          if (this.remote) { this.onSubmit?.('/rearm ' + args); return; }
-          await require('../strategy/protectionIntent').clearUnplacedProtection(symbol, 'operator');
-          this.log('TRADE', `${symbol.toUpperCase()} cleared for protection. The stop is placed on the next protection check; /resume if trading is paused.`);
-        } catch (err: any) {
-          this.log('WARN', `Could not re-arm ${symbol.toUpperCase()}: ${err?.message ?? String(err)}`);
-        }
+        this.onSubmit?.('/rearm ' + args);
       },
     });
   }
@@ -774,13 +758,7 @@ export class TerminalUI implements OperatorUI {
       this.log('WARN', 'Usage: /adopt <symbol> <stop> [target]   e.g. /adopt IBM 210 255');
       return;
     }
-    try {
-      if (this.remote) { this.onSubmit?.('/adopt ' + args); return; }
-      const r = await require('../strategy/adopt').adoptHolding(symbol, stop, target, 'operator');
-      this.log('TRADE', `Adopted ${r.symbol} (${r.qty} sh, now ${r.mark.toFixed(2)}): stop ${stop.toFixed(2)}${target != null ? `, target ${target.toFixed(2)}` : ''}. The broker order is placed on the next protection check (about a minute).`);
-    } catch (err: any) {
-      this.log('WARN', `Could not adopt ${symbol.toUpperCase()}: ${err?.message ?? String(err)}`);
-    }
+    this.onSubmit?.('/adopt ' + args);
   }
 
   private decideFromCommand(decision: 'approve' | 'reject', args: string): void {
@@ -789,23 +767,8 @@ export class TerminalUI implements OperatorUI {
       this.log('WARN', `Usage: /${decision} <id>${decision === 'reject' ? ' [reason]' : ''}`);
       return;
     }
-    this.decide(decision, id, reason.join(' '));
-  }
-
-  /**
-   * Resolve one `approve <id>` / `reject <id> [reason]` command against the live action
-   * store. A synchronous state mutation, not a promise settle — creation and decision are
-   * fully decoupled, and `strategy/orderExecutor.ts` picks up an `approved` action on its
-   * own next tick, independent of whatever this process does next.
-   */
-  private decide(decision: 'approve' | 'reject', id: string, reason?: string): void {
-    try {
-      if (this.remote) { this.onSubmit?.(`${decision} ${id}${reason ? ' ' + reason : ''}`); return; }
-      const p = require('../core/orders').decideOrder(id, decision, 'human', reason?.trim() || undefined);
-      this.log('TRADE', `Operator ${decision === 'approve' ? 'approved' : 'rejected'} ${p.id} (${p.kind} ${p.symbol}).`);
-    } catch (err: any) {
-      this.log('WARN', `Could not ${decision} ${id}: ${err?.message ?? String(err)}`);
-    }
+    const why = reason.join(' ').trim();
+    this.onSubmit?.(`${decision} ${id}${why ? ' ' + why : ''}`);
   }
 
   /**
@@ -1164,4 +1127,4 @@ export class TerminalUI implements OperatorUI {
  * The blessed screen is never constructed in headless mode, which is what lets the process run
  * with no terminal attached at all.
  */
-export const ui: OperatorUI = HEADLESS ? new (require('./headless').HeadlessUI)() : new TerminalUI(process.env.AUTOTRADE_ROLE === 'tui');
+export const ui: OperatorUI = HEADLESS ? new (require('./headless').HeadlessUI)() : new TerminalUI();

@@ -3,7 +3,6 @@ import { TerminalClient } from './client/terminal';
 
 // Set before loading the terminal singleton, overriding any old HEADLESS value in .env.
 process.env.HEADLESS = '0';
-process.env.AUTOTRADE_ROLE = 'tui';
 
 async function main(): Promise<void> {
   const engine = engineUrl();

@@ -7,7 +7,7 @@ import { marketContext } from '../collect/marketContext';
 import { getIntradayVolume } from '../collect/intradayVolume';
 import { economicCalendar } from '../collect/economicCalendar';
 import { companyFilings, researchUpdates, readSource, recordResearchReview } from '../collect/research';
-import { readEvidence, evidenceResult, validateEvidenceIds } from '../journal/evidence';
+import { readEvidence, evidenceResult } from '../journal/evidence';
 import { THESIS_METRICS, savePositionReview, evaluatePremises, validateThesis, type EntryThesis } from '../journal/thesis';
 import { decisionFollowup, saveCandidateReview, type CandidateReview, type CandidateReviewDetails } from '../review/decisionFollowup';
 import { assessEntryRisk, entryLimitPrice, volatilityModel } from '../strategy/riskBudget';

@@ -15,7 +15,7 @@ import { collectPrices } from './priceSource';
 import { DEFAULT_MAX_AGE_MS, isPresent, isUsable, Maybe } from './types';
 
 export * from './types';
-export { collectPrice, collectPrices } from './priceSource';
+export { collectPrices } from './priceSource';
 export { collectBars, DEFAULT_MAX_BAR_AGE_MS } from './barSource';
 export {
   collectAccount,

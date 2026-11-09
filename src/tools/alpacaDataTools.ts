@@ -75,7 +75,6 @@ export const ALPACA_DATA_TOOL_DEFINITIONS: ToolDefinition[] = [
     input_schema: {
       type: 'object',
       properties: {
-        market_type: { type: 'string', description: 'Market type. Default "stocks".' },
         top:         { type: 'integer', description: 'Number of gainers and losers to return (default 10).' },
       },
       required: [],

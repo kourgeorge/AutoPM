@@ -7,7 +7,6 @@
  * to change when the signals became classes:
  *
  *   computeSignals        every trend signal, built-in plus promoted learned ones
- *   builtInTrendSignals   the five hand-written ones only
  *   signalTally           counts and the weighted composite
  *   signalSummary         the one-line headline
  *
@@ -28,11 +27,6 @@ import type { SignalScore } from '../signals/signal';
  */
 export function computeSignals(bars: Bar[], policy: Policy): SignalScore[] {
   return scoreAll(signalsIn('trend'), bars, policy);
-}
-
-/** The five hand-written trend signals only — what the learning layer measures as built-ins. */
-export function builtInTrendSignals(bars: Bar[], policy: Policy): SignalScore[] {
-  return scoreAll(signalsIn('trend', { learned: false }), bars, policy);
 }
 
 export interface SignalTally {

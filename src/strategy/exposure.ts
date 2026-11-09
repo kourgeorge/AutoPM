@@ -1,4 +1,4 @@
-import { readAccount, readPositions, readOrders } from '../core/accountRead';
+import { readAccount, readPositions } from '../core/accountRead';
 /**
  * Portfolio exposure as measured fact — weights, sectors, concentration, held-vs-held
  * correlation.
@@ -18,7 +18,6 @@ import { readAccount, readPositions, readOrders } from '../core/accountRead';
  */
 
 import { getSectors } from '../collect/sectorCache';
-import { broker } from '../broker';
 import type { Position } from '../broker/IBroker';
 // Bars, window, minimum sample and the pairwise arithmetic all come from the entry gate's
 // module, so a pair correlated here and a pair correlated there cannot disagree.

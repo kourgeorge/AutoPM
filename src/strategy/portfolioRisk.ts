@@ -24,7 +24,6 @@ import { collectBars } from '../collect/barSource';
 import { isUsable } from '../collect/types';
 import { lastCompletedSession } from '../collect/marketCalendar';
 import { datedReturns } from './returnSeries';
-import { getPolicy } from '../policy/load';
 import { broker } from '../broker';
 import { logger } from '../core/logger';
 import { sameSymbol } from '../core/symbols';

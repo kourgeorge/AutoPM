@@ -228,7 +228,7 @@ export function renderSignalFamilyReport(points: SignalFamilyPoint[]): string {
     + 'exitMode is fixed at `stop_only` (the sweep report\'s own reference mode) so this compares '
     + 'signal families, not exit mechanics. `trend` is `signals.ts`\'s existing 5-signal family; '
     + '`meanReversion` and `crossSectional` are new (see `strategy/meanReversion.ts`, '
-    + '`strategy/crossSectional.ts`); `blend` averages the trend and mean-reversion composites.',
+    + '`signals/builtin/crossSectional.ts`); `blend` averages the trend and mean-reversion composites.',
   );
   lines.push('');
 

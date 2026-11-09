@@ -195,10 +195,6 @@ export class HeadlessUI implements OperatorUI {
     this.state = { ...this.state, usage };
   }
 
-  setStatus(text: string): void {
-    this.state.traderLane = { state: 'idle', detail: text };
-  }
-
   /** Nothing to protect: with no screen, stray stdout writes are just more log output. */
   captureStreams(): void {}
   close(): void {}

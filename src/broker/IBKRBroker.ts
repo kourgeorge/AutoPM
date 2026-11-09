@@ -607,20 +607,12 @@ export class IBKRBroker implements IBroker {
    * from there for IBKR accounts too), so a holiday reads closed and a half day ends early.
    * Falls back to clock hours if the calendar cannot be read, which is what this always was.
    */
-  async isMarketOpen(): Promise<boolean> {
-    return (await this.marketSession()) === 'regular';
-  }
-
   async marketSession(): Promise<VenueSession> {
     try { return await venueSession(); }
     catch (err: any) {
       logger.warn(`[IBKR] market calendar unavailable, using clock hours: ${err?.message ?? err}`);
       return clockSession();
     }
-  }
-
-  disconnect(): void {
-    this.api.disconnect();
   }
 }
 

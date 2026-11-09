@@ -14,7 +14,6 @@ import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
 import { listRecords, readRecord } from '../core/storage';
-import { broker } from '../broker';
 import { canonicalSymbol } from '../core/symbols';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
@@ -23,7 +22,6 @@ import { getFundamentals } from '../collect/fundamentals';
 import { mapAnalystView, tickerMetrics, type AnalystView } from '../collect/tickerMetrics';
 import { confirmProtection, clearUnplacedProtection } from '../strategy/protectionIntent';
 import { adoptHolding, AdoptRefused } from '../strategy/adopt';
-import { sweepOrders } from '../strategy/orderExecutor';
 import http from 'http';
 import { URL } from 'url';
 import { config } from '../core/config';
@@ -540,7 +538,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     return { entries: ui.feedAfter(after, limit) };
   });
 
-  // Matched here so it gets auth and a 404-free route; the actual handling is in `handle`.
+  // Matched here so it has a 404-free route; the actual handling is in `handle`.
   add('GET', '/api/stream', () => undefined);
 
   add('GET', '/api/commands', () => ({
@@ -639,7 +637,6 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     return { ok: true };
   });
 
-  add('POST', '/api/reconcile', async () => { await sweepOrders(); return serviceStatus(); });
   return routes;
 }
 

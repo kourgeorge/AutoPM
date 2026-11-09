@@ -6,7 +6,6 @@ import { recordEngineVersion } from './core/version';
 
 // The engine always runs without a terminal. Clients have their own entry points.
 process.env.HEADLESS = '1';
-process.env.AUTOTRADE_ROLE = 'engine';
 process.env.API_PORT = process.env.ENGINE_PORT ?? '8788';
 
 /** Keep startup diagnostics outside the terminal's captured output, including import errors. */

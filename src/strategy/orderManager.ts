@@ -347,9 +347,7 @@ export function earningsVeto(
 /**
  * `earningsVeto` against the live calendar.
  *
- * Skips the fetch entirely for crypto — see the comment on `earningsVeto` — rather than
- * calling `getFundamentals` and turning its designed-in throw into a spurious
- * `earnings_unavailable` on every crypto entry.
+ * Never sees crypto: `validateEntry` rejects it as `unsupported_asset` before calling this.
  *
  * A fetch failure (network, or Yahoo's schema drifting past what `validateResult: false`
  * absorbs) resolves to `null` calendar, which the pure veto above turns into
@@ -357,8 +355,6 @@ export function earningsVeto(
  * are different claims, and only the pure function can tell them apart.
  */
 async function refuseIfEarningsWindow(symbol: string): Promise<void> {
-  if (isCryptoSymbol(symbol)) return;
-
   let calendar: Fundamentals | null;
   try {
     calendar = await getFundamentals(symbol);
@@ -626,9 +622,8 @@ async function applyRegimeSizing(qty: number, regime: Regime | null): Promise<nu
     const override = policy.regime[regime];
     const mult = Math.min(override.sizeMult, 1.0); // never increase
 
-    // Whole-share requests stay whole; a fractional one stays fractional. Rounding a
-    // fraction is not "sizing down", it is changing the asset's unit.
-    const scaled = Number.isInteger(qty) ? Math.floor(qty * mult) : qty * mult;
+    // validateEntry only lets whole-share quantities this far, so the result stays whole.
+    const scaled = Math.floor(qty * mult);
 
     // A single share halved floors to zero, and a zero-share order is a failed order rather
     // than a smaller one. Fall back to the REQUEST — never to a constant, which is what
@@ -745,7 +740,7 @@ function extendedSellLimit(print: number): number {
  * called. That ordering is the reason this is a separate function at all.
  */
 export async function actExit(symbol: string, reason: string, v: ValidatedExit, clientOrderId?: string): Promise<ExitedPosition> {
-  const { pos, sellQty } = v;
+  const { sellQty } = v;
   logger.trade(`Exiting ${symbol}: ${reason}`);
 
   // Under the stop lock for everything that follows. Between the cancel loop and the sell this
@@ -795,25 +790,21 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
       logger.trade(`Cancelled ${describe(order)} — it reserved the ${symbol} shares`);
     }
 
+    // A throw below leaves the action unknown in the executor. Reconciliation must establish
+    // whether a sell exists before the stop sweep can reserve these shares again.
     let id: string;
-    try {
-      const heldNow = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
-      if (!heldNow || heldNow.qty < sellQty) reject('position_changed', 'Position changed during cancellation; no sell submitted');
-      if (blockedByPause(v.actorId)) reject('paused_before_submission', 'Trading paused during cancellation; no sell was submitted');
-      if (v.session === 'extended') {
-        // Re-priced from a print taken AFTER the cancellations, so the limit reflects the market
-        // the sell actually meets. No fresh print means no sell; the executor reports the
-        // refusal and the protection sweep re-arms the stop it just cancelled.
-        const limitPrice = extendedSellLimit(await extendedPrint(symbol));
-        ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'limit', limitPrice,
-          timeInForce: 'day', extendedHours: true, clientOrderId }));
-      } else {
-        ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'market', clientOrderId }));
-      }
-    } catch (err) {
-      // Preserve the action as unknown in the executor. Reconciliation must establish
-      // whether a sell exists before the stop sweep can reserve these shares again.
-      throw err;
+    const heldNow = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));
+    if (!heldNow || heldNow.qty < sellQty) reject('position_changed', 'Position changed during cancellation; no sell submitted');
+    if (blockedByPause(v.actorId)) reject('paused_before_submission', 'Trading paused during cancellation; no sell was submitted');
+    if (v.session === 'extended') {
+      // Re-priced from a print taken AFTER the cancellations, so the limit reflects the market
+      // the sell actually meets. No fresh print means no sell; the executor reports the
+      // refusal and the protection sweep re-arms the stop it just cancelled.
+      const limitPrice = extendedSellLimit(await extendedPrint(symbol));
+      ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'limit', limitPrice,
+        timeInForce: 'day', extendedHours: true, clientOrderId }));
+    } else {
+      ({ id } = await guardedBroker().placeOrder({ symbol, side: 'sell', qty: sellQty, type: 'market', clientOrderId }));
     }
 
     logger.trade(`Exit order ${id} submitted for ${symbol}${v.session === 'extended' ? ' (extended hours limit)' : ''}`);
