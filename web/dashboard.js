@@ -1189,11 +1189,11 @@ function renderRequests(list) {
 // ── Broker page ────────────────────────────────────────────────────────────
 const brokerPrice = n => n == null ? '—' : money(n);
 async function loadBrokerBook() {
-  const book = await api('broker-book');
+  const book = await api('broker-orders');
   $('broker-book-updated').textContent = book.lastTickAt ? `Checked ${clock(book.lastTickAt)} · ${book.broker} ${book.venue}` : 'Waiting for account data';
   $('broker-book-status').textContent = book.available ? '' : 'Broker orders could not be read in the latest account check.';
   const list = book.available ? book.orders : [];
-  rows('broker-book-rows', list, o => [o.symbol, o.side, o.rawType, String(o.remaining),
+  rows('broker-book-rows', list, o => [o.symbol, o.side, o.rawType, String(Math.max(0, o.qty - o.filled)),
     [o.stopPrice != null && `stop ${brokerPrice(o.stopPrice)}`, o.limitPrice != null && `limit ${brokerPrice(o.limitPrice)}`,
      o.trailPercent != null && `trail ${o.trailPercent}%`, o.trailAmount != null && `trail ${money(o.trailAmount)}`].filter(Boolean).join(' · ') || 'market',
     o.status]);
