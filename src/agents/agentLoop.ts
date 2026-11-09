@@ -7,6 +7,7 @@ import { readRecord, saveRecord } from '../core/storage';
 import { saveContext } from './savedResults';
 import type { ToolRegistry } from './toolRegistry';
 import { logger } from '../core/logger';
+import { REQUEST_CHAR_LIMIT } from '../core/modelBudget';
 
 export type TurnStatus = 'completed' | 'waiting' | 'interrupted' | 'failed';
 export interface Trajectory {
@@ -66,13 +67,22 @@ export function readTrajectory(id: string): Trajectory | undefined {
 }
 
 /**
- * How much of a turn's own conversation the model keeps, in characters (~75–100k tokens).
- * It was 60,000: the cycle context plus five or six 8–10k tool results filled it, the oldest
- * reads were trimmed, the model was told "omitted evidence is unknown", and so it re-read
- * the same status/positions/orders/scan over and over (2026-11-09 IBM loop). Trimming is a
- * safety net for very long turns, not something a normal cycle should ever reach.
+ * How much of a turn's own conversation the model keeps, in characters, when no tool list is
+ * known. It was 60,000: the cycle context plus five or six 8–10k tool results filled it, the
+ * oldest reads were trimmed, the model was told "omitted evidence is unknown", and so it re-read
+ * the same status/positions/orders/scan over and over (2026-11-09 IBM loop). Then it was raised
+ * to 300,000, above the 200,000 whole-request cap in `withModelBudget`, so long trader reviews
+ * failed with "Model context exceeds the account request limit" instead of being trimmed.
+ * `runAgentLoop` now trims to whatever the cap leaves after its instructions and tool list
+ * (`turnMessageLimit`), so the two limits cannot drift apart again.
  */
-export const TURN_CONTEXT_LIMIT = 300000;
+export const TURN_CONTEXT_LIMIT = REQUEST_CHAR_LIMIT;
+/** Room for the request's other fields (maxTokens, signal) and JSON punctuation. */
+const REQUEST_OVERHEAD_MARGIN = 2000;
+/** Message room left in one model request once the instructions and tool list are counted. */
+export function turnMessageLimit(systemPrompt: string, tools: unknown): number {
+  return REQUEST_CHAR_LIMIT - JSON.stringify({ systemPrompt, tools }).length - REQUEST_OVERHEAD_MARGIN;
+}
 
 /** Repair legacy histories and trim whole exchanges, never leaving orphaned tool results. */
 export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT): ChatMessage[] {
@@ -121,13 +131,14 @@ export async function runAgentLoop(opts: {
   const signal = opts.signal ?? new AbortController().signal;
   run ??= { id, messages: [], rounds: 0, status: 'running', inTokens: 0, outTokens: 0, text: '', revision: opts.revision };
   const current = run;
+  const limit = turnMessageLimit(opts.systemPrompt, opts.registry.definitions);
   const context = { ...opts.context, signal, saved: current.saved ??= {} };
   const checkpoint = () => saveRecord('trajectories', id, { ...current, messages: withoutResults(current.messages) });
   return agentContext.run(context, async () => {
     try {
       signal.throwIfAborted();
       if (current.revision !== opts.revision) throw new Error('Strategy changed since this turn began; inspect linked actions and submit a fresh request');
-      if (!current.messages.length) current.messages = compactMessages(await abortable(opts.messages(), signal));
+      if (!current.messages.length) current.messages = compactMessages(await abortable(opts.messages(), signal), limit);
       current.status = 'running'; current.error = undefined; checkpoint();
       while (true) {
         signal.throwIfAborted();
@@ -135,7 +146,7 @@ export async function runAgentLoop(opts: {
         const last = current.messages.at(-1);
         const calls = last?.role === 'assistant' ? last.content.filter((b): b is ToolCall => b.type === 'tool_use') : [];
         if (last?.role === 'assistant' && current.responseStopReason === 'max_tokens') {
-          current.messages = compactMessages(current.messages);
+          current.messages = compactMessages(current.messages, limit);
           current.status = 'failed'; current.error = 'Model output was truncated; no truncated tool batch was executed'; break;
         }
         if (last?.role === 'assistant' && !calls.length && current.responseStopReason) {
@@ -170,7 +181,7 @@ export async function runAgentLoop(opts: {
           current.messages.push({ role: 'user', content: results }); checkpoint();
           if (finish) { current.status = 'completed'; break; }
         }
-        current.messages = compactMessages(current.messages);
+        current.messages = compactMessages(current.messages, limit);
         const response = await abortable(opts.provider.chat({ systemPrompt: opts.systemPrompt, messages: current.messages,
           tools: opts.registry.definitions, maxTokens: opts.maxTokens, signal }), signal);
         signal.throwIfAborted();
@@ -183,7 +194,7 @@ export async function runAgentLoop(opts: {
         current.responseStopReason = response.stopReason;
         current.messages.push({ role: 'assistant', content }); checkpoint();
         if (response.stopReason === 'max_tokens') {
-          current.messages = compactMessages(current.messages); // Incomplete calls must never execute.
+          current.messages = compactMessages(current.messages, limit); // Incomplete calls must never execute.
           current.status = 'failed'; current.error = 'Model output was truncated; no truncated tool batch was executed'; break;
         }
         if (content.some(b => b.type === 'tool_use')) continue;
