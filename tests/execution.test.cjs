@@ -437,7 +437,7 @@ test('entry validation requires a fresh quote and caps a valid order at a cent-p
     // This case isolates quote handling for an existing account. Risk-profile entry checks
     // (including limit-price reward:risk) are exercised with live validation in risk.test.cjs.
     const p=policy.getPolicy(); policy.useEphemeralPolicy({...p,risk:{...p.risk,earningsBlackoutDays:0,riskPerTradePct:null,targetVolatilityPct:null,minRewardRisk:null}});
-    state.updateState({startOfDayEquity:100000});broker.isMarketOpen=async()=>true;
+    state.updateState({startOfDayEquity:100000});broker.marketSession=async()=>'regular';
     fundamentals.getFundamentals=async()=>({calendar:{nextEarningsAt:null,daysUntil:null}});
     prices.collectPrices=async()=>new Map([['AAPL',{value:100.13,stale:true,asOf:new Date().toISOString()}]]);
     await assert.rejects(()=>validateRealEntry(signal,2),err=>err.rule==='quote_unavailable');

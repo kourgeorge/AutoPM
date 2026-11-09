@@ -316,7 +316,6 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the temperature line below.
     const bareModel = this.model.replace(/^[^/]+\//, '');
     const isGptReasoningModel = /^gpt-[5-9]/.test(bareModel);
-    const isReasoningModel = isGptReasoningModel || /^o\d/.test(bareModel);
     const reasoningParam = isGptReasoningModel && openaiTools.length > 0
       ? { reasoning_effort: 'none' }
       : {};

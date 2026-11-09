@@ -1,7 +1,7 @@
 import { newJobDirectory } from '../core/jobs';
 /**
  * Compares signal families — `trend` (existing), `meanReversion`, `crossSectional`, and
- * `blend` (new, see `strategy/meanReversion.ts` and `strategy/crossSectional.ts`) — under the
+ * `blend` (new, see `strategy/meanReversion.ts` and `signals/builtin/crossSectional.ts`) — under the
  * same train/holdout split `backtestSweep.ts` uses. `exitMode` is fixed at `stop_only` (the
  * sweep's own reference mode) so this isolates signal family from exit mechanics; only
  * `signalSet` and `compositeMin` vary.

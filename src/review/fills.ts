@@ -19,7 +19,6 @@
  */
 
 import { appendRecord, readRecords, transaction } from '../core/storage';
-import { logger } from '../core/logger';
 import type { Fill } from '../broker/IBroker';
 
 /**

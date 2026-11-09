@@ -254,7 +254,7 @@ test('live planning and execution enforce the same risk constraints and record t
   try {
     loader.useEphemeralPolicy(p);
     state.updateState({ paused: false, dailyLossHalted: false, startOfDayEquity: 100000, accountId: 'alpaca:paper:test', positionSnapshots: {} });
-    broker.isMarketOpen = async () => true;
+    broker.marketSession = async () => 'regular';
     broker.getAccountInfo = async () => ({ equity: 100000, buyingPower: 100000, cash: 100000 });
     broker.getPositions = async () => [];
     broker.getOpenOrders = async () => [];

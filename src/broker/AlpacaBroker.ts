@@ -337,14 +337,9 @@ export class AlpacaBroker implements IBroker {
     return fills;
   }
 
-  async isMarketOpen(): Promise<boolean> {
-    const res = await trading.get('/v2/clock');
-    return res.data.is_open as boolean;
-  }
-
   /** The clock settles regular hours (it knows halts and early closes); the calendar row places the extended session. */
   async marketSession(): Promise<VenueSession> {
-    if (await this.isMarketOpen()) return 'regular';
+    if ((await trading.get('/v2/clock')).data.is_open === true) return 'regular';
     return (await venueSession()) === 'extended' ? 'extended' : 'closed';
   }
 }

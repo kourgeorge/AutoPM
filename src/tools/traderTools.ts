@@ -4,14 +4,12 @@ import { DECISION_TOOL_DEFINITIONS, DECISION_TOOL_NAMES, executeDecisionTool, TH
 import { evidenceResult, validateEvidenceIds } from '../journal/evidence';
 import { validateThesis, evaluatePremises, type EntryThesis } from '../journal/thesis';
 import { recordPage } from './paging';
-import { validateAnnotation, actAnnotation } from '../strategy/annotation';
-export { validateAnnotation, actAnnotation } from '../strategy/annotation';
-export type { AnnotateInput, AnnotationValidation } from '../strategy/annotation';
+import { validateAnnotation } from '../strategy/annotation';
+export { actAnnotation } from '../strategy/annotation';
 import { ToolRegistry } from '../agents/toolRegistry';
 import { agentContext } from '../core/agentContext';
 import { listRequests, getRequest, operatorOrigin, isOperatorRequest } from '../core/requests';
 import { broker } from '../broker';
-import { BrokerRejection } from '../broker/errors';
 import {
   GuardRejection,
   enterPosition,
@@ -48,32 +46,20 @@ import { entryPlan, riskAwareWatchlistScan } from '../strategy/entryPlanning';
 import {
   getPositionSnapshot,
   getState,
-  openPositionSnapshot,
-  upsertPositionSnapshot,
-  removePositionSnapshot,
 } from '../state/state';
-import { canonicalSymbol, isCryptoSymbol, sameSymbol } from '../core/symbols';
-import {
-  armOco,
-  canLowerTakeProfit,
-  canTighten,
-  moveOcoTo,
-  moveStopTo,
-  type ArmResult,
-  type OcoArmResult,
-} from '../strategy/stopOrders';
+import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { decision, readDecisions, readDecisionsNewestFirst, recordDecision } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 import { sleepRefusedBefore, unresolvedDecisions } from '../journal/reviewDecisions';
 import { recordLesson, listLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
-import { openedAtFromFills, readFills } from '../review/fills';
+import { readFills } from '../review/fills';
 import { pnlReport } from '../review/pnl';
 import type { DecisionInput } from '../journal/types';
 import { getPolicy, getPolicyHash } from '../policy/load';
 import { logger } from '../core/logger';
-import type { ToolDefinition, SignalResult } from '../core/types';
+import type { ToolDefinition } from '../core/types';
 import type { OpenOrder, Position } from '../broker/IBroker';
 
 /**
@@ -156,7 +142,6 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
         stopLoss:     { type: 'number', description: 'Absolute stop-loss price. Must be below the CURRENT price — an inherited position may be underwater, in which case a sane stop sits above its original entry.' },
         takeProfit:   { type: 'number', description: 'Absolute take-profit price. Must be above the current price.' },
         removeTarget: { type: 'boolean', description: 'Cancel the take-profit order and keep only the stop. Only when the operator asked for it. stopLoss may be omitted to keep the recorded stop.' },
-        entryPrice:   { type: 'number', description: 'Original entry price. Optional — defaults to the venue cost basis when this system has no record of the entry.' },
         thesis:       { type: 'string', description: 'One-sentence holding thesis: why you are still in, and what would invalidate it.' },
       },
       required: ['symbol', 'thesis'],
@@ -453,8 +438,6 @@ async function dispatchTraderTool(
           note: fromChat ? 'The summary is posted to this chat when the research finishes. Use get_requests for its status.'
             : 'Research runs separately and places no orders. Its verdict is saved as a candidate or holding review.' });
       }
-      // No `sleep` case: trader.ts intercepts it before dispatch (it sets the next cycle
-      // delay, which only the agent loop can do), and it is not an assistant tool.
       default:
         if (DECISION_TOOL_NAMES.has(name)) return executeDecisionTool(name, input);
         if (ALPACA_DATA_TOOL_NAMES.has(name)) return await executeAlpacaDataTool(name, input);
@@ -463,25 +446,8 @@ async function dispatchTraderTool(
     }
   } catch (err: any) {
     logger.error(`[TraderTool:${name}] ${err.message}`);
-
-    // The two tools that place orders already catch these and journal them; reaching here
-    // means some other path threw one. Flattening to `err.message` is what turned a 403
-    // with a reason into a bare status code the model then explained for itself, so the
-    // typed fields survive here too — the safety net, not the primary handler.
-    if (err instanceof GuardRejection) {
-      return JSON.stringify({
-        error: err.message, rejectedBy: 'guard', rule: err.rule, venueMessage: err.venueMessage,
-      });
-    }
-    if (err instanceof BrokerRejection) {
-      return JSON.stringify({
-        error: err.message,
-        rejectedBy: 'broker',
-        status: err.status,
-        venueCode: err.venueCode,
-        venueMessage: err.venueMessage,
-      });
-    }
+    // Guard refusals are caught and journalled by the entry and exit tools, and no tool here
+    // talks to the broker's order endpoints (the order executor does), so this is the rest.
     return JSON.stringify({ error: err.message });
   }
 }
@@ -982,9 +948,8 @@ function resolveEventId(explicit: string | undefined, symbol: string): string | 
  * it not enter NVDA on the breakout" has no answer — the intent existed, something
  * refused it, and the only trace was a tool result that scrolled out of context.
  *
- * The two refusals are kept distinct on purpose. `veto` means this system's rules said
- * no; `rejected` means the guard allowed it and the market refused. Collapsing them would
- * make `grep '"kind":"veto"'` unable to answer what the guard actually blocked.
+ * Only guard refusals (`veto`) arrive here: these tools queue an order and never call the
+ * broker, so a broker refusal is handled by the order executor instead.
  *
  * Returns `null` for anything else, so an unexpected error keeps travelling up to
  * `executeTraderTool` rather than being recorded as a decision nobody made.
@@ -1000,27 +965,14 @@ function journalRefusal(
     });
   }
 
-  if (err instanceof BrokerRejection) {
-    recordDecision(decision('rejected', 'broker', { ...fields, venueMessage: err.venueMessage }));
-    // The venue's own words, verbatim and separate from the assembled message, so the
-    // model has a cause to report and no reason to invent one.
-    return JSON.stringify({
-      error: err.message,
-      rejectedBy: 'broker',
-      status: err.status,
-      venueCode: err.venueCode,
-      venueMessage: err.venueMessage,
-    });
-  }
-
   return null;
 }
 
 /**
  * Retrofit baselines onto a position that was opened without them.
  *
- * This is the only write path for `stopLevel`, `takeProfitLevel`, `entryPrice`, and
- * `entryDecisionId` on a position that already exists. `openPositionSnapshot` refuses to
+ * This is the only write path for `stopLevel` and `takeProfitLevel` on a position that
+ * already exists. `openPositionSnapshot` refuses to
  * overwrite, and the entry flow never runs for positions that predated this system or were
  * opened by an external tool — so this goes through `upsertPositionSnapshot`, which can
  * create. It used to write through `patchPositionSnapshot`, which returns early when no
@@ -1045,8 +997,8 @@ function journalRefusal(
  * a venue refusal would be the worse outcome.
  */
 async function toolAnnotatePosition(input: Record<string, unknown>): Promise<string> {
-  const { symbol, stopLoss, takeProfit, thesis, entryPrice } = input as {
-    symbol: string; stopLoss?: number; takeProfit?: number; thesis: string; entryPrice?: number;
+  const { symbol, stopLoss, takeProfit, thesis } = input as {
+    symbol: string; stopLoss?: number; takeProfit?: number; thesis: string;
   };
   const removeTarget = input.removeTarget === true;
   // Removing a target lets a winner run with no exit above the price: the operator's call, never
@@ -1055,7 +1007,7 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     return JSON.stringify({ ok: false, error: 'removeTarget needs an instruction from the operator. A scheduled review may lower a target, not remove it.' });
   }
 
-  const validated = await validateAnnotation({ symbol, stopLoss, takeProfit, removeTarget, thesis, entryPrice });
+  const validated = await validateAnnotation({ symbol, stopLoss, takeProfit, removeTarget, thesis });
   if (!validated.ok) return validated.response;
 
   // Automation level gates stop and target moves exactly like entry and exit — no exemption
@@ -1073,7 +1025,7 @@ async function toolAnnotatePosition(input: Record<string, unknown>): Promise<str
     automatic: !stopManual && !targetManual,
     symbol: validated.symbol,
     venue: config.venue,
-    params: { symbol, stopLoss: validated.stopLoss, takeProfit: takeProfit ?? null, ...(removeTarget ? { removeTarget: true } : {}), thesis, entryPrice: entryPrice ?? null },
+    params: { symbol, stopLoss: validated.stopLoss, takeProfit: takeProfit ?? null, ...(removeTarget ? { removeTarget: true } : {}), thesis },
     reason: thesis,
     timeoutMs: getPolicy().automation.timeoutMs,
   });

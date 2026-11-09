@@ -23,7 +23,7 @@ const { SandboxedSignal } = from('signals/sandboxed');
 const { checkSignal, syntheticBars } = from('signals/testkit');
 const { computeSignals, signalTally } = from('strategy/signals');
 const { computeMeanReversionSignals } = from('strategy/meanReversion');
-const { crossSectionalComposite } = from('strategy/crossSectional');
+const { crossSectionalComposite } = from('signals/builtin/crossSectional');
 
 // Every registered signal gets the shared rules — a new signal is tested by being registered.
 for (const signal of registry.BUILT_IN_SIGNALS) {

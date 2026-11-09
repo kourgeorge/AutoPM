@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { broker } from '../broker';
-import { getState, getPositionSnapshot, upsertPositionSnapshot, type Order } from '../state/state';
+import { getPositionSnapshot, upsertPositionSnapshot, type Order } from '../state/state';
 import { sameSymbol, isCryptoSymbol } from '../core/symbols';
 import { canTighten, canLowerTakeProfit, moveStopTo, moveOcoTo, dropTakeProfit } from './stopOrders';
 import { decision, recordDecision, recordDecisionOutcome } from '../journal/journal';
@@ -15,7 +15,6 @@ export interface AnnotateInput {
   removeTarget?: boolean | null;
   takeProfit?: number | null;
   thesis: string;
-  entryPrice?: number | null;
 }
 
 export type AnnotationValidation =
@@ -27,9 +26,7 @@ export type AnnotationValidation =
       takeProfit: number | null;
       removeTarget: boolean;
       thesis: string;
-      effectiveEntry: number;
       heldQty: number;
-      snapEntryPriceMissing: boolean;
     };
 
 /**
@@ -48,7 +45,6 @@ export async function validateAnnotation(input: AnnotateInput, actorId?: string)
   const recordedStop = getPositionSnapshot(symbol)?.stopLevel;
   const stopLoss = input.stopLoss ?? (removeTarget ? recordedStop : undefined);
   if (stopLoss == null) return { ok: false, response: JSON.stringify({ error: removeTarget ? `${symbol} has no recorded stop; give stopLoss` : 'stopLoss is required' }) };
-  const providedEntryPrice = input.entryPrice ?? undefined;
   if ([stopLoss, takeProfit].some(level => level != null && (!Number.isFinite(level) || Math.abs(level * 100 - Math.round(level * 100)) > 1e-8))) return { ok: false, response: JSON.stringify({ error: 'Stop and target prices must use whole cents' }) };
 
   // Confirm the position is live at the venue — annotating a phantom is worse than
@@ -62,15 +58,10 @@ export async function validateAnnotation(input: AnnotateInput, actorId?: string)
     return { ok: false, response: JSON.stringify({ error: `No open position in ${symbol} at the venue — nothing to annotate` }) };
   }
 
-  // Entry price: the snapshot if it has one, else the caller's, else the venue's cost
-  // basis. The venue fallback is why this can no longer fail for want of a number the
-  // broker already told us.
   const snap = getPositionSnapshot(symbol);
   if (held.qty <= 0 || !Number.isInteger(held.qty) || isCryptoSymbol(symbol)) return { ok: false, response: JSON.stringify({ error: 'Only whole-share long equities can be managed' }) };
   if (!snap) return { ok: false, response: JSON.stringify({ error: 'Adopt this position explicitly before the bot manages it' }) };
   if (removeTarget && snap.takeProfitLevel == null && !snap.takeProfitOrderId) return { ok: false, response: JSON.stringify({ error: `${symbol} has no take-profit to remove` }) };
-
-  const effectiveEntry = snap?.entryPrice ?? providedEntryPrice ?? held.avgCost;
 
   // Same shape as toolExecuteExit's exit price. Degrades to the cost basis when the broker
   // omits marketValue, which is the pre-existing convention for "no better number".
@@ -138,9 +129,7 @@ export async function validateAnnotation(input: AnnotateInput, actorId?: string)
     takeProfit,
     removeTarget,
     thesis,
-    effectiveEntry,
     heldQty: held.qty,
-    snapEntryPriceMissing: snap?.entryPrice == null,
   };
 }
 

@@ -22,7 +22,6 @@
 
 import type { Bar } from '../core/types';
 import { alpacaData, alpacaTimeToMs, SIP_EMBARGO_MS } from '../core/alpacaHttp';
-import { logger } from '../core/logger';
 import { cryptoPair, isCryptoSymbol } from '../core/symbols';
 import { lastCompletedSession } from './marketCalendar';
 import { getBarsRaw, Timeframe } from './yahoo';

@@ -31,7 +31,6 @@
  */
 
 import { execSync } from 'child_process';
-import fs from 'fs';
 import { fetchTradedRange } from '../collect/priceSource';
 import { canonicalSymbol } from '../core/symbols';
 import { openedAtFromFills } from '../review/fills';

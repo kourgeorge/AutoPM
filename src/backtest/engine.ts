@@ -26,7 +26,7 @@ import type { ModelProvider } from '../core/modelProvider';
 import { atr } from '../strategy/indicators';
 import { computeSignals, signalTally } from '../strategy/signals';
 import { computeMeanReversionSignals } from '../strategy/meanReversion';
-import { crossSectionalComposite, type CrossSectionalEntry } from '../strategy/crossSectional';
+import { crossSectionalComposite, type CrossSectionalEntry } from '../signals/builtin/crossSectional';
 import { entrySignalVeto, positionSizeVeto, exposureVeto } from '../strategy/orderManager';
 import { trailTarget } from '../strategy/trailingStop';
 import type { PositionData } from '../features/compute';
@@ -43,7 +43,7 @@ export type ExitMode = 'stop_only' | 'stop_trailing' | 'stop_takeprofit';
  * Which signal family scores entry candidates. `undefined`/`'trend'` is the original,
  * unchanged path (`computeSignals` from `signals.ts`). The other three are additions for
  * comparing signal families under the same walk-forward harness — see `strategy/meanReversion.ts`
- * and `strategy/crossSectional.ts`. `'blend'` averages the trend and mean-reversion composites
+ * and `signals/builtin/crossSectional.ts`. `'blend'` averages the trend and mean-reversion composites
  * (one vote per family, not a signal concatenation that would let trend's 5 signals outvote
  * mean-reversion's 3 by count).
  */

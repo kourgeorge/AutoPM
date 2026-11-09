@@ -8,7 +8,6 @@ import { runAgentLoop } from './agentLoop';
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest, operatorOrigin, isOperatorRequest, type WakeReason, type AgentRequest } from '../core/requests';
-import { readRecord } from '../core/storage';
 import { runtimeContract } from './runtimeContract';
 import { createLiveModelProvider } from '../core/modelProvider';
 import { config } from '../core/config';
@@ -34,7 +33,6 @@ import {
   getMarketStatusSnapshot,
   getAccountSnapshot,
 } from '../tools/traderTools';
-import type { ChatMessage, ContentBlock } from '../core/types';
 import type { OpenOrder } from '../broker/IBroker';
 
 /** Only a safety net: `resume()` and `stop()` both end a paused sleep directly. */
@@ -144,7 +142,7 @@ export class Trader {
       provider: this.provider, registry: traderTools(), systemPrompt: traderSystemPrompt(), revision: hash,
       // The scheduler's own prompt is not an operator instruction. Rendered as one, it was
       // what let a routine review describe two unrequested sells as "operator-directed".
-      messages: async () => [{ role: 'user', content: [{ type: 'text', text: direct ? await buildRequestContext(relayedText(command)) : await buildCycleContext(getState(), []) }] }],
+      messages: async () => [{ role: 'user', content: [{ type: 'text', text: direct ? await buildRequestContext(relayedText(command)) : await buildCycleContext(getState()) }] }],
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       beforeTool: () => { if ((getState().paused && !direct) || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
@@ -598,8 +596,6 @@ function buildDecisionHistory(): string {
 
   const lines = ['=== RECENT DECISIONS ==='];
   for (const r of records) {
-    const qty = r.qty != null && r.price != null ? ` ${r.qty}sh @ $${r.price.toFixed(2)}` : '';
-    const pnl = r.pnl != null ? ` P&L $${r.pnl.toFixed(2)}` : '';
     const why = r.vetoRule ? ` [${r.vetoRule}]` : r.venueMessage ? ` [${r.venueMessage}]` : '';
     lines.push(
       `  ${r.at.slice(0,16)} ${describeDecision(r)}${why}`,
@@ -739,22 +735,12 @@ export function buildRequestContext(message: string): Promise<string> {
   return withAccountRead(async () => boundedCycleContext(await renderRequestContext(message)));
 }
 
-async function renderCycleContext(
-  state: ReturnType<typeof getState>,
-  pendingMessages: string[],
-): Promise<string> {
+async function renderCycleContext(state: ReturnType<typeof getState>): Promise<string> {
   const lines: string[] = [`=== CYCLE: ${new Date().toISOString()} ===`];
 
-  if (pendingMessages.length > 0) {
-    lines.push('');
-    lines.push('=== OPERATOR INSTRUCTIONS ===');
-    pendingMessages.forEach(m => lines.push(`> ${m}`));
-    lines.push('=== END OPERATOR INSTRUCTIONS ===');
-    lines.push('Act on these instructions as part of this cycle.');
-  } else {
-    lines.push('');
-    lines.push('Scheduled review — no operator instruction this cycle. Nothing here asks you to change a position; enter or exit only for a reason you can state from the data below.');
-  }
+  // Operator requests never arrive here: they run as a direct turn (`buildRequestContext`).
+  lines.push('');
+  lines.push('Scheduled review — no operator instruction this cycle. Nothing here asks you to change a position; enter or exit only for a reason you can state from the data below.');
 
   // First, before any of the standing bookkeeping: the events are the reason this cycle
   // exists at all, and a wake whose trigger is buried under the portfolio reads as a
@@ -803,6 +789,6 @@ function relayedText(command: AgentRequest): string {
   return origin ? `${command.text}\n> (relayed by the assistant; the operator wrote: "${origin}")` : command.text;
 }
 
-export function buildCycleContext(state: ReturnType<typeof getState>, pendingMessages: string[]): Promise<string> {
-  return withAccountRead(async () => boundedCycleContext(await renderCycleContext(state, pendingMessages)));
+export function buildCycleContext(state: ReturnType<typeof getState>): Promise<string> {
+  return withAccountRead(async () => boundedCycleContext(await renderCycleContext(state)));
 }
