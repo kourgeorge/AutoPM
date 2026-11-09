@@ -65,8 +65,17 @@ export function readTrajectory(id: string): Trajectory | undefined {
   return run && { ...run, messages: withResults(run.messages) };
 }
 
+/**
+ * How much of a turn's own conversation the model keeps, in characters (~75–100k tokens).
+ * It was 60,000: the cycle context plus five or six 8–10k tool results filled it, the oldest
+ * reads were trimmed, the model was told "omitted evidence is unknown", and so it re-read
+ * the same status/positions/orders/scan over and over (2026-11-09 IBM loop). Trimming is a
+ * safety net for very long turns, not something a normal cycle should ever reach.
+ */
+export const TURN_CONTEXT_LIMIT = 300000;
+
 /** Repair legacy histories and trim whole exchanges, never leaving orphaned tool results. */
-export function compactMessages(input: ChatMessage[], limit = 60000): ChatMessage[] {
+export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT): ChatMessage[] {
   const messages: ChatMessage[] = [];
   for (let i = 0; i < input.length; i++) {
     const m = structuredClone(input[i]);
