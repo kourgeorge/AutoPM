@@ -246,6 +246,23 @@ test('full tool receipts survive reload while model context stays bounded', asyn
   assert.equal(receipt.result, output);assert.ok(receipt.startedAt);assert.ok(receipt.finishedAt);
 });
 
+test('a long turn is trimmed to fit the whole-request cap instead of failing', async () => {
+  // Each result is just under the 10k per-result bound; 40 of them exceed the 200k cap.
+  const output = 'x'.repeat(9500);
+  const { REQUEST_CHAR_LIMIT } = from('core/modelBudget');
+  const tools = Array.from({ length: 30 }, (_, i) => ({ name: 'read' + i, description: 'audit '.repeat(200), input_schema: { type: 'object', properties: {}, required: [] } }));
+  const registry = new ToolRegistry(tools, async () => output);
+  const systemPrompt = 'rules '.repeat(2000);
+  let calls = 0, largest = 0;
+  const run = await runAgentLoop({ context: { requestId: 'long-turn', actorId: 'test', role: 'trader' }, registry,
+    provider: { chat: async request => {
+      largest = Math.max(largest, JSON.stringify(request).length);
+      return ++calls <= 40 ? toolResponse([['read0', {}]]) : textResponse();
+    } }, messages: async () => [{ role: 'user', content: [{ type: 'text', text: 'Review' }] }], systemPrompt, maxTokens: 100 });
+  assert.equal(run.status, 'completed', run.error);
+  assert.ok(largest <= REQUEST_CHAR_LIMIT, `largest request ${largest} chars`);
+});
+
 test('critical observation remains open and acting requires a linked action', async () => {
   const p = policy.getPolicy(), tick = { cooldowns: {}, armed: new Set(), dirty: false };
   const hit = { symbol: 'AAPL', cooldownKey: 'audit:stop', severity: 'critical', headline: 'Below stop', evidence: {}, crossing: { level: 90, threshold: 95, direction: 'below', band: 1 } };

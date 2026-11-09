@@ -41,11 +41,13 @@ export function modelBudgetStatus() {
     researchLimit: shareLimit(limit, SHARES.researcher),
     resetsAt: new Date(Date.parse(usage.day + 'T00:00:00Z') + 86_400_000).toISOString() };
 }
+/** Largest model request the account accepts, in characters of the whole request (instructions, tools and messages). */
+export const REQUEST_CHAR_LIMIT = 200_000;
 /** `model` may be a function when the model can change between calls (see `createLiveModelProvider`). */
 export function withModelBudget(provider: ModelProvider, modelName: string | (() => string) = 'unknown'): ModelProvider {
   aiSettings();
   return { async chat(params) {
-    if (JSON.stringify(params).length > 200_000) throw new Error('Model context exceeds the account request limit');
+    if (JSON.stringify(params).length > REQUEST_CHAR_LIMIT) throw new Error('Model context exceeds the account request limit');
     const day = new Date().toISOString().slice(0, 10);
     const role = agentContext.getStore()?.role ?? 'unassigned';
     transaction(() => {
