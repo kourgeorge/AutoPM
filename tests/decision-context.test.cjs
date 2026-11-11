@@ -136,10 +136,11 @@ test('scan snapshots live in their own files; receipts stay small and old inline
   const first = agentContext.run({ ...context, toolCallId: 'call-1' }, () => recordPage('get_watchlist_scan', { rows }, 'rows', { details: true }));
   assert.equal(first.snapshotId, 'call-1');
   const receipt = storage.readRecord('tool-calls', 'call-1');
-  assert.equal(receipt.snapshot.file, 'snapshots/call-1.json');
+  const today = from('core/time').etNow().date;
+  assert.equal(receipt.snapshot.file, `days/${today}/snapshots/call-1.json`, 'the snapshot sits in its receipt\'s day folder');
   assert.ok(JSON.stringify(receipt).length < 500, 'receipt keeps only a pointer');
-  assert.ok(fs.existsSync(path.join(process.env.DATA_DIR, 'db', 'snapshots', 'call-1.json')));
-  const line = fs.readFileSync(path.join(process.env.DATA_DIR, 'db', 'tool-calls.jsonl'), 'utf8').trim().split('\n').pop();
+  assert.ok(fs.existsSync(path.join(process.env.DATA_DIR, 'db', 'days', today, 'snapshots', 'call-1.json')));
+  const line = fs.readFileSync(path.join(process.env.DATA_DIR, 'db', 'days', today, 'tool-calls.jsonl'), 'utf8').trim().split('\n').pop();
   assert.ok(line.length < 500, 'the tool-calls line is small');
   // Page on, each later call passing the previous page's receipt id.
   let all = [...first.rows], next = first.nextOffset, prev = 'call-1', n = 1;
@@ -160,7 +161,12 @@ test('scan snapshots live in their own files; receipts stay small and old inline
   let old = [], at = 0;
   while (at !== null) { const page = recordPage('get_watchlist_scan', { rows: [] }, 'rows', { snapshotId: 'old-2', offset: at, details: true }); assert.equal(page.snapshotId, 'old-1'); old.push(...page.rows); at = page.nextOffset; }
   assert.deepEqual(old, rows);
-  assert.equal(fs.existsSync(path.join(process.env.DATA_DIR, 'db', 'snapshots', 'old-1.json')), false);
+  assert.equal(fs.existsSync(path.join(process.env.DATA_DIR, 'db', 'days', today, 'snapshots', 'old-1.json')), false);
+  // A snapshot file in the old snapshots/ folder (before day folders) still pages.
+  fs.mkdirSync(path.join(process.env.DATA_DIR, 'db', 'snapshots'), { recursive: true });
+  fs.writeFileSync(path.join(process.env.DATA_DIR, 'db', 'snapshots', 'flat-1.json'), JSON.stringify({ kind: 'get_watchlist_scan', data: { rows } }));
+  storage.saveRecord('tool-calls', 'flat-1', { name: 'get_watchlist_scan', input: {}, snapshot: { kind: 'get_watchlist_scan', file: 'snapshots/flat-1.json', bytes: 1 } });
+  assert.deepEqual(recordPage('get_watchlist_scan', { rows: [] }, 'rows', { snapshotId: 'flat-1', offset: 39 }).rows, rows.slice(39));
 });
 
 test('intraday volume compares identical bins and excludes incomplete historical sessions', () => {

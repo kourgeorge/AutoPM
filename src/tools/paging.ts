@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { appendRecord, isEphemeralStorage, readRecord, saveRecord } from '../core/storage';
+import { appendRecord, isEphemeralStorage, readRecord, recordDay, saveRecord } from '../core/storage';
 import { DATA_DIR } from '../core/paths';
 import { writeFileAtomic } from '../core/fsAtomic';
 import { agentContext } from '../core/agentContext';
@@ -14,12 +14,16 @@ type SnapshotPointer = { kind: string; file: string; bytes: number };
 const DB_DIR = path.join(DATA_DIR, 'db');
 const ephemeralFiles = new Map<string, string>();   // the replay harness never writes the operator's data
 
-/** Each snapshot is its own file (temp + rename, so never half-written); receipts stay small. */
+/**
+ * Each snapshot is its own file (temp + rename, so never half-written); receipts stay small.
+ * It sits beside its receipt: days/<day>/snapshots/. Older pointers to snapshots/ still load.
+ */
 function writeSnapshotFile(id: string, snapshot: Snapshot): SnapshotPointer {
-  const file = `snapshots/${id.replace(/[^\w.-]/g, '_')}.json`, text = JSON.stringify(snapshot);
+  const dir = `days/${recordDay('tool-calls', id)}/snapshots`;
+  const file = `${dir}/${id.replace(/[^\w.-]/g, '_')}.json`, text = JSON.stringify(snapshot);
   if (isEphemeralStorage()) ephemeralFiles.set(file, text);
   else {
-    fs.mkdirSync(path.join(DB_DIR, 'snapshots'), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(DB_DIR, dir), { recursive: true, mode: 0o700 });
     writeFileAtomic(path.join(DB_DIR, file), text);
   }
   return { kind: snapshot.kind, file, bytes: Buffer.byteLength(text) };

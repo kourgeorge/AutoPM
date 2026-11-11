@@ -67,8 +67,10 @@ export function latestPositionReview(symbol: string): PositionReview | null {
   const snapshot = getPositionSnapshot(symbol);
   if (!snapshot) return null;
   const entryId = snapshot.entryDecisionId ?? null, openedAt = snapshot.openedAt ? Date.parse(snapshot.openedAt) : NaN;
+  // Read back to the day the position opened, however long ago, so a long hold keeps its review.
+  const days = Number.isFinite(openedAt) ? Math.ceil((Date.now() - openedAt) / 86_400_000) + 1 : Infinity;
   return listReviews<PositionReview>('record_position_review', r => canonicalSymbol(r.symbol) === canonicalSymbol(symbol)
-    && r.entryDecisionId === entryId && (!Number.isFinite(openedAt) || Date.parse(r.at) >= openedAt), 1)[0] ?? null;
+    && r.entryDecisionId === entryId && (!Number.isFinite(openedAt) || Date.parse(r.at) >= openedAt), 1, Math.max(days, 1))[0] ?? null;
 }
 
 export function savePositionReview(input: Omit<PositionReview, 'id' | 'at' | 'entryDecisionId'>) {
