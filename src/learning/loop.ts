@@ -21,7 +21,7 @@
  *   enough days after its creation show whether it still works on data nobody had seen.
  */
 import crypto from 'crypto';
-import { readValue, saveValue, saveRecord, readRecords, isEphemeralStorage } from '../core/storage';
+import { readValue, saveValue, saveRecord, appendRecord, readRecords, isEphemeralStorage, transaction } from '../core/storage';
 import { agentContext } from '../core/agentContext';
 import { createLiveModelProvider } from '../core/modelProvider';
 import { logger } from '../core/logger';
@@ -48,9 +48,18 @@ export interface LearningReport {
   horizonDays: number; ideasTested: number; examBar: number;
   builtIns: SignalReport[]; learned: Candidate[]; weights: Record<string, number>; changes: string[];
 }
+/** One row per learning run (and per operator rollback), kept for good: why each weight moved. */
+export interface LearningRun {
+  id: string; type: 'run' | 'rollback'; at: string; tradingDay: string;
+  weightsBefore: Record<string, number>; weightsAfter: Record<string, number>;
+  active: LearningLive['active'];
+  signals: { name: string; ic: number | null; t: number | null; before: number; after: number; reason: string }[];
+  changes: string[]; restoredFrom?: string;
+}
 export interface LearningSettings { enabled: boolean; proposeIdeas: boolean }
 
-const KIND = 'learning-signals';
+const KIND = 'learning-signals', RUNS = 'learning-runs';
+const MAX_DRIFT = 0.4, DRIFT_RUNS = 20;   // a weight moves at most 0.4 net over the last 20 runs
 const MAX_ACTIVE = 3, MAX_STEP = 0.2, MAX_WEIGHT = 2;
 const MIN_T_TO_MOVE = 1.5;   // below this the recent record is too unsure to move a weight
 const IC_FULL = 0.03;          // a mean IC of 0.03 on five-day returns is already a strong signal
@@ -74,19 +83,35 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 
 /** Where the evidence says a weight belongs: 1 is neutral, 2 is strong, 0 is "does not help". */
-function targetWeight(r: SignalReport, older: PeriodStats | null = r.periods.learn): number {
+function targetWeight(r: SignalReport, older: PeriodStats | null = r.periods.learn): { target: number; why: string } {
   const e = r.periods.exam;
-  if (e.meanIC === null || e.tStat === null || e.days < 30) return 1;
+  if (e.meanIC === null || e.tStat === null || e.days < 30) return { target: 1, why: 'too few scored days; neutral 1' };
   // Noise moves nothing: the recent record must be reasonably sure, and the older years
   // (when given) must point the same way. Measured 2026-11-08: every built-in had |t| < 1.1
   // and several flipped sign between periods — re-weighting on that would be chasing luck.
-  if (Math.abs(e.tStat) < MIN_T_TO_MOVE) return 1;
-  if (older && (older.meanIC === null || Math.sign(older.meanIC) !== Math.sign(e.meanIC))) return 1;
+  if (Math.abs(e.tStat) < MIN_T_TO_MOVE) return { target: 1, why: `recent t ${e.tStat} is below ${MIN_T_TO_MOVE}; neutral 1` };
+  if (older && (older.meanIC === null || Math.sign(older.meanIC) !== Math.sign(e.meanIC))) return { target: 1, why: `older years (IC ${older.meanIC}) disagree with recent IC ${e.meanIC}; neutral 1` };
   const confidence = Math.min(1, Math.abs(e.tStat) / 3);
-  return clamp(1 + clamp(e.meanIC / IC_FULL, -1, 1) * confidence, 0, MAX_WEIGHT);
+  const target = round2(clamp(1 + clamp(e.meanIC / IC_FULL, -1, 1) * confidence, 0, MAX_WEIGHT));
+  return { target, why: `recent IC ${e.meanIC} with t ${e.tStat} points to ${target}` };
 }
 function step(from: number, to: number): number {
   return round2(from + clamp(to - from, -MAX_STEP, MAX_STEP));
+}
+
+/** The learning history (runs and operator rollbacks), oldest first; `limit` keeps the newest N. */
+export const learningRuns = (limit?: number): LearningRun[] => readRecords<LearningRun>(RUNS, limit);
+
+/**
+ * The drift cap: over the last DRIFT_RUNS runs (this one included) a weight may move at most
+ * MAX_DRIFT net from where it stood before the oldest of them. Returns the allowed weight.
+ */
+export function capDrift(name: string, proposed: number, past: LearningRun[], fallback: number): { weight: number; base: number; clamped: boolean } {
+  const window = past.filter(r => r.type === 'run').slice(-(DRIFT_RUNS - 1));
+  // The oldest run in the window that knew this signal; a signal new to all of them starts from `fallback`.
+  const base = window.find(r => r.weightsBefore?.[name] !== undefined)?.weightsBefore[name] ?? fallback;
+  const weight = round2(clamp(proposed, base - MAX_DRIFT, base + MAX_DRIFT));
+  return { weight, base, clamped: Math.abs(weight - proposed) > 1e-9 };
 }
 
 function setStatus(c: Candidate, status: CandidateStatus, reason: string, at: string): string {
@@ -153,20 +178,42 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
   // then follows its LIVE record (its exam years were part of what got it chosen).
   const prev = readValue<LearningLive>('learningLive');
   const weights: Record<string, number> = {};
-  for (const r of builtIns) weights[r.name] = step(prev?.weights?.[r.name] ?? 1, targetWeight(r));
+  const past = learningRuns();
+  const rows: LearningRun['signals'] = [];
+  const setWeight = (name: string, before: number, proposed: number, why: string, stats: PeriodStats | null) => {
+    const cap = capDrift(name, proposed, past, before);
+    let reason = why;
+    if (cap.clamped) {
+      reason += `; step to ${proposed.toFixed(2)} clamped to ${cap.weight.toFixed(2)} (at most ${MAX_DRIFT} from ${cap.base.toFixed(2)} over ${DRIFT_RUNS} runs)`;
+      changes.push(`${name} weight held at ${cap.weight.toFixed(2)}: the step to ${proposed.toFixed(2)} would move it more than ${MAX_DRIFT} from ${cap.base.toFixed(2)} over the last ${DRIFT_RUNS} runs`);
+    }
+    weights[name] = cap.weight;
+    rows.push({ name, ic: stats?.meanIC ?? null, t: stats?.tStat ?? null, before, after: cap.weight, reason });
+  };
+  for (const r of builtIns) {
+    const before = prev?.weights?.[r.name] ?? 1, t = targetWeight(r);
+    setWeight(r.name, before, step(before, t.target), t.why, r.periods.exam);
+  }
   const active = all.filter(c => c.status === 'active');
   for (const c of active) {
     const key = LEARNED_PREFIX + c.name, live = c.report!.periods.live;
-    const target = live.days >= 20 ? targetWeight({ ...c.report!, periods: { ...c.report!.periods, exam: live } }, null) : 0.5;
-    weights[key] = prev?.weights?.[key] === undefined ? 0.5 : step(prev.weights[key], target);
+    const t = live.days >= 20 ? targetWeight({ ...c.report!, periods: { ...c.report!.periods, exam: live } }, null) : { target: 0.5, why: `only ${live.days} live days; starts at 0.5` };
+    const before = prev?.weights?.[key];
+    if (before === undefined) { weights[key] = 0.5; rows.push({ name: key, ic: live.meanIC, t: live.tStat, before: 0.5, after: 0.5, reason: 'newly active; starts at 0.5' }); }
+    else setWeight(key, before, step(before, t.target), t.why, live);
   }
   for (const [name, w] of Object.entries(weights)) {
     const before = prev?.weights?.[name] ?? 1;
-    if (Math.abs(before - w) >= 0.05) changes.push(`${name} weight ${before.toFixed(2)} → ${w.toFixed(2)}`);
+    if (Math.abs(before - w) >= 0.05) changes.push(`${name} weight ${before.toFixed(2)} → ${w.toFixed(2)} (${rows.find(r => r.name === name)?.reason ?? ''})`);
   }
-  saveValue('learningLive', { at, weights, active: active.map(c => ({ id: c.id, name: c.name, code: c.code, idea: c.idea })) } satisfies LearningLive);
-  // Kept separately too: the composite reads it on every tick and needs only the numbers.
-  saveValue('learningWeights', weights);
+  const live: LearningLive = { at, weights, active: active.map(c => ({ id: c.id, name: c.name, code: c.code, idea: c.idea })) };
+  transaction(() => {
+    saveValue('learningLive', live);
+    // Kept separately too: the composite reads it on every tick and needs only the numbers.
+    saveValue('learningWeights', weights);
+    appendRecord(RUNS, 'run-' + at, at, { id: 'run-' + at, type: 'run', at, tradingDay: today, weightsBefore: prev?.weights ?? {},
+      weightsAfter: weights, active: live.active, signals: rows, changes: [...changes] } satisfies LearningRun);
+  });
 
   const lastProposal = readValue<string>('learningLastProposal');
   const due = !lastProposal || Date.parse(at) - Date.parse(lastProposal) >= PROPOSE_EVERY_DAYS * 86_400_000;
@@ -285,6 +332,36 @@ export function startLearning(): void {
   timer.unref?.();
 }
 export function stopLearning(): void { if (timer) clearInterval(timer); timer = undefined; }
+
+// ── Rollback (operator only; nothing calls this on its own) ─────────────────
+
+/**
+ * Put back the weights and active model-written signals saved by a past run. Signals that
+ * run had active become active again; signals active now but not then go back to shadow.
+ * The rollback itself is kept in the run history.
+ */
+export function rollbackLearning(runId: string, now = new Date()): LearningRun {
+  const target = readRecords<LearningRun>(RUNS).find(r => r.id === runId && r.type === 'run');
+  if (!target) throw new Error(`No learning run ${runId}`);
+  const at = now.toISOString(), prev = readValue<LearningLive>('learningLive');
+  const keep = new Set(target.active.map(a => a.id)), note = `restored by the operator to the run of ${target.at}`;
+  const changes: string[] = [];
+  const out: LearningRun = { id: 'rollback-' + at, type: 'rollback', at, tradingDay: etDate(now), weightsBefore: prev?.weights ?? {},
+    weightsAfter: { ...target.weightsAfter }, active: target.active, signals: [], changes, restoredFrom: target.id };
+  transaction(() => {
+    for (const c of candidates()) {
+      if (keep.has(c.id) && c.status !== 'active') changes.push(setStatus(c, 'active', note, at));
+      else if (!keep.has(c.id) && c.status === 'active') changes.push(setStatus(c, 'shadow', note, at));
+      else continue;
+      saveRecord(KIND, c.id, c);
+    }
+    saveValue('learningLive', { at, weights: out.weightsAfter, active: target.active } satisfies LearningLive);
+    saveValue('learningWeights', out.weightsAfter);
+    appendRecord(RUNS, out.id, at, out);
+  });
+  logger.info(`[Learning] weights ${note}`);
+  return out;
+}
 
 // ── Reading the results ─────────────────────────────────────────────────────
 

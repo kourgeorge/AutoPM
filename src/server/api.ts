@@ -9,7 +9,7 @@ import path from 'path';
 import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudget';
 import { aiConnectionStatus, saveAiConnection } from '../core/aiConnection';
 import { llmUsage, llmUsageForDay } from '../review/llmUsage';
-import { candidates, signalScorecard, saveLearningSettings, triggerLearning } from '../learning/loop';
+import { candidates, signalScorecard, saveLearningSettings, triggerLearning, learningRuns, rollbackLearning } from '../learning/loop';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
 import { getState } from '../state/state';
@@ -223,6 +223,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
   '/api/broker-orders': 'Orders resting at the broker from the last tick.',
   '/api/learning/code': 'The code of one model-written signal. ?id=sig-…',
+  '/api/learning/runs': 'History of learning runs and operator rollbacks, newest first: weights before and after, each signal\'s recent IC and t, and why each weight moved. ?limit=N (default 50).',
   '/api/learning': 'Learning layer: how well each signal (built-in and model-written) predicted next-week returns, current weights, idea statuses and recent changes.',
 };
 
@@ -489,6 +490,18 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     const c = candidates().find(x => x.id === url.searchParams.get('id'));
     if (!c) throw new HttpError(404, 'No such signal');
     return { id: c.id, name: c.name, code: c.code };
+  });
+  add('GET', '/api/learning/runs', ({ url }) => {
+    const raw = url.searchParams.get('limit'), limit = raw == null ? 50 : Number(raw);
+    if (!Number.isInteger(limit) || limit <= 0) throw new HttpError(400, 'limit must be a whole number above 0');
+    return { runs: learningRuns(limit).reverse() };
+  });
+  // Operator only: puts back the weights and active learned signals of a chosen past run.
+  add('POST', '/api/learning/rollback', async ({ body }) => {
+    const input = await body();
+    if (typeof input.runId !== 'string' || !input.runId) throw new HttpError(400, 'runId is required');
+    try { return rollbackLearning(input.runId); }
+    catch (err) { throw new HttpError(404, err instanceof Error ? err.message : String(err)); }
   });
   // Starts a run and returns at once; the run takes about ten seconds once history is saved.
   add('POST', '/api/learning/run', async ({ body }) => {
