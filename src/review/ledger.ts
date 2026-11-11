@@ -62,6 +62,8 @@ export interface TradeOutcome {
   atrAtEntry: number | null;
   triggerEventId: string | null;
   policyVersion: number | null;
+  /** Each signal's score for this symbol when the entry was journalled; null on older entries. */
+  signalsAtEntry: Record<string, number> | null;
 
   /**
    * True when the fills for this round trip do not add up — a sell larger than the position
@@ -267,6 +269,7 @@ function assemble(
     atrAtEntry:       entryDecision?.atrAtEntry ?? null,
     triggerEventId:   entryDecision?.triggerEventId ?? null,
     policyVersion:    entryDecision?.policyVersion ?? null,
+    signalsAtEntry:   entryDecision?.signalsAtEntry ?? null,
     unexplained,
   };
 }

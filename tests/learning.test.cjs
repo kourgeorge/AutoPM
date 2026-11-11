@@ -164,3 +164,38 @@ test('a raise needs the ETFs alone to agree: a signal that works only on the sto
   assert.equal(up.held, null);
   assert.equal(up.proposed, 1.2);
 });
+
+test('real closed trades are graded per signal from the scores saved at entry; older entries without them are skipped', () => {
+  storage.useEphemeralStorage();
+  for (const kind of ['journal', 'fills']) storage.forgetEphemeralRecords(kind);
+  const { recordDecision, decision } = from('journal/journal');
+  const { recordFills } = from('review/fills');
+  const loop = from('learning/loop');
+  let n = 0;
+  const trade = (symbol, qty, buy, sell, fee, signalsAtEntry, day) => {
+    const id = 'ord-' + symbol;
+    recordDecision(decision('entry', 'trader', { rationale: 'test', symbol, executed: true, qty, price: buy, brokerOrderId: id, ...(signalsAtEntry ? { signalsAtEntry } : {}) }));
+    recordFills([
+      { execId: 'x' + n++, brokerOrderId: id, permId: null, symbol, side: 'buy', qty, price: buy, fee, at: `2026-11-0${day}T15:00:00.000Z` },
+      { execId: 'x' + n++, brokerOrderId: id + '-exit', permId: null, symbol, side: 'sell', qty, price: sell, fee, at: `2026-11-0${day}T19:00:00.000Z` },
+    ]);
+  };
+  trade('AAA', 10, 100, 110, 1, { EMA: 0.5, MACD: -0.2 }, 2);   // net 98, +9.8%
+  trade('BBB', 10, 50, 45, 0, { EMA: -0.4, MACD: 0.3 }, 3);     // net -50, -10%
+  trade('CCC', 5, 200, 204, null, { EMA: 0.1, MACD: 0.6 }, 4);  // fees unknown: gross 20, +2%
+  trade('DDD', 1, 10, 20, 0, null, 5);                           // an older entry: no scores saved
+
+  const r = loop.realTradeStats();
+  assert.equal(r.closedTrades, 4);
+  assert.equal(r.withSignals, 3);
+  assert.equal(r.skippedNoSignals, 1);
+  assert.deepEqual(r.bySignal.EMA, { trades: 3, positive: { trades: 2, avgPnL: 59, avgReturnPct: 5.9 },
+    negative: { trades: 1, avgPnL: -50, avgReturnPct: -10 }, rankAgreement: 1 });
+  assert.deepEqual(r.bySignal.MACD, { trades: 3, positive: { trades: 2, avgPnL: -15, avgReturnPct: -4 },
+    negative: { trades: 1, avgPnL: 98, avgReturnPct: 9.8 }, rankAgreement: -0.5 });
+
+  const card = loop.signalScorecard();
+  assert.match(card.howToRead, /fewer than about 20 closed trades these numbers are not evidence/);
+  assert.equal(card.realTrades.withSignals, 3);
+  for (const kind of ['journal', 'fills']) storage.forgetEphemeralRecords(kind);
+});
