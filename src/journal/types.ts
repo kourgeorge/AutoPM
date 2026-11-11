@@ -108,6 +108,11 @@ export interface DecisionRecord {
   entryPlan?: EntryPlanSummary | null;
   /** On a hold/skip written from a saved review: what the review said (keep, wait, skip, …). */
   reviewDecision?: string;
+  /**
+   * On an `entry`: each trend signal's score (-1..+1) for this symbol in the latest tick when the
+   * entry was journalled. Absent on older entries and when no tick had scored the symbol.
+   */
+  signalsAtEntry?: Record<string, number>;
 }
 
 export interface EntryPlanSummary {

@@ -5,6 +5,7 @@ import type { Order } from '../state/state';
 import { canonicalSymbol } from '../core/symbols';
 import { appendRecord, readRecord, saveRecord, listRecords, transaction } from '../core/storage';
 import { agentContext, assertAgentActive } from '../core/agentContext';
+import { getLastTick } from '../features/lastTick';
 
 let ephemeral = false;
 export function useEphemeralJournal(): void { ephemeral = true; }
@@ -40,9 +41,25 @@ function withOrder(row: DecisionRecord): DecisionRecord {
     executed: trade ? filled > 0 : record.executed };
 }
 
+/**
+ * Each trend signal's score for `symbol` in the latest tick, or undefined when no tick has
+ * scored it. Saved on entries so closed trades can be graded per signal (learning/loop.ts).
+ */
+export function signalsNow(symbol: string | null | undefined): Record<string, number> | undefined {
+  if (!symbol) return undefined;
+  const wanted = canonicalSymbol(symbol);
+  const row = Object.values(getLastTick()?.watchlist ?? {}).find(w => canonicalSymbol(w.symbol) === wanted);
+  const scores = Object.fromEntries((row?.signals ?? []).filter(s => Number.isFinite(s.score)).map(s => [s.name, s.score]));
+  return Object.keys(scores).length ? scores : undefined;
+}
+
 export function recordDecision(input: DecisionInput, id: string = crypto.randomUUID()): DecisionRecord {
   assertAgentActive();
   const context = agentContext.getStore();
+  if (input.kind === 'entry' && input.signalsAtEntry === undefined) {
+    const symbol = input.symbol ?? (input.orderId && !ephemeral ? readRecord<Order>('orders', input.orderId)?.symbol : undefined);
+    input = { ...input, signalsAtEntry: signalsNow(symbol) };
+  }
   const record = { requestId: context?.requestId, actorId: context?.actorId, ...input, id, at: new Date().toISOString() };
   if (ephemeral) return record;
   appendRecord('journal', record.id, record.at, stored(record));

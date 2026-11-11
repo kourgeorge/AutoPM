@@ -29,7 +29,8 @@ import { etDate, etNow } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { ToolDefinition } from '../core/types';
 import { LEARNING_ETFS, LEARNING_UNIVERSE, loadUniverse } from './history';
-import { buildUniverse, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
+import { computeOutcomes, type TradeOutcome } from '../review/ledger';
+import { buildUniverse, rankCorrelation, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
 import { compileSignal, checkCode, WINDOW } from './sandbox';
 import { LEARNED_PREFIX, SandboxedSignal } from '../signals/sandboxed';
 
@@ -393,18 +394,54 @@ export function rollbackLearning(runId: string, now = new Date()): LearningRun {
 
 // ── Reading the results ─────────────────────────────────────────────────────
 
+export interface RealTradeSide { trades: number; avgPnL: number | null; avgReturnPct: number | null }
+export interface RealTradeSignal { trades: number; positive: RealTradeSide; negative: RealTradeSide; rankAgreement: number | null }
+export interface RealTrades { closedTrades: number; withSignals: number; skippedNoSignals: number; bySignal: Record<string, RealTradeSignal> }
+
+const round = (x: number, d: number) => Math.round(x * 10 ** d) / 10 ** d;
+
+/** P&L after the costs the fills report: net when every fee is known, else gross minus the fees that were reported. */
+function pnlAfterCosts(o: TradeOutcome): number { return o.netPnL ?? o.grossPnL - (o.fees ?? 0); }
+
+/**
+ * How each signal did on the trader's own closed round trips. Measures only; changes no weight.
+ * Trades whose entry decision has no `signalsAtEntry` (older entries) are skipped.
+ */
+export function realTradeStats(outcomes: TradeOutcome[] = computeOutcomes()): RealTrades {
+  const scored = outcomes.filter(o => o.signalsAtEntry && Object.keys(o.signalsAtEntry).length > 0);
+  const side = (xs: TradeOutcome[]): RealTradeSide => ({ trades: xs.length,
+    avgPnL: xs.length ? round(xs.reduce((a, o) => a + pnlAfterCosts(o), 0) / xs.length, 2) : null,
+    avgReturnPct: xs.length ? round(xs.reduce((a, o) => a + pnlAfterCosts(o) / (o.entryPrice * o.qty) * 100, 0) / xs.length, 3) : null });
+  const names = [...new Set(scored.flatMap(o => Object.keys(o.signalsAtEntry!)))].sort();
+  const bySignal: Record<string, RealTradeSignal> = {};
+  for (const name of names) {
+    const with_ = scored.filter(o => Number.isFinite(o.signalsAtEntry![name]));
+    const rho = rankCorrelation(with_.map(o => o.signalsAtEntry![name]), with_.map(o => pnlAfterCosts(o) / (o.entryPrice * o.qty)));
+    bySignal[name] = { trades: with_.length,
+      positive: side(with_.filter(o => o.signalsAtEntry![name] > 0)), negative: side(with_.filter(o => o.signalsAtEntry![name] < 0)),
+      rankAgreement: rho == null ? null : round(rho, 3) };
+  }
+  return { closedTrades: outcomes.length, withSignals: scored.length, skippedNoSignals: outcomes.length - scored.length, bySignal };
+}
+
+const REAL_TRADES_HOW_TO_READ = 'realTrades is the trader\'s own closed round trips, from real fills, after the fees the fills report (Alpaca bills some regulatory fees separately, so those are missing). For each signal: how many trades had a score for it at entry, the average P&L and return of trades where it was positive vs negative at entry, and the rank agreement (-1..+1) between its entry score and the trade\'s return. Entries journalled before scores were saved are skipped. With fewer than about 20 closed trades these numbers are not evidence: a few trades can point either way by luck. They are shown, never used to move a weight.';
+
 /** The plain summary agents and the dashboard read. Code measures; it states no verdicts. */
 export function signalScorecard() {
   const r = learningReport(), live = readValue<LearningLive>('learningLive');
-  if (!r) return { measured: false, note: 'The learning layer has not run yet. It runs each weekday after 18:00 ET.', settings: learningSettings() };
+  const realTrades = realTradeStats();
+  if (!r) return { measured: false, note: 'The learning layer has not run yet. It runs each weekday after 18:00 ET.', settings: learningSettings(),
+    howToRead: REAL_TRADES_HOW_TO_READ, realTrades };
   const brief = (p: PeriodStats) => ({ days: p.days, meanIC: p.meanIC, tStat: p.tStat });
   const row = (s: SignalReport, extra: Record<string, unknown> = {}) => ({ name: s.name, ...extra,
     weight: live?.weights?.[s.name] ?? (extra.status === 'active' ? live?.weights?.[LEARNED_PREFIX + s.name] : undefined) ?? 1,
+    realTrades: realTrades.bySignal[s.name] ?? (extra.status ? realTrades.bySignal[LEARNED_PREFIX + s.name] : undefined) ?? null,
     olderYears: s.periods.learn, lastTwoYears: s.periods.exam, lastYear: s.periods.lastYear, ...(extra.status ? { live: s.periods.live } : {}),
     etfOnly: s.etfOnly ? { olderYears: brief(s.etfOnly.learn), lastTwoYears: brief(s.etfOnly.exam), lastYear: brief(s.etfOnly.lastYear), ...(extra.status ? { live: brief(s.etfOnly.live) } : {}) } : null });
   return {
     measured: true, at: r.at, settings: learningSettings(),
-    howToRead: `For each signal, the daily rank agreement (IC, -1..+1) between its score and each stock's return from the next open to ${r.horizonDays} trading days later, across ${r.stocks} stocks from ${r.firstDay} to ${r.lastDay}. 0 = no better than chance; 0.02–0.05 is useful. tStat above ~2 is unlikely to be luck for one signal; with many tested, more is needed (the current bar for new ideas is ${r.examBar}). Weights scale each signal's share of the trend composite; 1 = unchanged. etfOnly is the same measure on the ${LEARNING_ETFS.length} index and sector ETFs alone, which cannot be flattered by the stock list being today's winners, so a weight is only raised when it points the same way as the main IC.`,
+    howToRead: `For each signal, the daily rank agreement (IC, -1..+1) between its score and each stock's return from the next open to ${r.horizonDays} trading days later, across ${r.stocks} stocks from ${r.firstDay} to ${r.lastDay}. 0 = no better than chance; 0.02–0.05 is useful. tStat above ~2 is unlikely to be luck for one signal; with many tested, more is needed (the current bar for new ideas is ${r.examBar}). Weights scale each signal's share of the trend composite; 1 = unchanged. etfOnly is the same measure on the ${LEARNING_ETFS.length} index and sector ETFs alone, which cannot be flattered by the stock list being today's winners, so a weight is only raised when it points the same way as the main IC. ${REAL_TRADES_HOW_TO_READ}`,
+    realTrades: { closedTrades: realTrades.closedTrades, withSignals: realTrades.withSignals, skippedNoSignals: realTrades.skippedNoSignals },
     builtIns: r.builtIns.map(s => row(s)),
     learned: r.learned.map(c => ({ id: c.id, name: c.name, status: c.status, reason: c.reason, idea: c.idea, createdAt: c.createdAt,
       ...(c.report ? row(c.report, { status: c.status }) : {}), similarTo: c.maxSimilarity ?? null })),

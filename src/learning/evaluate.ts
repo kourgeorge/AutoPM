@@ -167,6 +167,9 @@ function pearson(a: number[], b: number[]): number | null {
   return saa > 0 && sbb > 0 ? sab / Math.sqrt(saa * sbb) : null;
 }
 
+/** Rank agreement (Spearman, -1..+1) between two equal-length lists; null below three pairs or with no spread. */
+export function rankCorrelation(a: number[], b: number[]): number | null { return pearson(ranks(a), ranks(b)); }
+
 interface DayResult { date: string; daily: boolean; up: boolean | null; ic: number; spread: number }
 
 function dayResults(sc: Scored, k: number): DayResult[] {
