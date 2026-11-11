@@ -14,6 +14,8 @@
  *   DATA_DIR/db/days/first-day.json  the day receipts began going to day folders
  *   DATA_DIR/db/evidence/<id>.json   a receipt a decision cites, kept after its day folder was
  *                                cleaned (see journal/retention.ts); a lookup by id finds it here first
+ *   DATA_DIR/db/evidence/index.jsonl  one line per kept receipt (id, day, name, requestId), so
+ *                                listings still show it in its old day, in time order
  *
  * A record update appends a new line with the same id; the last line for an id wins, and
  * superseded lines remain on disk; the in-memory index points at the latest version.
@@ -435,6 +437,7 @@ function* iterateDays<T>(kind: string, opts: RecordQuery<T>): Generator<{ seq: n
     const today = todayET(), span = opts.days ?? RECENT_DAYS;
     since = Number.isFinite(span) ? daysBack(today, Math.max(1, span) - 1) : undefined;
     const all = new Set([...dayFolders(), ...[...loaded()].filter(Boolean), today]);
+    for (const k of keptIndex().values()) if (k.day) all.add(k.day);
     segments = [...all].filter(d => !since || d >= since);
     if ([...all].some(d => since && d < since)) cutShort = true;
     if (!since || since <= firstDay) segments.push(''); else if (oldFile) cutShort = true;
@@ -452,14 +455,18 @@ function* iterateDays<T>(kind: string, opts: RecordQuery<T>): Generator<{ seq: n
   let count = 0;
   for (const day of segments) {
     loadDay(kind, day);
-    const rows = [...rowsOf(kind).values()].filter(r => (r.day ?? '') === day
+    const live = rowsOf(kind);
+    // Kept receipts whose day folder copy is gone are listed in that day, as if still there.
+    const keptRows = [...keptIndex().values()].filter(k => k.day === day && !live.has(k.id));
+    const rows = [...live.values(), ...keptRows].filter(r => (r.day ?? '') === day
       && (opts.name === undefined || r.name === opts.name)
       && (opts.requestId === undefined || r.requestId === opts.requestId) && inWindow(r))
       .sort((a, b) => a.seq - b.seq);
     if (opts.desc) rows.reverse();
     for (const r of rows) {
       if (opts.limit !== undefined && count >= opts.limit) return;
-      const value = payload(kind, r) as T;
+      const value = (live.get(r.id) === r ? payload(kind, r) : readKept<T>(r.id)?.value) as T;
+      if (value === undefined) continue;
       if (!opts.where || opts.where(value)) {
         count++;
         yield { seq: r.seq, id: r.id, at: r.at, value };
@@ -487,7 +494,9 @@ export function readRecordPage<T>(kind: string, after: number, limit: number): T
  */
 const EVIDENCE_DIR = path.join(DB_DIR, 'evidence');
 const keptFile = (id: string) => path.join(EVIDENCE_DIR, id.replace(/[^\w.-]/g, '_') + '.json');
+const KEPT_INDEX = path.join(EVIDENCE_DIR, 'index.jsonl');
 let keptNames: Set<string> | undefined;   // file names in evidence/, read once
+let kept: Map<string, Row> | undefined;   // id -> where a kept receipt is listed, read once
 export interface KeptRecord<T = unknown> { id: string; seq: number; at: string; value: T }
 
 function readKept<T>(id: string): KeptRecord<T> | undefined {
@@ -500,6 +509,26 @@ function readKept<T>(id: string): KeptRecord<T> | undefined {
     return kept?.id === id ? kept : undefined;
   } catch { return undefined; }
 }
+/** Kept receipts as listing rows. Files saved before the index existed are read once to fill it in. */
+function keptIndex(): Map<string, Row> {
+  if (kept) return kept;
+  kept = new Map();
+  if (ephemeral) return kept;
+  if (fs.existsSync(KEPT_INDEX)) eachEntry(KEPT_INDEX, e => { if (typeof e?.id === 'string' && typeof e.day === 'string') kept!.set(e.id, e); });
+  let names: string[] = [];
+  try { names = fs.readdirSync(EVIDENCE_DIR).filter(n => n.endsWith('.json')); } catch { /* none kept */ }
+  const listed = new Set([...kept.keys()].map(id => path.basename(keptFile(id))));
+  for (const name of names) {
+    if (listed.has(name)) continue;
+    try {
+      const k = JSON.parse(fs.readFileSync(path.join(EVIDENCE_DIR, name), 'utf8')) as KeptRecord<any>;
+      const day = etDay(k.at);
+      if (typeof k?.id === 'string' && day) kept.set(k.id, { seq: k.seq, id: k.id, at: k.at, day, ...indexed(k.value) });
+    } catch { /* unreadable: still found by id if it ever parses */ }
+  }
+  return kept;
+}
+
 /** The kept copy of a day-kind receipt, if one was saved to db/evidence/. */
 export function keptRecord<T>(kind: string, id: string): KeptRecord<T> | undefined {
   open();
@@ -511,9 +540,15 @@ export function keepRecord(kind: string, record: KeptRecord): void {
   open();
   if (ephemeral) return;
   fs.mkdirSync(EVIDENCE_DIR, { recursive: true, mode: 0o700 });
+  locate(kind, record.id);
+  const day = rowsOf(kind).get(record.id)?.day || etDay(record.at) || todayET();
   const file = keptFile(record.id);
   writeFileAtomic(file, JSON.stringify(record) + '\n');
   keptNames?.add(path.basename(file));
+  const row: Row = { seq: record.seq, id: record.id, at: record.at, day, ...indexed(record.value) };
+  // After the file: a crash between the two leaves a file the index misses, which keptIndex() reads.
+  fs.appendFileSync(KEPT_INDEX, JSON.stringify(row) + '\n', { mode: 0o600 });
+  keptIndex().set(record.id, row);
 }
 
 /** Day folders on disk (YYYY-MM-DD), oldest first. */
@@ -548,7 +583,7 @@ export function deleteDayRecords(kind: string, day: string): void {
 
 /** Forget the in-memory copy; the next call reloads from disk. */
 export function closeStorage(): void {
-  opened = false; values = {}; kinds.clear(); nextSeq = 1; keptNames = undefined;
+  opened = false; values = {}; kinds.clear(); nextSeq = 1; keptNames = undefined; kept = undefined;
   loadedDays.clear(); dayIndex = new Map(); firstDay = '';
   lines = []; undo = []; committed = []; depth = 0; dirtyFiles = new Set();
 }
