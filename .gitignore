@@ -61,3 +61,6 @@ data/backups/
 # Separate broker account directories contain local trading records and caches.
 /data-alpaca/
 /data-ibkr/
+
+# symcc task board, worktrees and scouts (local only)
+.symcc/

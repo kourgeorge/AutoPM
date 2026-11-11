@@ -1,0 +1,440 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Decision Trail Records</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column; a wide link diagram up top, then object cards grouped by the
+   moment they appear in a turn, a dated walk-through, and a lifetime table. Two lifetimes
+   (temporary vs kept for good) are the page's only colour code. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #142033;
+  --muted: #56647a;
+  --line: #d4dbe6;
+  --accent: #1d4fb8;        /* ticker blue: links, ids */
+  --temp: #a2630a;          /* temporary: day folders */
+  --temp-soft: #fbf0dd;
+  --kept: #12705a;          /* kept for good */
+  --kept-soft: #dcf2ea;
+  --code-bg: #e9edf4;
+
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body: "Public Sans", -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --s-1: 0.8125rem; --s0: 1rem; --s1: 1.25rem; --s2: 1.6rem; --s3: 2.4rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1520; --surface: #172030; --ink: #e6ecf5; --muted: #9aa8bd; --line: #2b3749;
+    --accent: #7fa8ff; --temp: #e9a94a; --temp-soft: #33281a; --kept: #4fd1ad; --kept-soft: #15302a;
+    --code-bg: #1e2a3d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1520; --surface: #172030; --ink: #e6ecf5; --muted: #9aa8bd; --line: #2b3749;
+  --accent: #7fa8ff; --temp: #e9a94a; --temp-soft: #33281a; --kept: #4fd1ad; --kept-soft: #15302a;
+  --code-bg: #1e2a3d; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--f-body); font-size: var(--s0); line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.page { max-width: 62rem; margin: 0 auto; padding-block: 3rem 5rem; display: grid; gap: 3.5rem; }
+.prose { max-width: 42rem; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: var(--s3); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: var(--s2); font-weight: 700; }
+h3 { font-size: var(--s1); font-weight: 700; }
+p { margin: 0; }
+code, .mono { font-family: var(--f-mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+.eyebrow { font-family: var(--f-mono); font-size: var(--s-1); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 1.25rem; }
+.lede { font-size: var(--s1); color: var(--muted); max-width: 40rem; }
+
+/* the rule */
+.rule { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+.rule > div { padding: 1.25rem 1.4rem; border-radius: 10px; display: grid; gap: 0.5rem; align-content: start; min-width: 0; }
+.rule .kept { background: var(--kept-soft); }
+.rule .temp { background: var(--temp-soft); }
+.rule h3 { font-size: var(--s0); }
+.rule .kept h3 { color: var(--kept); }
+.rule .temp h3 { color: var(--temp); }
+.rule ul { margin: 0; padding-left: 1.1rem; }
+
+/* diagram */
+.figure { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem; }
+.figure svg { display: block; min-width: 860px; width: 100%; height: auto; }
+.figure text { font-family: var(--f-body); fill: var(--ink); }
+.figure .t-mono { font-family: var(--f-mono); font-size: 12px; fill: var(--accent); }
+.figure .t-name { font-weight: 600; font-size: 14px; }
+.figure .t-small { font-size: 11.5px; fill: var(--muted); }
+.figure .t-frame { font-family: var(--f-mono); font-size: 12px; fill: var(--temp); letter-spacing: 0.04em; }
+.figure .box-temp { fill: var(--surface); stroke: var(--temp); stroke-width: 1.5; }
+.figure .box-kept { fill: var(--kept-soft); stroke: var(--kept); stroke-width: 1.5; }
+.figure .frame { fill: var(--temp-soft); stroke: var(--temp); stroke-width: 1; stroke-dasharray: 5 4; }
+.figure .link { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.figure .link-dash { fill: none; stroke: var(--kept); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.figure .t-link { font-size: 11.5px; fill: var(--accent); }
+.figure .t-keep { font-size: 11.5px; fill: var(--kept); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; font-size: var(--s-1); color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.temp { border-color: var(--temp); background: var(--surface); }
+.sw.kept { border-color: var(--kept); background: var(--kept-soft); }
+.sw.line { width: 22px; height: 0; border-width: 1.5px 0 0; border-color: var(--accent); border-radius: 0; }
+
+/* object cards */
+.group { display: grid; gap: 1rem; }
+.group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.9rem; }
+.group-head p { color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr)); gap: 1rem; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem 1.2rem 1.2rem; display: grid; gap: 0.6rem; align-content: start; min-width: 0; }
+.card-top { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+.card h3 { font-size: 1.1rem; }
+.card .what { color: var(--ink); }
+.card dl { margin: 0; display: grid; grid-template-columns: 5.2rem 1fr; gap: 0.35rem 0.75rem; font-size: 0.9rem; }
+.card dt { color: var(--muted); font-size: var(--s-1); padding-top: 0.15em; }
+.card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pill { font-family: var(--f-mono); font-size: 0.72rem; letter-spacing: 0.04em; padding: 0.15rem 0.55rem; border-radius: 999px; white-space: nowrap; }
+.pill.kept { color: var(--kept); background: var(--kept-soft); }
+.pill.temp { color: var(--temp); background: var(--temp-soft); }
+.pill.none { color: var(--muted); background: var(--code-bg); }
+
+/* walk-through */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: step; }
+.steps li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1rem; padding: 0.9rem 0; border-top: 1px solid var(--line); }
+.steps li:last-child { border-bottom: 1px solid var(--line); }
+.steps .when { font-family: var(--f-mono); font-size: var(--s-1); color: var(--accent); padding-top: 0.2rem; }
+.steps .body { min-width: 0; }
+.steps b { font-weight: 600; }
+@media (max-width: 30rem) { .steps li { grid-template-columns: 1fr; gap: 0.2rem; } }
+
+/* table + tree */
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.65rem 1rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-family: var(--f-mono); font-size: var(--s-1); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+pre.tree { margin: 0; overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem 1.25rem; font-family: var(--f-mono); font-size: 0.82rem; line-height: 1.7; color: var(--ink); }
+pre.tree .c { color: var(--muted); }
+pre.tree .k { color: var(--kept); }
+pre.tree .t { color: var(--temp); }
+.note { font-size: 0.9rem; color: var(--muted); }
+footer { font-size: var(--s-1); color: var(--muted); border-top: 1px solid var(--line); padding-top: 1rem; }
+</style>
+
+<main class="page">
+
+  <header class="prose" style="display:grid;gap:1rem">
+    <p class="eyebrow">autotrade · db/ · storage since 2026-11-11</p>
+    <h1>What the trader saw, what it decided, and what is kept</h1>
+    <p class="lede">Every time the trader wakes up it reads data through tools, sometimes decides something, and leaves a trail of records behind. This page names each record, shows how they point to each other, and says how long each one lives.</p>
+  </header>
+
+  <section aria-labelledby="rule-h">
+    <h2 id="rule-h">The one rule</h2>
+    <div class="rule">
+      <div class="kept">
+        <h3>Kept for good</h3>
+        <p>Decisions, orders and fills, plus everything a decision points to as its reason.</p>
+      </div>
+      <div class="temp">
+        <h3>Temporary</h3>
+        <p>Everything else the trader looked at: scan pages, routine checks, snapshots nobody acted on. Deleted after a set number of days.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="map-h">
+    <h2 id="map-h">How the records point to each other</h2>
+    <p class="prose">One turn on 12 November: the trader scans the watchlist, reads a second page, plans a KO entry, writes a review, and buys.</p>
+    <div class="figure" role="img" aria-label="Diagram: a turn has tool call records inside a day folder; the first scan record points to a snapshot file; page 2 points back to the first record; the KO decision points to the scan, the entry plan and the review, and to an order, which leads to a fill; cited records are copied to evidence before cleanup.">
+      <svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--accent)"/>
+          </marker>
+          <marker id="arr-k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--kept)"/>
+          </marker>
+        </defs>
+
+        <!-- day folder frame -->
+        <rect class="frame" x="318" y="12" width="572" height="296" rx="10"/>
+        <text class="t-frame" x="334" y="34">db/days/2026-11-12/   deleted after 2 days (snapshots) · 90 days (records)</text>
+
+        <!-- turn -->
+        <rect class="box-kept" x="16" y="52" width="262" height="78" rx="8"/>
+        <text class="t-name" x="30" y="78">Turn (request)</text>
+        <text class="t-mono" x="30" y="98">16b76fb4-…</text>
+        <text class="t-small" x="30" y="118">requests.jsonl</text>
+
+        <!-- records -->
+        <rect class="box-temp" x="350" y="52" width="290" height="52" rx="7"/>
+        <text class="t-mono" x="364" y="74">…:134:0</text>
+        <text class="t-small" x="364" y="93">get_watchlist_scan · page 1</text>
+
+        <rect class="box-temp" x="350" y="116" width="290" height="52" rx="7"/>
+        <text class="t-mono" x="364" y="138">…:135:0</text>
+        <text class="t-small" x="364" y="157">get_watchlist_scan · page 2</text>
+
+        <rect class="box-temp" x="350" y="180" width="290" height="52" rx="7"/>
+        <text class="t-mono" x="364" y="202">…:136:0</text>
+        <text class="t-small" x="364" y="221">get_entry_plan KO (entry plan)</text>
+
+        <rect class="box-temp" x="350" y="244" width="290" height="52" rx="7"/>
+        <text class="t-mono" x="364" y="266">…:137:0</text>
+        <text class="t-small" x="364" y="285">record_candidate_review KO "buy"</text>
+
+        <!-- snapshot -->
+        <rect class="box-temp" x="690" y="52" width="186" height="78" rx="7"/>
+        <text class="t-name" x="704" y="76">Snapshot file</text>
+        <text class="t-mono" x="704" y="96">snapshots/…:134:0.json</text>
+        <text class="t-small" x="704" y="116">full scan, 46 stocks</text>
+
+        <!-- turn -> records -->
+        <path class="link" d="M278,91 C300,91 315,78 348,78" marker-end="url(#arr)"/>
+        <text class="t-link" x="284" y="146">has many</text>
+        <path class="link" d="M278,110 C300,120 300,140 300,150 L300,270 C300,270 330,270 348,270" marker-end="url(#arr)" style="opacity:.45"/>
+
+        <!-- 134 -> snapshot -->
+        <path class="link" d="M640,78 L688,78" marker-end="url(#arr)"/>
+        <text class="t-link" x="644" y="70">pointer</text>
+
+        <!-- 135 -> 134 -->
+        <path class="link" d="M640,142 C668,142 668,96 642,96" marker-end="url(#arr)"/>
+        <text class="t-link" x="672" y="150">input.snapshotId</text>
+
+        <!-- decision -->
+        <rect class="box-kept" x="350" y="350" width="290" height="112" rx="8"/>
+        <text class="t-name" x="364" y="374">Decision (journal)</text>
+        <text class="t-mono" x="364" y="394">entry:KO:2026-11-12T15:02Z</text>
+        <text class="t-small" x="364" y="414">observationIds → …:134:0</text>
+        <text class="t-small" x="364" y="432">entryPlan.evidenceId → …:136:0</text>
+        <text class="t-small" x="364" y="450">reviewId → …:137:0</text>
+
+        <!-- decision -> records bus on the left -->
+        <path class="link" d="M350,406 L334,406 L334,78 L348,78" marker-end="url(#arr)"/>
+        <path class="link" d="M334,206 L348,206" marker-end="url(#arr)"/>
+        <path class="link" d="M334,270 L348,270" marker-end="url(#arr)"/>
+
+        <!-- order, fill -->
+        <rect class="box-kept" x="690" y="350" width="186" height="52" rx="8"/>
+        <text class="t-name" x="704" y="372">Order</text>
+        <text class="t-small" x="704" y="391">orders.jsonl</text>
+        <rect class="box-kept" x="690" y="430" width="186" height="52" rx="8"/>
+        <text class="t-name" x="704" y="452">Fill</text>
+        <text class="t-small" x="704" y="471">fills.jsonl · shares, price</text>
+        <path class="link" d="M640,376 L688,376" marker-end="url(#arr)"/>
+        <text class="t-link" x="644" y="368">brokerOrderId</text>
+        <path class="link" d="M783,402 L783,428" marker-end="url(#arr)"/>
+
+        <!-- evidence -->
+        <rect class="box-kept" x="16" y="350" width="262" height="96" rx="8"/>
+        <text class="t-name" x="30" y="374">Evidence copy</text>
+        <text class="t-mono" x="30" y="394">evidence/…:134:0.json</text>
+        <text class="t-small" x="30" y="414">record + its snapshot, kept for good</text>
+        <text class="t-small" x="30" y="432">listed in evidence/index.jsonl</text>
+        <path class="link-dash" d="M318,236 C230,236 150,280 150,348" marker-end="url(#arr-k)"/>
+        <text class="t-keep" x="160" y="262">copied before cleanup,</text>
+        <text class="t-keep" x="160" y="278">because a decision cites it</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="sw temp"></i>temporary</span>
+      <span><i class="sw kept"></i>kept for good</span>
+      <span><i class="sw line"></i>points to</span>
+    </div>
+  </section>
+
+  <section aria-labelledby="obj-h">
+    <h2 id="obj-h">Every record, one by one</h2>
+
+    <div class="group">
+      <div class="group-head"><h3>While the trader looks</h3><p>Made during a turn, whether or not it decides anything.</p></div>
+      <div class="cards">
+        <article class="card">
+          <div class="card-top"><h3>Turn</h3><span class="pill kept">kept</span></div>
+          <p class="what">One wake-up of an agent, start to finish. Also called a request.</p>
+          <dl>
+            <dt>id</dt><dd><code>16b76fb4-668e-…</code></dd>
+            <dt>holds</dt><dd>who ran it (trader, researcher, assistant), why it woke, start time, status</dd>
+            <dt>lives in</dt><dd><code>db/requests.jsonl</code></dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Tool call record</h3><span class="pill temp">90 days</span></div>
+          <p class="what">One tool the agent used: what it asked for and what came back. Also called a receipt.</p>
+          <dl>
+            <dt>id</dt><dd><code>&lt;turn&gt;:&lt;round&gt;:&lt;index&gt;</code>, e.g. <code>16b76fb4-…:134:0</code> = round 134, first call</dd>
+            <dt>holds</dt><dd><code>requestId</code>, <code>role</code>, <code>name</code>, <code>input</code>, <code>result</code>, start and finish time</dd>
+            <dt>lives in</dt><dd><code>db/days/&lt;date&gt;/tool-calls.jsonl</code>, the day the turn started (US Eastern)</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Snapshot</h3><span class="pill temp">2 days</span></div>
+          <p class="what">The full result of a big tool call, frozen so it can be read page by page without prices moving between pages.</p>
+          <dl>
+            <dt>id</dt><dd>the first record's id (the <code>snapshotId</code>)</dd>
+            <dt>holds</dt><dd>the whole scan: every stock's price, signals, RSI, ATR, risk check; scan time; warnings</dd>
+            <dt>lives in</dt><dd><code>db/days/&lt;date&gt;/snapshots/&lt;id&gt;.json</code>; the record keeps a pointer <code>{ kind, file, bytes }</code></dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Page</h3><span class="pill none">not stored</span></div>
+          <p class="what">What the trader actually receives: a slice of the snapshot. It is the <code>result</code> of each record.</p>
+          <dl>
+            <dt>holds</dt><dd><code>rows</code>, <code>snapshotId</code>, <code>offset</code>, <code>total</code>, <code>nextOffset</code></dd>
+            <dt>links</dt><dd>a later page's record has <code>input.snapshotId</code> pointing back to the first record</dd>
+          </dl>
+        </article>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><h3>When the trader decides</h3><p>The reasons and the numbers.</p></div>
+      <div class="cards">
+        <article class="card">
+          <div class="card-top"><h3>Entry plan</h3><span class="pill temp">90 days</span></div>
+          <p class="what">The result of <code>get_entry_plan</code> for one stock.</p>
+          <dl>
+            <dt>holds</dt><dd>buy allowed or not, most shares allowed, stop, target, reward to risk</dd>
+            <dt>stored as</dt><dd>a tool call record; its id is the plan's <code>evidenceId</code></dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Review</h3><span class="pill temp">90 days</span></div>
+          <p class="what">The trader's written judgement on one stock, with its reason.</p>
+          <dl>
+            <dt>labels</dt><dd>candidate: buy, wait, skip · holding: keep, reduce, exit</dd>
+            <dt>stored as</dt><dd>a tool call record of <code>record_candidate_review</code>, <code>record_position_review</code> or <code>record_research_review</code></dd>
+            <dt>links</dt><dd>can name its evidence: the scan, the plan, other records</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Decision</h3><span class="pill kept">kept</span></div>
+          <p class="what">The lasting record of what was decided and why. The truth for reasons.</p>
+          <dl>
+            <dt>id</dt><dd><code>&lt;kind&gt;:&lt;symbol&gt;:&lt;time&gt;</code>, e.g. <code>entry:KO:2026-11-12T15:02:11Z</code></dd>
+            <dt>holds</dt><dd>kind (entry, exit, skip, veto…), rationale, shares, price, intended stop and target, broker order id</dd>
+            <dt>points to</dt><dd><code>observationIds</code>, <code>entryPlan.evidenceId</code>, <code>thesis</code> evidence, <code>reviewId</code></dd>
+            <dt>lives in</dt><dd><code>db/journal.jsonl</code></dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Order</h3><span class="pill kept">kept</span></div>
+          <p class="what">What was sent to the broker.</p>
+          <dl>
+            <dt>holds</dt><dd>broker order id, side, price, status, <code>params</code> (may include <code>observationIds</code>, <code>thesis</code>)</dd>
+            <dt>lives in</dt><dd><code>db/orders.jsonl</code></dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Fill</h3><span class="pill kept">kept</span></div>
+          <p class="what">What the broker actually executed. The truth for numbers: profit and loss come from here.</p>
+          <dl>
+            <dt>holds</dt><dd>shares, price, time</dd>
+            <dt>lives in</dt><dd><code>db/fills.jsonl</code></dd>
+          </dl>
+        </article>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-head"><h3>How it is stored and cleaned</h3><p>The containers and the rules around them.</p></div>
+      <div class="cards">
+        <article class="card">
+          <div class="card-top"><h3>Day folder</h3><span class="pill temp">cleaned</span></div>
+          <p class="what">One folder per US Eastern day, holding that day's records and snapshots. The unit the cleanup deletes.</p>
+          <dl>
+            <dt>path</dt><dd><code>db/days/2026-11-12/</code></dd>
+            <dt>also</dt><dd><code>db/days/first-day.json</code>: the day this layout began; anything older is in the old single file</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Evidence copy</h3><span class="pill kept">kept</span></div>
+          <p class="what">A record a decision relies on, copied out before its day is cleaned, with its snapshot written in.</p>
+          <dl>
+            <dt>path</dt><dd><code>db/evidence/&lt;id&gt;.json</code></dd>
+            <dt>index</dt><dd><code>db/evidence/index.jsonl</code> (id, day, name, turn, time), so it still shows in lists</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <div class="card-top"><h3>Cleanup settings</h3><span class="pill none">setting</span></div>
+          <p class="what">How long temporary things live. Changed on the settings page, "Storage cleanup".</p>
+          <dl>
+            <dt>value</dt><dd><code>{ snapshotDays: 2, receiptDays: 90 }</code></dd>
+            <dt>saved in</dt><dd><code>db/state.json</code> under <code>retention</code></dd>
+            <dt>runs</dt><dd>about a minute after the engine starts, then once a day</dd>
+          </dl>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="walk-h">
+    <h2 id="walk-h">One KO buy, from start to a year later</h2>
+    <ol class="steps">
+      <li><span class="when">Nov 12 15:00</span><div class="body">The trader wakes. That is a <b>turn</b>.</div></li>
+      <li><span class="when">15:00</span><div class="body">It calls <code>get_watchlist_scan</code>. A <b>tool call record</b> is written, the full scan is saved as a <b>snapshot</b> file, and the trader gets <b>page 1</b>.</div></li>
+      <li><span class="when">15:01</span><div class="body">It reads pages 2, 3 and on. Each is a new <b>record</b> pointing back to the first one.</div></li>
+      <li><span class="when">15:01</span><div class="body">It runs <code>get_entry_plan</code> for KO: another record, the <b>entry plan</b>.</div></li>
+      <li><span class="when">15:02</span><div class="body">It writes a <b>review</b>: "KO: buy, because …", naming the scan and the plan.</div></li>
+      <li><span class="when">15:02</span><div class="body">It buys. A <b>decision</b> goes in the journal, pointing to the scan, plan and review. An <b>order</b> goes to the broker; a <b>fill</b> comes back.</div></li>
+      <li><span class="when">Nov 14</span><div class="body">The cleanup deletes that day's snapshot files. It first sees the KO decision cites the scan, so the scan's record and snapshot are copied to <b>evidence</b>.</div></li>
+      <li><span class="when">Feb 10</span><div class="body">90 days on, the cleanup deletes that day's records. The KO plan and review are copied to evidence first. Pages nobody acted on and routine checks are gone.</div></li>
+      <li><span class="when">Nov 2027</span><div class="body">You ask "why did it buy KO?". The decision is still in the journal, and everything it points to is in <code>evidence/</code>.</div></li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="life-h">
+    <h2 id="life-h">How long each one lives</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Record</th><th>Where</th><th>Kept</th></tr></thead>
+        <tbody>
+          <tr><td>Turn</td><td><code>requests.jsonl</code></td><td><span class="pill kept">for good</span></td></tr>
+          <tr><td>Tool call record</td><td><code>days/&lt;date&gt;/tool-calls.jsonl</code></td><td><span class="pill temp">90 days</span></td></tr>
+          <tr><td>Snapshot</td><td><code>days/&lt;date&gt;/snapshots/</code></td><td><span class="pill temp">2 days</span></td></tr>
+          <tr><td>Evidence copy</td><td><code>evidence/</code></td><td><span class="pill kept">for good</span></td></tr>
+          <tr><td>Decision</td><td><code>journal.jsonl</code></td><td><span class="pill kept">for good</span></td></tr>
+          <tr><td>Order</td><td><code>orders.jsonl</code></td><td><span class="pill kept">for good</span></td></tr>
+          <tr><td>Fill</td><td><code>fills.jsonl</code></td><td><span class="pill kept">for good</span></td></tr>
+          <tr><td>Records from before 2026-11-11</td><td><code>tool-calls.jsonl</code> (old single file)</td><td><span class="pill kept">for good, never cleaned</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="tree-h">
+    <h2 id="tree-h">The folder</h2>
+<pre class="tree">db/
+├── <span class="k">journal.jsonl</span>            <span class="c">decisions and reasons</span>
+├── <span class="k">orders.jsonl</span>             <span class="c">what was sent to the broker</span>
+├── <span class="k">fills.jsonl</span>              <span class="c">what the broker executed</span>
+├── <span class="k">requests.jsonl</span>           <span class="c">turns</span>
+├── <span class="k">tool-calls.jsonl</span>         <span class="c">old single file: read when needed, never cleaned</span>
+├── state.json               <span class="c">app state, incl. retention settings</span>
+├── days/
+│   ├── first-day.json       <span class="c">the day this layout began</span>
+│   └── <span class="t">2026-11-12/</span>
+│       ├── <span class="t">tool-calls.jsonl</span>     <span class="c">that day's records, 90 days</span>
+│       └── <span class="t">snapshots/&lt;id&gt;.json</span>  <span class="c">frozen scans, 2 days</span>
+└── <span class="k">evidence/</span>
+    ├── <span class="k">&lt;id&gt;.json</span>            <span class="c">a record a decision relies on, with its snapshot</span>
+    └── <span class="k">index.jsonl</span>          <span class="c">so kept copies still show in lists</span></pre>
+    <p class="note">Most snapshots never become evidence: the trader looks, decides nothing, and the snapshot goes after two days.</p>
+  </section>
+
+  <footer>Code: <code>src/core/storage.ts</code> (day folders, evidence lookup) · <code>src/tools/paging.ts</code> (snapshots, pages) · <code>src/journal/retention.ts</code> (cleanup) · <code>src/journal/types.ts</code> (decision). Layout from commits 476311a, ae2621d, 3d51842, bfc50ee.</footer>
+</main>
