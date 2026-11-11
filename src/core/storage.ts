@@ -4,6 +4,14 @@
  *   DATA_DIR/db/settings.json    account information: the bound broker account
  *   DATA_DIR/db/state.json       the app's temporary state (positions' stops, alerts, chat, usage, …)
  *   DATA_DIR/db/<kind>.jsonl     one line per record write: {"seq","id","at","value"}
+ *   DATA_DIR/db/days/<YYYY-MM-DD>/tool-calls.jsonl
+ *                                tool-call receipts, one folder per US Eastern day. A receipt goes
+ *                                in the day its agent turn (request) was created, so a turn that
+ *                                runs past midnight stays in one folder. Start-up loads only
+ *                                today; older days load when a lookup needs them. The old single
+ *                                db/tool-calls.jsonl is still read (never written) for older ids.
+ *   DATA_DIR/db/days/ids.jsonl   which day holds a receipt whose id does not name its turn
+ *   DATA_DIR/db/days/first-day.json  the day receipts began going to day folders
  *
  * A record update appends a new line with the same id; the last line for an id wins, and
  * superseded lines remain on disk; the in-memory index points at the latest version.
@@ -15,8 +23,10 @@ import fs from 'fs';
 import path from 'path';
 import { DATA_DIR, ensureDataDir } from './paths';
 import { writeFileAtomic } from './fsAtomic';
+import { etNow } from './time';
 
-interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number; name?: string; requestId?: string }
+/** `day`: '' = the old single file of a day kind, a date = that day folder, undefined = an ordinary kind. */
+interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number; name?: string; requestId?: string; day?: string }
 
 const DB_DIR = path.join(DATA_DIR, 'db');
 const SETTINGS_FILE = path.join(DB_DIR, 'settings.json');
@@ -24,6 +34,23 @@ const STATE_FILE = path.join(DB_DIR, 'state.json');
 const SETTINGS_KEYS = new Set(['account']);   // every other key is state
 const fileFor = (key: string) => SETTINGS_KEYS.has(key) ? SETTINGS_FILE : STATE_FILE;
 const recordFile = (kind: string) => path.join(DB_DIR, kind + '.jsonl');
+/** Kinds split into day folders. */
+const DAY_KINDS = new Set(['tool-calls']);
+const DAYS_DIR = path.join(DB_DIR, 'days');
+const DAY_INDEX = path.join(DAYS_DIR, 'ids.jsonl');
+/** The first day receipts went to day folders: the old single file holds only turns up to it. */
+const FIRST_DAY_FILE = path.join(DAYS_DIR, 'first-day.json');
+const DAY_NAME = /^\d{4}-\d{2}-\d{2}$/;
+/** How many recent days a query with no requestId and no `days` reads. */
+export const RECENT_DAYS = 30;
+const dayFile = (kind: string, day: string) => path.join(DAYS_DIR, day, kind + '.jsonl');
+const fileOfRow = (kind: string, row: Row) => row.day ? dayFile(kind, row.day) : recordFile(kind);
+const etDay = (at: string) => Number.isFinite(Date.parse(at)) ? etNow(new Date(at)).date : undefined;
+const todayET = () => etNow(new Date()).date;
+const daysBack = (day: string, n: number) => {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d - n)).toISOString().slice(0, 10);
+};
 const lineFor = (r: Row) => `{"seq":${r.seq},"id":${JSON.stringify(r.id)},"at":${JSON.stringify(r.at)},"value":${r.json}}\n`;
 
 let opened = false;
@@ -33,7 +60,10 @@ let nextSeq = 1;
 let values: Record<string, unknown> = {};
 const kinds = new Map<string, Map<string, Row>>();   // insertion order = seq order
 let dirtyFiles = new Set<string>();
-let lines: Array<{ kind: string; line: string; row?: Row }> = [];
+let lines: Array<{ file: string; line: string; row?: Row }> = [];
+const loadedDays = new Map<string, Set<string>>();   // day kind -> days in memory ('' = the old file)
+let dayIndex = new Map<string, string>();            // `${kind} ${id}` -> day, for ids that do not name their turn
+let firstDay = '';                                   // switch-over day: the old file only holds turns up to it
 let undo: Array<() => void> = [];
 let committed: Array<() => void> = [];
 const activityListeners = new Set<(entry: any) => void>();
@@ -69,7 +99,7 @@ function eachLine(file: string, fn: (line: string, index: number, offset: number
 /** Read one payload without retaining it in the index. Pending writes stay in memory. */
 function payload(kind: string, row: Row): any {
   if (row.json !== undefined) return JSON.parse(row.json);
-  const fd = fs.openSync(recordFile(kind), 'r');
+  const fd = fs.openSync(fileOfRow(kind, row), 'r');
   try {
     const buf = Buffer.alloc(row.length!);
     let read = 0;
@@ -82,6 +112,38 @@ function payload(kind: string, row: Row): any {
   } finally { fs.closeSync(fd); }
 }
 
+/**
+ * Each record line of a file. A torn last line is a write the process died in the middle of:
+ * nothing after it was committed, so dropping it loses only that unfinished write. A bad line
+ * anywhere else is damage, and still stops startup.
+ */
+function eachEntry(file: string, fn: (e: any, offset: number, length: number) => void): void {
+  let torn: { index: number; offset: number } | undefined;
+  eachLine(file, (line, i, offset, length) => {
+    if (torn) throw new Error(`${file} line ${torn.index + 1} is not valid JSON; repair or remove it before starting.`);
+    let e: any;
+    try { e = JSON.parse(line); }
+    catch { torn = { index: i, offset }; return; }
+    fn(e, offset, length);
+  });
+  if (torn) {
+    fs.copyFileSync(file, file + '.torn-' + Date.now());
+    fs.truncateSync(file, torn.offset);
+    console.error(`[Storage] ${file}: dropped an unfinished last line (a copy of the file was kept beside it).`);
+  }
+}
+
+/** The live rows of one record file. */
+function fileRows(file: string, day?: string): Map<string, Row> {
+  const rows = new Map<string, Row>();
+  eachEntry(file, (e, offset, length) => {
+    if (e.deleted) rows.delete(e.id);
+    else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, offset, length, day, ...indexed(e.value) });
+    if (e.seq >= nextSeq) nextSeq = e.seq + 1;
+  });
+  return rows;
+}
+
 function open(): void {
   if (opened) return;
   if (ephemeral) { opened = true; return; }
@@ -91,31 +153,76 @@ function open(): void {
     for (const name of fs.readdirSync(DB_DIR)) {
       if (!name.endsWith('.jsonl')) continue;
       const kind = name.slice(0, -6);
-      const rows = new Map<string, Row>();
-      const file = recordFile(kind);
-      // A torn last line is a write the process died in the middle of: nothing after it was
-      // committed, so dropping it loses only that unfinished write. A bad line anywhere else is
-      // damage, and still stops startup.
-      let torn: { index: number; offset: number } | undefined;
-      eachLine(file, (line, i, offset, length) => {
-        if (torn) throw new Error(`${file} line ${torn.index + 1} is not valid JSON; repair or remove it before starting.`);
-        let e: any;
-        try { e = JSON.parse(line); }
-        catch { torn = { index: i, offset }; return; }
-        if (e.deleted) rows.delete(e.id);
-        else rows.set(e.id, { seq: e.seq, id: e.id, at: e.at, offset, length, ...indexed(e.value) });
-        if (e.seq >= nextSeq) nextSeq = e.seq + 1;
-      });
-      if (torn) {
-        fs.copyFileSync(file, file + '.torn-' + Date.now());
-        fs.truncateSync(file, torn.offset);
-        console.error(`[Storage] ${file}: dropped an unfinished last line (a copy of the file was kept beside it).`);
-      }
-      const sorted = new Map([...rows.values()].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]));
-      kinds.set(kind, sorted);
+      if (DAY_KINDS.has(kind)) continue;   // the old single file is read only when a lookup needs it
+      const rows = fileRows(recordFile(kind));
+      kinds.set(kind, new Map([...rows.values()].sort((a, b) => a.seq - b.seq).map(r => [r.id, r])));
     }
+    if (fs.existsSync(DAY_INDEX)) eachEntry(DAY_INDEX, e => { if (typeof e?.id === 'string' && DAY_NAME.test(e.day)) dayIndex.set(`${e.kind} ${e.id}`, e.day); });
     opened = true;
+    const today = todayET();
+    firstDay = readFirstDay() ?? dayFolders().sort()[0] ?? today;
+    for (const kind of DAY_KINDS) loadDay(kind, today);
   } catch (err) { closeStorage(); throw err; }
+}
+
+function readFirstDay(): string | undefined {
+  try { const day = JSON.parse(fs.readFileSync(FIRST_DAY_FILE, 'utf8')).day; return DAY_NAME.test(day) ? day : undefined; }
+  catch { return undefined; }
+}
+
+/** Day folders on disk, any kind. */
+function dayFolders(): string[] {
+  try { return fs.readdirSync(DAYS_DIR).filter(name => DAY_NAME.test(name)); } catch { return []; }
+}
+
+/** Bring one day ('' = the old single file) of a day kind into memory, once. */
+function loadDay(kind: string, day: string): void {
+  let loaded = loadedDays.get(kind);
+  if (!loaded) { loaded = new Set(); loadedDays.set(kind, loaded); }
+  if (loaded.has(day)) return;
+  loaded.add(day);
+  if (ephemeral) return;
+  const file = day ? dayFile(kind, day) : recordFile(kind);
+  if (!fs.existsSync(file)) return;
+  const rows = rowsOf(kind);
+  for (const row of fileRows(file, day).values()) {
+    const old = rows.get(row.id);
+    // An id saved again on a later day lives in that later folder; the old file never wins.
+    if (!old || (day && (old.day ?? '') < day)) rows.set(row.id, row);
+  }
+}
+
+/** The day of a request's start (when it was created), if the request is known. */
+function requestDay(requestId: string): string | undefined {
+  const row = kinds.get('requests')?.get(requestId);
+  return row ? etDay(row.at) : undefined;
+}
+/** A tool call id is `<turnId>:<round>:<index>`; its turn tells the day. */
+function turnDay(id: string): string | undefined {
+  const m = /^(.+):\d+:\d+$/.exec(id);
+  return m ? requestDay(m[1]) : undefined;
+}
+
+/** Load whatever day may hold this id: its turn's day, its indexed day, else the old single file. */
+function locate(kind: string, id: string): void {
+  if (!DAY_KINDS.has(kind)) return;
+  const fromId = turnDay(id), indexedDay = dayIndex.get(`${kind} ${id}`);
+  if (fromId) loadDay(kind, fromId);
+  if (indexedDay) loadDay(kind, indexedDay);
+  if (!rowsOf(kind).has(id) && (!fromId || fromId <= firstDay)) loadDay(kind, '');
+}
+
+/** The day folder a receipt is in, or would be written to. */
+function writeDay(kind: string, id: string, value: any): string {
+  return turnDay(id) ?? (typeof value?.requestId === 'string' ? requestDay(value.requestId) : undefined)
+    ?? (rowsOf(kind).get(id)?.day || todayET());
+}
+
+/** The day folder (YYYY-MM-DD) that holds, or will hold, this receipt — for files kept beside it. */
+export function recordDay(kind: string, id: string): string {
+  open();
+  locate(kind, id);
+  return rowsOf(kind).get(id)?.day || writeDay(kind, id, undefined);
 }
 
 function rowsOf(kind: string): Map<string, Row> {
@@ -132,12 +239,26 @@ function indexed(value: any): Pick<Row, 'name' | 'requestId'> {
 
 function put(kind: string, row: Row): void {
   const rows = rowsOf(kind);
-  const old = rows.get(row.id);
   const value = JSON.parse(row.json!);
+  if (DAY_KINDS.has(kind)) placeInDay(kind, row, value);
+  const old = rows.get(row.id);
   Object.assign(row, indexed(value));
   rows.set(row.id, row);   // replacing a key keeps its position, so seq order holds
-  lines.push({ kind, line: lineFor(row), row });
+  lines.push({ file: fileOfRow(kind, row), line: lineFor(row), row });
   undo.push(() => { if (old) rows.set(old.id, old); else rows.delete(row.id); });
+}
+
+/** Choose the day folder of a receipt write; ids that do not name their turn get an index line. */
+function placeInDay(kind: string, row: Row, value: any): void {
+  const fromId = turnDay(row.id), day = writeDay(kind, row.id, value);
+  loadDay(kind, day);
+  row.day = day;
+  const key = `${kind} ${row.id}`, had = dayIndex.get(key);
+  if (day === fromId || had === day) return;
+  dayIndex.set(key, day);
+  // Before the receipt line: a crash between the two leaves an index entry to an absent row, which is harmless.
+  lines.push({ file: DAY_INDEX, line: JSON.stringify({ kind, id: row.id, day }) + '\n' });
+  undo.push(() => { if (had === undefined) dayIndex.delete(key); else dayIndex.set(key, had); });
 }
 
 export function transaction<T>(fn: () => T): T {
@@ -157,11 +278,13 @@ export function transaction<T>(fn: () => T): T {
       // One append per file: a crash can tear at most the last line of each, which `open`
       // recovers from. Offsets are known before writing, so rows are updated only once it lands.
       const byFile = new Map<string, typeof lines>();
-      for (const entry of lines) {
-        const file = recordFile(entry.kind);
-        byFile.set(file, [...(byFile.get(file) ?? []), entry]);
-      }
+      for (const entry of lines) byFile.set(entry.file, [...(byFile.get(entry.file) ?? []), entry]);
       for (const [file, entries] of byFile) {
+        if (path.dirname(file) !== DB_DIR) {
+          fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+          // Saved before the first receipt line, so a later old-era day folder cannot move it.
+          if (!fs.existsSync(FIRST_DAY_FILE)) writeFileAtomic(FIRST_DAY_FILE, JSON.stringify({ day: firstDay }) + '\n');
+        }
         let offset = fs.existsSync(file) ? fs.statSync(file).size : 0;
         fs.appendFileSync(file, entries.map(e => e.line).join(''), { mode: 0o600 });
         for (const { line, row } of entries) {
@@ -216,6 +339,7 @@ export function deleteValue(key: string): void {
 /** Insert a record; an existing id is left untouched. Returns the record's seq. */
 export function appendRecord(kind: string, id: string, at: string, value: unknown): number {
   return transaction(() => {
+    locate(kind, id);
     const existing = rowsOf(kind).get(id);
     if (existing) return existing.seq;
     const seq = nextSeq++;
@@ -227,6 +351,7 @@ export function appendRecord(kind: string, id: string, at: string, value: unknow
 /** Insert or replace by id. A replaced record keeps its original seq and time. */
 export function saveRecord(kind: string, id: string, value: unknown): void {
   transaction(() => {
+    locate(kind, id);
     const old = rowsOf(kind).get(id);
     put(kind, { seq: old?.seq ?? nextSeq++, id, at: old?.at ?? new Date().toISOString(), json: JSON.stringify(value) ?? 'null' });
   });
@@ -234,10 +359,12 @@ export function saveRecord(kind: string, id: string, value: unknown): void {
 
 export function deleteRecord(kind: string, id: string): void {
   transaction(() => {
+    locate(kind, id);
     const rows = rowsOf(kind), old = rows.get(id);
     if (!old) return;
+    if (old.day === '') throw new Error(`Old ${kind} receipts in the single file are read-only`);
     rows.delete(id);
-    lines.push({ kind, line: JSON.stringify({ seq: old.seq, id, deleted: true }) + '\n' });
+    lines.push({ file: fileOfRow(kind, old), line: JSON.stringify({ seq: old.seq, id, deleted: true }) + '\n' });
     // Re-inserting would move it to the end, so rebuild the order.
     undo.push(() => { kinds.set(kind, new Map([...rows.values(), old].sort((a, b) => a.seq - b.seq).map(r => [r.id, r]))); });
   });
@@ -245,6 +372,7 @@ export function deleteRecord(kind: string, id: string): void {
 
 export function readRecord<T>(kind: string, id: string): T | undefined {
   open();
+  locate(kind, id);
   const row = kinds.get(kind)?.get(id);
   return row ? payload(kind, row) : undefined;
 }
@@ -260,10 +388,18 @@ export function readRecords<T>(kind: string, limit?: number, after = 0): T[] {
 /** Query one kind without retaining payloads that the caller has already consumed.
  * `name` and `requestId` use indexed value metadata to skip unrelated payloads before disk reads.
  */
-export interface RecordQuery<T> { name?: string; requestId?: string; where?: (value: T) => boolean; desc?: boolean; limit?: number }
+export interface RecordQuery<T> {
+  name?: string; requestId?: string; where?: (value: T) => boolean; desc?: boolean; limit?: number;
+  /** Day kinds, no requestId: how many recent days to read (default RECENT_DAYS; Infinity = all). */
+  days?: number;
+  /** Day kinds: filled in with the oldest day read and whether older receipts were left unread. */
+  window?: QueryWindow;
+}
+export interface QueryWindow { since?: string | null; cutShort?: boolean }
 export function* iterateRecords<T>(kind: string, opts: RecordQuery<T> = {}):
   Generator<{ seq: number; id: string; at: string; value: T }> {
   open();
+  if (DAY_KINDS.has(kind)) { yield* iterateDays<T>(kind, opts); return; }
   const rows = [...(kinds.get(kind)?.values() ?? [])];
   if (opts.desc) rows.reverse();
   let count = 0;
@@ -275,6 +411,55 @@ export function* iterateRecords<T>(kind: string, opts: RecordQuery<T> = {}):
     if (!opts.where || opts.where(value)) {
       count++;
       yield { seq: r.seq, id: r.id, at: r.at, value };
+    }
+  }
+}
+
+/**
+ * A day kind is read one day at a time. With a requestId only its turn's day (and the old file,
+ * for turns up to the switch-over) is opened; otherwise only the recent `days`.
+ */
+function* iterateDays<T>(kind: string, opts: RecordQuery<T>): Generator<{ seq: number; id: string; at: string; value: T }> {
+  const loaded = () => loadedDays.get(kind) ?? new Set<string>();
+  const oldFile = !ephemeral && fs.existsSync(recordFile(kind));
+  let segments: string[], since: string | undefined, cutShort = false;
+  if (opts.requestId !== undefined) {
+    const day = requestDay(opts.requestId);
+    segments = day ? [day] : [...loaded()].filter(Boolean);
+    if (!day || day <= firstDay) segments.push('');
+  } else {
+    const today = todayET(), span = opts.days ?? RECENT_DAYS;
+    since = Number.isFinite(span) ? daysBack(today, Math.max(1, span) - 1) : undefined;
+    const all = new Set([...dayFolders(), ...[...loaded()].filter(Boolean), today]);
+    segments = [...all].filter(d => !since || d >= since);
+    if ([...all].some(d => since && d < since)) cutShort = true;
+    if (!since || since <= firstDay) segments.push(''); else if (oldFile) cutShort = true;
+  }
+  segments = [...new Set(segments)].sort();
+  if (opts.desc) segments.reverse();
+  const window = opts.window ?? {};
+  Object.assign(window, { since: since ?? null, cutShort });
+  // The old file has no day folders, so its rows are kept to the window by their own time.
+  const inWindow = (r: Row) => {
+    const day = r.day === '' && since ? etDay(r.at) : undefined;
+    if (day && day < since!) { window.cutShort = true; return false; }
+    return true;
+  };
+  let count = 0;
+  for (const day of segments) {
+    loadDay(kind, day);
+    const rows = [...rowsOf(kind).values()].filter(r => (r.day ?? '') === day
+      && (opts.name === undefined || r.name === opts.name)
+      && (opts.requestId === undefined || r.requestId === opts.requestId) && inWindow(r))
+      .sort((a, b) => a.seq - b.seq);
+    if (opts.desc) rows.reverse();
+    for (const r of rows) {
+      if (opts.limit !== undefined && count >= opts.limit) return;
+      const value = payload(kind, r) as T;
+      if (!opts.where || opts.where(value)) {
+        count++;
+        yield { seq: r.seq, id: r.id, at: r.at, value };
+      }
     }
   }
 }
@@ -294,6 +479,7 @@ export function readRecordPage<T>(kind: string, after: number, limit: number): T
 /** Forget the in-memory copy; the next call reloads from disk. */
 export function closeStorage(): void {
   opened = false; values = {}; kinds.clear(); nextSeq = 1;
+  loadedDays.clear(); dayIndex = new Map(); firstDay = '';
   lines = []; undo = []; committed = []; depth = 0; dirtyFiles = new Set();
 }
 
@@ -307,7 +493,7 @@ export function resetStorage(): void {
 export function useEphemeralStorage(): void { if (!ephemeral) { closeStorage(); ephemeral = true; } }
 export function isEphemeralStorage(): boolean { return ephemeral; }
 /** Replay only: start a scenario with no actions left over from the previous one. */
-export function forgetEphemeralRecords(kind: string): void { if (ephemeral) kinds.delete(kind); }
+export function forgetEphemeralRecords(kind: string): void { if (ephemeral) { kinds.delete(kind); loadedDays.delete(kind); } }
 
 export function appendActivity(value: { at: string; kind: string; text: string; level?: string; source?: string }): number {
   const seq = appendRecord('activity', require('crypto').randomUUID(), value.at, value);

@@ -191,3 +191,69 @@ test('a hand edit to the settings file is picked up, settings and playbook toget
   fs.utimesSync(file, later, later);
   assert.equal(policy.getPolicy().risk.maxPositions, kept);
 });
+
+test('tool-call receipts go to the day folder of their turn; lookups reach today, older days and the old single file', () => {
+  store.resetStorage();
+  const db = path.join(directory, 'db'), today = require('../src/core/time').etNow().date;
+  // Receipts written before day folders existed: the old single file, kept as it is.
+  fs.mkdirSync(db, { recursive: true });
+  const oldLines = [
+    { seq: 1, id: 'ancient:0:0', at: '2026-09-01T15:00:00.000Z', value: { requestId: 'ancient', name: 'get_bars' } },
+    { seq: 2, id: 'loose-1', at: '2026-09-01T15:01:00.000Z', value: { name: 'get_quote' } },
+  ];
+  const oldText = oldLines.map(l => JSON.stringify(l) + '\n').join('');
+  fs.writeFileSync(path.join(db, 'tool-calls.jsonl'), oldText);
+  store.closeStorage();
+  store.appendRecord('requests', 'ancient', '2026-09-01T14:59:00.000Z', { id: 'ancient', role: 'trader', status: 'completed' });
+  // A turn that started at 23:59 US Eastern on 2026-11-09 and kept going past midnight.
+  store.appendRecord('requests', 'late', '2026-11-10T04:59:00.000Z', { id: 'late', role: 'trader', status: 'running' });
+  store.appendRecord('requests', 'now', new Date().toISOString(), { id: 'now', role: 'trader', status: 'running' });
+  store.saveRecord('tool-calls', 'late:0:0', { requestId: 'late', name: 'get_bars', startedAt: '2026-11-10T04:59:30.000Z' });
+  store.saveRecord('tool-calls', 'late:1:0', { requestId: 'late', name: 'get_quote', startedAt: '2026-11-10T05:10:00.000Z' });
+  store.saveRecord('tool-calls', 'now:0:0', { requestId: 'now', name: 'get_bars' });
+  store.saveRecord('tool-calls', 'loose-2', { name: 'get_quote' });
+  const lines = day => fs.readFileSync(path.join(db, 'days', day, 'tool-calls.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l).id);
+  assert.deepEqual(lines('2026-11-09'), ['late:0:0', 'late:1:0'], 'the whole turn stays in the day it started');
+  assert.deepEqual(lines(today), ['now:0:0', 'loose-2']);
+  assert.equal(fs.readFileSync(path.join(db, 'tool-calls.jsonl'), 'utf8'), oldText, 'the old file is never rewritten');
+
+  // Start-up reads only today's folder: not the older day, not the old single file.
+  store.closeStorage();
+  const original = fs.openSync, opened = [];
+  fs.openSync = function(file, ...args) { opened.push(String(file)); return original.call(this, file, ...args); };
+  try {
+    store.readValue('account');
+    assert.equal(store.readRecord('tool-calls', 'now:0:0').name, 'get_bars');
+    assert.equal(store.readRecord('tool-calls', 'loose-2').name, 'get_quote');
+    assert.ok(opened.some(f => f.includes(path.join('days', today))), 'today is read');
+    assert.ok(!opened.some(f => f.includes('2026-11-09') || f === path.join(db, 'tool-calls.jsonl')), 'older days are not read at start-up');
+  } finally { fs.openSync = original; }
+
+  // Lookups by id and by requestId open the day (or old file) they need.
+  for (const reload of [false, true]) {
+    if (reload) store.closeStorage();
+    assert.equal(store.readRecord('tool-calls', 'late:1:0').name, 'get_quote');
+    assert.equal(store.readRecord('tool-calls', 'ancient:0:0').name, 'get_bars');
+    assert.equal(store.readRecord('tool-calls', 'loose-1').name, 'get_quote');
+    assert.deepEqual(store.listRecords('tool-calls', { requestId: 'late' }).map(r => r.id), ['late:0:0', 'late:1:0']);
+    assert.deepEqual(store.listRecords('tool-calls', { requestId: 'now' }).map(r => r.id), ['now:0:0']);
+    assert.deepEqual(store.listRecords('tool-calls', { requestId: 'ancient' }).map(r => r.id), ['ancient:0:0']);
+  }
+  // A later update of an old-file receipt goes to a day folder and wins over the old line.
+  store.saveRecord('tool-calls', 'loose-1', { name: 'get_quote', note: 'updated' });
+  store.closeStorage();
+  assert.equal(store.readRecord('tool-calls', 'loose-1').note, 'updated');
+  assert.equal(fs.readFileSync(path.join(db, 'tool-calls.jsonl'), 'utf8'), oldText);
+
+  // A listing with no requestId reads only recent days, and says so when it is cut short.
+  store.appendRecord('requests', 'month-ago', '2026-10-01T15:00:00.000Z', { id: 'month-ago', role: 'trader', status: 'completed' });
+  store.saveRecord('tool-calls', 'month-ago:0:0', { requestId: 'month-ago', name: 'get_bars' });
+  store.closeStorage();
+  const window = {};
+  const recent = store.listRecords('tool-calls', { name: 'get_bars', window }).map(r => r.id);
+  assert.ok(recent.includes('now:0:0') && !recent.includes('month-ago:0:0') && !recent.includes('ancient:0:0'));
+  assert.equal(window.cutShort, true);
+  assert.ok(window.since);
+  const all = store.listRecords('tool-calls', { name: 'get_bars', days: Infinity }).map(r => r.id);
+  assert.deepEqual(all, ['ancient:0:0', 'month-ago:0:0', 'late:0:0', 'now:0:0']);
+});

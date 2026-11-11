@@ -15,11 +15,11 @@ export function saveReview<T extends { id: string; at: string }>(tool: ReviewToo
   return result;
 }
 
-/** Saved reviews from one tool, newest first. */
-export function listReviews<T>(tool: ReviewTool, where: (review: T) => boolean = () => true, limit = Infinity): T[] {
+/** Saved reviews from one tool, newest first. `days`: how many recent day folders to read (storage default if unset). */
+export function listReviews<T>(tool: ReviewTool, where: (review: T) => boolean = () => true, limit = Infinity, days?: number): T[] {
   const out: T[] = [];
   if (limit <= 0) return out;
-  for (const { value } of iterateRecords<{ name: string; result?: string }>('tool-calls', { name: tool, desc: true })) {
+  for (const { value } of iterateRecords<{ name: string; result?: string }>('tool-calls', { name: tool, desc: true, days })) {
     let parsed: any;
     try { parsed = JSON.parse(value.result ?? ''); } catch { continue; }
     if (parsed?.ok && parsed.review && where(parsed.review)) {
