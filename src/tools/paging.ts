@@ -1,20 +1,54 @@
 import crypto from 'crypto';
-import { appendRecord, readRecord, saveRecord } from '../core/storage';
+import fs from 'fs';
+import path from 'path';
+import { appendRecord, isEphemeralStorage, readRecord, saveRecord } from '../core/storage';
+import { DATA_DIR } from '../core/paths';
+import { writeFileAtomic } from '../core/fsAtomic';
 import { agentContext } from '../core/agentContext';
 import { sameSymbol } from '../core/symbols';
 
 type Snapshot = { kind: string; data: Record<string, any> };
+/** What a receipt keeps: where the snapshot file is, not the data. `file` is relative to DATA_DIR/db. */
+type SnapshotPointer = { kind: string; file: string; bytes: number };
 
-/** Keep the full observation on the tool call's receipt; its id is the snapshotId. */
+const DB_DIR = path.join(DATA_DIR, 'db');
+const ephemeralFiles = new Map<string, string>();   // the replay harness never writes the operator's data
+
+/** Each snapshot is its own file (temp + rename, so never half-written); receipts stay small. */
+function writeSnapshotFile(id: string, snapshot: Snapshot): SnapshotPointer {
+  const file = `snapshots/${id.replace(/[^\w.-]/g, '_')}.json`, text = JSON.stringify(snapshot);
+  if (isEphemeralStorage()) ephemeralFiles.set(file, text);
+  else {
+    fs.mkdirSync(path.join(DB_DIR, 'snapshots'), { recursive: true, mode: 0o700 });
+    writeFileAtomic(path.join(DB_DIR, file), text);
+  }
+  return { kind: snapshot.kind, file, bytes: Buffer.byteLength(text) };
+}
+
+/** A receipt's snapshot: the old inline shape ({kind, data}) or a pointer to its file. */
+function loadSnapshot(stored: Snapshot | SnapshotPointer): Snapshot | undefined {
+  if ('data' in stored) return stored;
+  if (typeof stored.file !== 'string' || stored.file.includes('..')) return undefined;
+  try {
+    const text = isEphemeralStorage() ? ephemeralFiles.get(stored.file) : fs.readFileSync(path.join(DB_DIR, stored.file), 'utf8');
+    return text === undefined ? undefined : JSON.parse(text) as Snapshot;
+  } catch { return undefined; }
+}
+
+/** Write the full observation to its own file; the tool call's receipt points at it and its id is the snapshotId. */
 function saveSnapshot(snapshot: Snapshot): string {
   const call = agentContext.getStore()?.toolCallId;
-  if (call) { saveRecord('tool-calls', call, { ...readRecord<object>('tool-calls', call), snapshot }); return call; }
+  if (call) {
+    const pointer = writeSnapshotFile(call, snapshot);
+    saveRecord('tool-calls', call, { ...readRecord<object>('tool-calls', call), snapshot: pointer });
+    return call;
+  }
   const id = 'snapshot-' + crypto.randomUUID(), at = new Date().toISOString();
-  appendRecord('tool-calls', id, at, { name: snapshot.kind, snapshot, startedAt: at, finishedAt: at });
+  appendRecord('tool-calls', id, at, { name: snapshot.kind, snapshot: writeSnapshotFile(id, snapshot), startedAt: at, finishedAt: at });
   return id;
 }
 
-type Receipt = { name?: string; input?: { snapshotId?: unknown }; snapshot?: Snapshot };
+type Receipt = { name?: string; input?: { snapshotId?: unknown }; snapshot?: Snapshot | SnapshotPointer };
 
 /**
  * The receipt holding the snapshot. Only the first call stores it; a later page's receipt
@@ -24,7 +58,11 @@ function findSnapshot(kind: string, start: string): { id: string; snapshot: Snap
   let id = start;
   for (let hop = 0; hop < 20; hop++) {
     const row = readRecord<Receipt>('tool-calls', id);
-    if (row?.snapshot) return row.snapshot.kind === kind ? { id, snapshot: row.snapshot } : undefined;
+    if (row?.snapshot) {
+      if (row.snapshot.kind !== kind) return undefined;
+      const snapshot = loadSnapshot(row.snapshot);
+      return snapshot ? { id, snapshot } : undefined;
+    }
     if (row?.name !== kind || typeof row.input?.snapshotId !== 'string') return undefined;
     id = row.input.snapshotId;
   }
