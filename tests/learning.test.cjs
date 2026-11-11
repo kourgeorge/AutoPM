@@ -129,3 +129,38 @@ test('each learning run is kept with before/after weights, drift is capped, and 
   assert.deepEqual(storage.readValue('learningLive').weights, first.weights);
   assert.throws(() => loop.rollbackLearning('run-nope'), /No learning run/);
 });
+
+test('a raise needs the ETFs alone to agree: a signal that works only on the stocks is held, one that works on both may rise', () => {
+  const { LEARNING_ETFS } = from('learning/history');
+  const loop = from('learning/loop');
+  // Same seeded market, but ETF names for the first 11 series. `etfsBackwards` makes the hidden
+  // driver point the wrong way on the ETFs, so the signal "works" only on the stock part.
+  const build = etfsBackwards => {
+    const raw = [...market(26, 1600).values()], bars = new Map();
+    raw.forEach((series, i) => {
+      const isEtf = i < LEARNING_ETFS.length;
+      bars.set(isEtf ? LEARNING_ETFS[i] : 'S' + i, isEtf && etfsBackwards ? series.map(b => ({ ...b, v: 2e6 - b.v })) : series);
+    });
+    return bars;
+  };
+  const code = 'function signal(o,h,l,c,v){ return (v[v.length-1] - 1e6) / 1e6 }';
+  const measure = bars => {
+    const u = evaluate.buildUniverse(bars);
+    const etfU = evaluate.buildUniverse(new Map([...bars].filter(([s]) => LEARNING_ETFS.includes(s))));
+    const r = evaluate.report(u, evaluate.scoreSignals(u, sandboxed('knows', code), policy()), 0, '9999-12-31');
+    r.etfOnly = evaluate.report(etfU, evaluate.scoreSignals(etfU, sandboxed('knows', code), policy()), 0, '9999-12-31').periods;
+    return r;
+  };
+
+  const stocksOnly = measure(build(true));
+  assert.ok(stocksOnly.periods.exam.meanIC > 0 && stocksOnly.etfOnly.exam.meanIC < 0, JSON.stringify([stocksOnly.periods.exam, stocksOnly.etfOnly.exam]));
+  const held = loop.builtInStep(stocksOnly, 1);
+  assert.equal(held.proposed, 1, 'the weight is held');
+  assert.match(held.held, /knows weight held at 1\.00.*ETF-only IC -[\d.]+ does not have the same sign/);
+
+  const both = measure(build(false));
+  assert.ok(both.etfOnly.exam.meanIC > 0);
+  const up = loop.builtInStep(both, 1);
+  assert.equal(up.held, null);
+  assert.equal(up.proposed, 1.2);
+});

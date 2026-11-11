@@ -28,8 +28,8 @@ import { logger } from '../core/logger';
 import { etDate, etNow } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { ToolDefinition } from '../core/types';
-import { LEARNING_UNIVERSE, loadUniverse } from './history';
-import { buildUniverse, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
+import { LEARNING_ETFS, LEARNING_UNIVERSE, loadUniverse } from './history';
+import { buildUniverse, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
 import { compileSignal, checkCode, WINDOW } from './sandbox';
 import { LEARNED_PREFIX, SandboxedSignal } from '../signals/sandboxed';
 
@@ -83,7 +83,7 @@ const round2 = (x: number) => Math.round(x * 100) / 100;
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 
 /** Where the evidence says a weight belongs: 1 is neutral, 2 is strong, 0 is "does not help". */
-function targetWeight(r: SignalReport, older: PeriodStats | null = r.periods.learn): { target: number; why: string } {
+function targetWeight(r: SignalReport, older: PeriodStats | null = r.periods.learn): { target: number; why: string; fromIC?: boolean } {
   const e = r.periods.exam;
   if (e.meanIC === null || e.tStat === null || e.days < 30) return { target: 1, why: 'too few scored days; neutral 1' };
   // Noise moves nothing: the recent record must be reasonably sure, and the older years
@@ -93,7 +93,23 @@ function targetWeight(r: SignalReport, older: PeriodStats | null = r.periods.lea
   if (older && (older.meanIC === null || Math.sign(older.meanIC) !== Math.sign(e.meanIC))) return { target: 1, why: `older years (IC ${older.meanIC}) disagree with recent IC ${e.meanIC}; neutral 1` };
   const confidence = Math.min(1, Math.abs(e.tStat) / 3);
   const target = round2(clamp(1 + clamp(e.meanIC / IC_FULL, -1, 1) * confidence, 0, MAX_WEIGHT));
-  return { target, why: `recent IC ${e.meanIC} with t ${e.tStat} points to ${target}` };
+  return { target, why: `recent IC ${e.meanIC} with t ${e.tStat} points to ${target}`, fromIC: true };
+}
+
+/**
+ * A built-in signal's next weight. The stock list is today's winners, so a raise earned on the
+ * recent IC is allowed only when the ETFs alone (no survivor problem) show an IC of the same
+ * sign; otherwise the weight holds and `held` says why. Lowering is always allowed, and so is
+ * drifting back to neutral when the evidence is too weak to say anything.
+ */
+export function builtInStep(r: SignalReport, before: number): { proposed: number; why: string; held: string | null } {
+  const t = targetWeight(r), proposed = step(before, t.target);
+  if (!(proposed > before) || !t.fromIC) return { proposed, why: t.why, held: null };
+  const main = r.periods.exam.meanIC, etf = r.etfOnly?.exam.meanIC ?? null;
+  if (main !== null && etf !== null && etf !== 0 && Math.sign(etf) === Math.sign(main)) return { proposed, why: `${t.why}; ETF-only IC ${etf} agrees`, held: null };
+  const because = etf === null ? 'there is no ETF-only reading' : `the ETF-only IC ${etf} does not have the same sign as the main IC ${main}`;
+  return { proposed: before, why: `${t.why}; raise held because ${because}`,
+    held: `${r.name} weight held at ${before.toFixed(2)}: the raise to ${proposed.toFixed(2)} was not made because ${because} (the main figure may be helped by the stock list being today's winners)` };
 }
 function step(from: number, to: number): number {
   return round2(from + clamp(to - from, -MAX_STEP, MAX_STEP));
@@ -139,6 +155,13 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
 
   const builtScored = scoreBuiltIns(u, policy);
   const builtIns = builtScored.names.map((_, k) => report(u, builtScored, k, '9999-12-31'));
+  // The same signals on the ETFs alone: no survivor problem there (see LEARNING_ETFS).
+  const etfBars = new Map([...bars].filter(([s]) => LEARNING_ETFS.includes(s)));
+  const etfU = etfBars.size >= MIN_STOCKS ? buildUniverse(etfBars) : null;
+  if (etfU) {
+    const etfScored = scoreBuiltIns(etfU, policy);
+    builtIns.forEach((r, k) => { r.etfOnly = report(etfU, etfScored, k, '9999-12-31').periods; });
+  } else changes.push(`only ${etfBars.size} ETFs have enough price history; no ETF-only check this run, so no built-in weight is raised`);
   const compare = builtScored.names.map((name, k) => ({ scored: builtScored, k, name }));
 
   const all = candidates();
@@ -152,6 +175,10 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
     try { compileSignal(c.code); sc = scoreSignals(u, [new SandboxedSignal(c.id, c.name, c.code, c.idea)], policy); }
     catch (err: any) { changes.push(setStatus(c, c.status === 'testing' ? 'rejected' : 'retired', `its code failed: ${String(err.message).slice(0, 160)}`, at)); saveRecord(KIND, c.id, c); continue; }
     c.report = report(u, sc, 0, c.liveSince);
+    if (etfU) {
+      try { c.report.etfOnly = report(etfU, scoreSignals(etfU, [new SandboxedSignal(c.id, c.name, c.code, c.idea)], policy), 0, c.liveSince).periods; }
+      catch { /* the main run already worked; a failure here only leaves the ETF figure out */ }
+    }
     const { learn, exam, live } = c.report.periods;
     if (c.status === 'testing') {
       const scoredShare = sc.points.reduce((a, p) => a + p.scores.filter(v => v !== null).length, 0) / Math.max(1, sc.points.reduce((a, p) => a + p.fwd.length, 0));
@@ -191,8 +218,9 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
     rows.push({ name, ic: stats?.meanIC ?? null, t: stats?.tStat ?? null, before, after: cap.weight, reason });
   };
   for (const r of builtIns) {
-    const before = prev?.weights?.[r.name] ?? 1, t = targetWeight(r);
-    setWeight(r.name, before, step(before, t.target), t.why, r.periods.exam);
+    const before = prev?.weights?.[r.name] ?? 1, t = builtInStep(r, before);
+    if (t.held) changes.push(t.held);
+    setWeight(r.name, before, t.proposed, t.why, r.periods.exam);
   }
   const active = all.filter(c => c.status === 'active');
   for (const c of active) {
@@ -369,12 +397,14 @@ export function rollbackLearning(runId: string, now = new Date()): LearningRun {
 export function signalScorecard() {
   const r = learningReport(), live = readValue<LearningLive>('learningLive');
   if (!r) return { measured: false, note: 'The learning layer has not run yet. It runs each weekday after 18:00 ET.', settings: learningSettings() };
+  const brief = (p: PeriodStats) => ({ days: p.days, meanIC: p.meanIC, tStat: p.tStat });
   const row = (s: SignalReport, extra: Record<string, unknown> = {}) => ({ name: s.name, ...extra,
     weight: live?.weights?.[s.name] ?? (extra.status === 'active' ? live?.weights?.[LEARNED_PREFIX + s.name] : undefined) ?? 1,
-    olderYears: s.periods.learn, lastTwoYears: s.periods.exam, lastYear: s.periods.lastYear, ...(extra.status ? { live: s.periods.live } : {}) });
+    olderYears: s.periods.learn, lastTwoYears: s.periods.exam, lastYear: s.periods.lastYear, ...(extra.status ? { live: s.periods.live } : {}),
+    etfOnly: s.etfOnly ? { olderYears: brief(s.etfOnly.learn), lastTwoYears: brief(s.etfOnly.exam), lastYear: brief(s.etfOnly.lastYear), ...(extra.status ? { live: brief(s.etfOnly.live) } : {}) } : null });
   return {
     measured: true, at: r.at, settings: learningSettings(),
-    howToRead: `For each signal, the daily rank agreement (IC, -1..+1) between its score and each stock's return from the next open to ${r.horizonDays} trading days later, across ${r.stocks} stocks from ${r.firstDay} to ${r.lastDay}. 0 = no better than chance; 0.02–0.05 is useful. tStat above ~2 is unlikely to be luck for one signal; with many tested, more is needed (the current bar for new ideas is ${r.examBar}). Weights scale each signal's share of the trend composite; 1 = unchanged.`,
+    howToRead: `For each signal, the daily rank agreement (IC, -1..+1) between its score and each stock's return from the next open to ${r.horizonDays} trading days later, across ${r.stocks} stocks from ${r.firstDay} to ${r.lastDay}. 0 = no better than chance; 0.02–0.05 is useful. tStat above ~2 is unlikely to be luck for one signal; with many tested, more is needed (the current bar for new ideas is ${r.examBar}). Weights scale each signal's share of the trend composite; 1 = unchanged. etfOnly is the same measure on the ${LEARNING_ETFS.length} index and sector ETFs alone, which cannot be flattered by the stock list being today's winners, so a weight is only raised when it points the same way as the main IC.`,
     builtIns: r.builtIns.map(s => row(s)),
     learned: r.learned.map(c => ({ id: c.id, name: c.name, status: c.status, reason: c.reason, idea: c.idea, createdAt: c.createdAt,
       ...(c.report ? row(c.report, { status: c.status }) : {}), similarTo: c.maxSimilarity ?? null })),

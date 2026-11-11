@@ -29,7 +29,7 @@ import { WINDOW, windowAt } from './sandbox';
 export const HORIZON = 5;
 const EXAM_YEARS = 2;
 const DAILY_DAYS = 260;      // the last year is scored every day, for the live period
-const MIN_STOCKS = 10;
+export const MIN_STOCKS = 10;
 
 export type Period = 'learn' | 'exam' | 'live' | 'lastYear';
 export interface PeriodStats {
@@ -41,7 +41,8 @@ export interface PeriodStats {
   upMarketIC: number | null;   // meanIC on days SPY was above its 200-day average
   downMarketIC: number | null; // ... and below it
 }
-export interface SignalReport { name: string; periods: Record<Period, PeriodStats> }
+/** `etfOnly`: the same periods measured on the ETFs alone (see `LEARNING_ETFS`), when they were scored. */
+export interface SignalReport { name: string; periods: Record<Period, PeriodStats>; etfOnly?: Record<Period, PeriodStats> }
 
 interface DayPoint { date: string; daily: boolean; up: boolean | null; scores: (number | null)[]; fwd: number[] }
 

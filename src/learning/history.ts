@@ -26,8 +26,14 @@ const YEARS = 10;
  * signal is judged on a few dozen stocks rather than the handful the trader happens to watch.
  * A signal that only works on 18 hand-picked names is more likely luck.
  */
+/**
+ * The ETFs in the universe. They are scored a second time on their own: the stock list is
+ * today's big names, so a signal can look good by "picking" stocks we already know won;
+ * these funds have no such survivor problem.
+ */
+export const LEARNING_ETFS = ['SPY', 'QQQ', 'IWM', 'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLY', 'XLP', 'XLU'];
 export const LEARNING_UNIVERSE = [
-  'SPY', 'QQQ', 'IWM', 'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLY', 'XLP', 'XLU',
+  ...LEARNING_ETFS,
   'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'AVGO', 'ORCL', 'CRM', 'ADBE', 'NFLX', 'INTC', 'CSCO', 'QCOM',
   'JPM', 'BAC', 'GS', 'V', 'MA', 'BRK.B', 'UNH', 'JNJ', 'LLY', 'PFE', 'MRK', 'ABBV',
   'XOM', 'CVX', 'KO', 'PEP', 'WMT', 'COST', 'HD', 'MCD', 'NKE', 'DIS', 'CAT', 'BA', 'GE',
