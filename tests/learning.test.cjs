@@ -91,3 +91,41 @@ test('the bar for new ideas rises with the number tried', () => {
   assert.ok(evaluate.requiredT(20) > 2.9 && evaluate.requiredT(20) < 3.1);
   assert.ok(evaluate.requiredT(200) > evaluate.requiredT(20));
 });
+
+test('each learning run is kept with before/after weights, drift is capped, and the operator can roll back', async () => {
+  storage.useEphemeralStorage();
+  const { LEARNING_UNIVERSE } = from('learning/history');
+  const loop = from('learning/loop');
+  // Saved bars only (refresh: false), so the run never touches the network.
+  const dir = path.join(process.env.DATA_DIR, 'learning', 'bars');
+  fs.mkdirSync(dir, { recursive: true });
+  const bars = [...market(12, 1200).values()];
+  LEARNING_UNIVERSE.slice(0, 12).forEach((s, i) => fs.writeFileSync(path.join(dir, s + '.json'), JSON.stringify({ fetchedOn: '2099-01-01', bars: bars[i] })));
+
+  const first = await loop.runLearning({ refresh: false, propose: false, now: new Date('2026-11-09T23:00:00Z') });
+  // Move the weights by hand so the second run has something different to start from.
+  const moved = Object.fromEntries(Object.keys(first.weights).map(k => [k, 0.6]));
+  storage.saveValue('learningLive', { at: 'x', weights: moved, active: [] });
+  // Pretend 0.2 was where every weight stood before an earlier run, so 0.6 is already at the cap.
+  storage.appendRecord('learning-runs', 'run-old', '2026-11-01T23:00:00Z', { id: 'run-old', type: 'run', at: '2026-11-01T23:00:00Z',
+    weightsBefore: Object.fromEntries(Object.keys(first.weights).map(k => [k, 0.2])), weightsAfter: moved, active: [], signals: [], changes: [] });
+  const second = await loop.runLearning({ refresh: false, propose: false, now: new Date('2026-11-10T23:00:00Z') });
+
+  const runs = loop.learningRuns().filter(r => r.id !== 'run-old');
+  assert.equal(runs.length, 2);
+  assert.deepEqual(runs[0].weightsAfter, first.weights);
+  assert.deepEqual(runs[1].weightsBefore, moved);
+  assert.deepEqual(runs[1].weightsAfter, second.weights);
+  assert.ok(runs[1].signals.length >= Object.keys(first.weights).length);
+  for (const s of runs[1].signals) assert.ok(typeof s.reason === 'string' && s.reason.length > 0);
+  // No weight may leave 0.2 ± 0.4, and a step up from 0.6 must have been clamped and said so.
+  for (const w of Object.values(second.weights)) assert.ok(w <= 0.6 + 1e-9 && w >= -1e-9, String(w));
+  assert.ok(second.changes.some(c => /held at 0\.60/.test(c)), second.changes.join('\n'));
+  assert.equal(loop.capDrift('X', 1.5, [{ type: 'run', weightsBefore: { X: 1 } }], 1).weight, 1.4);
+
+  const back = loop.rollbackLearning(runs[0].id);
+  assert.equal(back.restoredFrom, runs[0].id);
+  assert.deepEqual(storage.readValue('learningWeights'), first.weights);
+  assert.deepEqual(storage.readValue('learningLive').weights, first.weights);
+  assert.throws(() => loop.rollbackLearning('run-nope'), /No learning run/);
+});
