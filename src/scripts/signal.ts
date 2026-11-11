@@ -13,7 +13,7 @@ import { getPolicy } from '../policy/load';
 import { BUILT_IN_SIGNALS, findSignal, learnedSignals } from '../signals/registry';
 import { checkSignal } from '../signals/testkit';
 import type { Signal } from '../signals/signal';
-import { LEARNING_UNIVERSE, loadUniverse, savedHistory } from '../learning/history';
+import { LEARNING_ETFS, LEARNING_UNIVERSE, loadUniverse, savedHistory } from '../learning/history';
 import { buildUniverse, report, scoreSignals, requiredT } from '../learning/evaluate';
 
 const fmt = (p: { meanIC: number | null; tStat: number | null; hitRate: number | null }) =>
@@ -42,11 +42,16 @@ const fmt = (p: { meanIC: number | null; tStat: number | null; hitRate: number |
   const bars = await loadUniverse(symbols, !haveSaved);
   const u = buildUniverse(bars);
   const sc = scoreSignals(u, picked, policy);
+  // The ETFs alone: no survivor problem, so a signal that only works on today's big winners shows here.
+  const etfBars = new Map([...bars].filter(([s]) => LEARNING_ETFS.includes(s)));
+  const etfU = etfBars.size >= 10 ? buildUniverse(etfBars) : null;
+  const etfSc = etfU ? scoreSignals(etfU, picked, policy) : null;
   console.log(`\n${u.symbols.length} stocks, ${u.dates[0]} → ${u.dates.at(-1)}. Next 5 trading days. t ≥ 2 is unlikely to be luck for ONE idea; trying many needs more (20 ideas: ${requiredT(20)}).\n`);
-  console.log('signal'.padEnd(26) + 'older years'.padEnd(36) + 'last two years');
+  console.log('signal'.padEnd(26) + 'older years'.padEnd(36) + 'last two years'.padEnd(36) + `ETFs only, last two years (${etfU ? etfU.symbols.length : 0} ETFs)`);
   picked.forEach((s, k) => {
     const r = report(u, sc, k, '9999-12-31');
-    console.log(s.name.padEnd(26) + fmt(r.periods.learn).padEnd(36) + fmt(r.periods.exam));
+    const e = etfU && etfSc ? fmt(report(etfU, etfSc, k, '9999-12-31').periods.exam) : 'not enough ETF history';
+    console.log(s.name.padEnd(26) + fmt(r.periods.learn).padEnd(36) + fmt(r.periods.exam).padEnd(36) + e);
   });
   process.exit(0);
 })().catch(err => { console.error(err.message); process.exit(1); });
