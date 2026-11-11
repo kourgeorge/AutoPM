@@ -111,3 +111,37 @@ test('old snapshots and receipts are deleted after their limits; evidence a deci
   assert.deepEqual(tree(), before);
   assert.match(logged.at(-1), /^\[Cleanup\] nothing to delete/);
 });
+
+test('a held position whose only review is in a cleaned day folder still lists that review, in time order, after a reload', () => {
+  storage.resetStorage();
+  const { upsertPositionSnapshot } = require('../src/state/state');
+  const { listReviews } = require('../src/journal/reviews');
+  const { latestPositionReview } = require('../src/journal/thesis');
+  const old = daysBack(120), recent = daysBack(3);
+  for (const [id, day] of [['p120', old], ['p3', recent]])
+    storage.appendRecord('requests', id, `${day}T15:00:00.000Z`, { id, role: 'trader', status: 'completed' });
+  upsertPositionSnapshot('CCC', { openedAt: `${old}T14:00:00.000Z`, entryDecisionId: 'entry-ccc' });
+  const review = { id: 'review-p120:0:0', at: `${old}T15:01:00.000Z`, symbol: 'CCC', entryDecisionId: 'entry-ccc', decision: 'hold' };
+  storage.saveRecord('tool-calls', 'p120:0:0', { name: 'record_position_review', role: 'trader', requestId: 'p120', input: {},
+    result: JSON.stringify({ ok: true, review }) });
+  storage.saveRecord('tool-calls', 'p3:0:0', { name: 'record_candidate_review', role: 'trader', requestId: 'p3', input: {},
+    result: JSON.stringify({ ok: true, review: { id: 'candidate-p3:0:0', at: `${recent}T15:01:00.000Z`, symbol: 'DDD', decision: 'wait' } }) });
+
+  const report = retention.cleanupDayFolders();
+  assert.deepEqual(report.receiptsDeleted.map(r => r.day), [old]);
+  assert.equal(fs.existsSync(path.join(db, 'days', old)), false);
+  for (const reload of [false, true]) {
+    if (reload) storage.closeStorage();
+    assert.deepEqual(listReviews('record_position_review', () => true, Infinity, Infinity).map(r => r.id), [review.id]);
+    assert.deepEqual(listReviews('record_position_review', () => true, Infinity, 30), [], 'outside a 30-day window');
+    assert.equal(latestPositionReview('CCC')?.id, review.id);
+    assert.deepEqual(storage.listRecords('tool-calls', { requestId: 'p120' }).map(r => r.id), ['p120:0:0']);
+    // Kept and live receipts together, oldest first, each listed once.
+    assert.deepEqual(storage.listRecords('tool-calls', { days: Infinity }).map(r => r.id), ['p120:0:0', 'p3:0:0']);
+    assert.deepEqual(storage.listRecords('tool-calls', { days: Infinity, desc: true, limit: 1 }).map(r => r.id), ['p3:0:0']);
+  }
+  // Evidence saved before the index existed is still listed.
+  fs.rmSync(path.join(db, 'evidence', 'index.jsonl'));
+  storage.closeStorage();
+  assert.equal(latestPositionReview('CCC')?.id, review.id);
+});
