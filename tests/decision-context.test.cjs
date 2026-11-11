@@ -116,12 +116,51 @@ test('saved contexts and receipts preserve every character and pages preserve fu
   assert.throws(() => recordPage('scan', {}, 'rows', { snapshotId: 'typo' }), /Copy snapshotId exactly/);
   const scoped = recordPage('filings', { symbol: 'AAPL', rows: [] }, 'rows', {});
   assert.throws(() => recordPage('filings', {}, 'rows', { symbol: 'MSFT', snapshotId: scoped.snapshotId }), /different symbol/);
+  // The snapshot is its own file; the receipt only points at it.
+  const pointer = storage.readRecord('tool-calls', first.snapshotId).snapshot;
+  assert.equal(pointer.data, undefined); assert.equal(pointer.kind, 'scan');
+  const snapFile = path.join(process.env.DATA_DIR, 'db', pointer.file);
+  assert.deepEqual(JSON.parse(fs.readFileSync(snapFile, 'utf8')).data.rows, rows);
+  assert.equal(pointer.bytes, fs.statSync(snapFile).size);
   const exchanges = [{ role: 'user', content: [{ type: 'text', text: 'Review positions' }] }];
   for (let i = 0; i < 10; i++) exchanges.push({ role: 'assistant', content: [{ type: 'tool_use', name: 'read', id: String(i), input: {} }] },
     { role: 'user', content: [{ type: 'tool_result', tool_use_id: String(i), receiptId: 'receipt-' + i, content: 'x'.repeat(3000) }] });
   const compact = from('agents/agentLoop').compactMessages(exchanges, 12000);
   assert.match(JSON.stringify(compact[0]), /Earlier exchanges omitted/);
   assert.ok(JSON.stringify(compact).length <= 12000);
+});
+
+test('scan snapshots live in their own files; receipts stay small and old inline receipts still page', () => {
+  const rows = Array.from({ length: 40 }, (_, i) => ({ symbol: 'S' + i, tally: { composite: i }, rationale: 'y'.repeat(2500) }));
+  storage.saveRecord('tool-calls', 'call-1', { name: 'get_watchlist_scan', input: { details: true } });
+  const first = agentContext.run({ ...context, toolCallId: 'call-1' }, () => recordPage('get_watchlist_scan', { rows }, 'rows', { details: true }));
+  assert.equal(first.snapshotId, 'call-1');
+  const receipt = storage.readRecord('tool-calls', 'call-1');
+  assert.equal(receipt.snapshot.file, 'snapshots/call-1.json');
+  assert.ok(JSON.stringify(receipt).length < 500, 'receipt keeps only a pointer');
+  assert.ok(fs.existsSync(path.join(process.env.DATA_DIR, 'db', 'snapshots', 'call-1.json')));
+  const line = fs.readFileSync(path.join(process.env.DATA_DIR, 'db', 'tool-calls.jsonl'), 'utf8').trim().split('\n').pop();
+  assert.ok(line.length < 500, 'the tool-calls line is small');
+  // Page on, each later call passing the previous page's receipt id.
+  let all = [...first.rows], next = first.nextOffset, prev = 'call-1', n = 1;
+  while (next !== null) {
+    const id = 'call-' + ++n, input = { snapshotId: prev, offset: next, details: true };
+    storage.saveRecord('tool-calls', id, { name: 'get_watchlist_scan', input });
+    const page = agentContext.run({ ...context, toolCallId: id }, () => recordPage('get_watchlist_scan', { rows: [] }, 'rows', input));
+    assert.equal(page.snapshotId, 'call-1');
+    all.push(...page.rows); next = page.nextOffset; prev = id;
+  }
+  assert.ok(n > 2); assert.deepEqual(all, rows);
+  // Survives a reload from disk.
+  storage.closeStorage();
+  assert.deepEqual(recordPage('get_watchlist_scan', { rows: [] }, 'rows', { snapshotId: prev, offset: 39 }).rows, rows.slice(39));
+  // A receipt written before snapshot files existed keeps the data inline.
+  storage.saveRecord('tool-calls', 'old-1', { name: 'get_watchlist_scan', input: {}, snapshot: { kind: 'get_watchlist_scan', data: { rows } } });
+  storage.saveRecord('tool-calls', 'old-2', { name: 'get_watchlist_scan', input: { snapshotId: 'old-1', offset: 3 } });
+  let old = [], at = 0;
+  while (at !== null) { const page = recordPage('get_watchlist_scan', { rows: [] }, 'rows', { snapshotId: 'old-2', offset: at, details: true }); assert.equal(page.snapshotId, 'old-1'); old.push(...page.rows); at = page.nextOffset; }
+  assert.deepEqual(old, rows);
+  assert.equal(fs.existsSync(path.join(process.env.DATA_DIR, 'db', 'snapshots', 'old-1.json')), false);
 });
 
 test('intraday volume compares identical bins and excludes incomplete historical sessions', () => {
