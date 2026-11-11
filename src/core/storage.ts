@@ -12,6 +12,8 @@
  *                                db/tool-calls.jsonl is still read (never written) for older ids.
  *   DATA_DIR/db/days/ids.jsonl   which day holds a receipt whose id does not name its turn
  *   DATA_DIR/db/days/first-day.json  the day receipts began going to day folders
+ *   DATA_DIR/db/evidence/<id>.json   a receipt a decision cites, kept after its day folder was
+ *                                cleaned (see journal/retention.ts); a lookup by id finds it here first
  *
  * A record update appends a new line with the same id; the last line for an id wins, and
  * superseded lines remain on disk; the in-memory index points at the latest version.
@@ -372,6 +374,8 @@ export function deleteRecord(kind: string, id: string): void {
 
 export function readRecord<T>(kind: string, id: string): T | undefined {
   open();
+  const kept = DAY_KINDS.has(kind) ? readKept<T>(id) : undefined;
+  if (kept) return kept.value;
   locate(kind, id);
   const row = kinds.get(kind)?.get(id);
   return row ? payload(kind, row) : undefined;
@@ -476,9 +480,75 @@ export function readRecordPage<T>(kind: string, after: number, limit: number): T
     .map(r => ({ ...payload(kind, r), seq: r.seq }));
 }
 
+/*
+ * Kept evidence: a receipt a recorded decision cites, copied out of its day folder before the
+ * cleanup deletes that folder. One file per id; it is read-only and wins over the day folder copy
+ * (its scan snapshot is written into it, so it still pages once the snapshot files are gone).
+ */
+const EVIDENCE_DIR = path.join(DB_DIR, 'evidence');
+const keptFile = (id: string) => path.join(EVIDENCE_DIR, id.replace(/[^\w.-]/g, '_') + '.json');
+let keptNames: Set<string> | undefined;   // file names in evidence/, read once
+export interface KeptRecord<T = unknown> { id: string; seq: number; at: string; value: T }
+
+function readKept<T>(id: string): KeptRecord<T> | undefined {
+  if (ephemeral) return undefined;
+  if (!keptNames) { try { keptNames = new Set(fs.readdirSync(EVIDENCE_DIR)); } catch { keptNames = new Set(); } }
+  const file = keptFile(id);
+  if (!keptNames.has(path.basename(file))) return undefined;
+  try {
+    const kept = JSON.parse(fs.readFileSync(file, 'utf8')) as KeptRecord<T>;
+    return kept?.id === id ? kept : undefined;
+  } catch { return undefined; }
+}
+/** The kept copy of a day-kind receipt, if one was saved to db/evidence/. */
+export function keptRecord<T>(kind: string, id: string): KeptRecord<T> | undefined {
+  open();
+  return DAY_KINDS.has(kind) ? readKept<T>(id) : undefined;
+}
+/** Save a receipt to db/evidence/<id>.json, where lookups by id find it after its day folder is gone. */
+export function keepRecord(kind: string, record: KeptRecord): void {
+  if (!DAY_KINDS.has(kind)) throw new Error(`Only ${[...DAY_KINDS].join(', ')} receipts are kept as evidence`);
+  open();
+  if (ephemeral) return;
+  fs.mkdirSync(EVIDENCE_DIR, { recursive: true, mode: 0o700 });
+  const file = keptFile(record.id);
+  writeFileAtomic(file, JSON.stringify(record) + '\n');
+  keptNames?.add(path.basename(file));
+}
+
+/** Day folders on disk (YYYY-MM-DD), oldest first. */
+export function listDayFolders(): string[] {
+  return ephemeral ? [] : dayFolders().sort();
+}
+/** Where a day folder is, for files kept beside its receipts. */
+export function dayFolderPath(day: string): string {
+  if (!DAY_NAME.test(day)) throw new Error('Not a day folder: ' + day);
+  return path.join(DAYS_DIR, day);
+}
+/** The receipts saved in one day folder, read from disk without loading them into memory. */
+export function dayRecords<T>(kind: string, day: string): Array<KeptRecord<T>> {
+  open();
+  const file = dayFile(kind, day);
+  if (!DAY_KINDS.has(kind) || ephemeral || !fs.existsSync(file)) return [];
+  return [...fileRows(file, day).values()].sort((a, b) => a.seq - b.seq)
+    .map(r => ({ id: r.id, seq: r.seq, at: r.at, value: payload(kind, r) as T }));
+}
+/** Delete one day folder's receipts file and forget its rows. Kept evidence is not touched. */
+export function deleteDayRecords(kind: string, day: string): void {
+  open();
+  if (!DAY_KINDS.has(kind) || ephemeral) return;
+  if (depth) throw new Error('Day folders cannot be deleted inside a transaction');
+  const rows = rowsOf(kind);
+  for (const [id, row] of rows) if (row.day === day) rows.delete(id);
+  let loaded = loadedDays.get(kind);
+  if (!loaded) { loaded = new Set(); loadedDays.set(kind, loaded); }
+  loaded.add(day);   // nothing left to load from it
+  fs.rmSync(dayFile(kind, day), { force: true });
+}
+
 /** Forget the in-memory copy; the next call reloads from disk. */
 export function closeStorage(): void {
-  opened = false; values = {}; kinds.clear(); nextSeq = 1;
+  opened = false; values = {}; kinds.clear(); nextSeq = 1; keptNames = undefined;
   loadedDays.clear(); dayIndex = new Map(); firstDay = '';
   lines = []; undo = []; committed = []; depth = 0; dirtyFiles = new Set();
 }

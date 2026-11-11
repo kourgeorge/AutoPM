@@ -28,6 +28,7 @@ import { closeStorage } from './core/storage';
 import { NotificationDelivery } from './core/notifications';
 import { ExecutionLoop } from './strategy/executionLoop';
 import { activeAiConfig } from './core/aiConnection';
+import { startRetention, stopRetention } from './journal/retention';
 // Wire logger → UI and capture all raw stdout/stderr before anything else runs
 attachUI(ui);
 ui.captureStreams();
@@ -154,6 +155,7 @@ async function boot(): Promise<void> {
   scheduler.start();
   execution.start();
   startLearning();
+  startRetention();
   await trader.start();
 }
 export async function run(): Promise<void> {
@@ -177,6 +179,7 @@ async function stopResources(signal: string): Promise<void> {
   scheduler.stop();
   clearInterval(venueClockTimer);
   stopLearning();
+  stopRetention();
   const agentsStopped = Promise.all([trader.stop(), assistant.stop(), researcher.stop()]);
   // Stop intake, drain the sole mutation executor, then close the durable store.
   const deadline = setTimeout(() => process.exit(1), 25_000);

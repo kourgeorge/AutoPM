@@ -51,7 +51,7 @@ async function start() {
   configureConversationClear(initialStatus);
   addEntries(tail.entries);
   connectStream();
-  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadAiConnection(), loadCommands(), loadPrompts()]);
+  await Promise.all([refresh(), loadStrategy(), loadAiSettings(), loadRetention(), loadAiConnection(), loadCommands(), loadPrompts()]);
 }
 /**
  * The server pushes every new conversation line and a signal on each account update. The browser
@@ -1510,6 +1510,24 @@ $('ai-settings-form').onsubmit = attempt(async () => {
     $('save-ai-settings').disabled = false;
     syncAiLimitField();
   }
+});
+function fillRetention(settings) {
+  const f = $('retention-form').elements;
+  f.snapshotDays.value = String(settings.snapshotDays);
+  f.receiptDays.value = String(settings.receiptDays);
+  for (const el of [f.snapshotDays, f.receiptDays, $('save-retention')]) el.disabled = false;
+  $('retention-state').textContent = 'Saved';
+}
+async function loadRetention() { fillRetention(await api('settings/retention')); }
+$('retention-form').oninput = () => { $('retention-state').textContent = 'Unsaved changes'; };
+$('retention-form').onsubmit = attempt(async () => {
+  const f = $('retention-form').elements;
+  const snapshotDays = Number(f.snapshotDays.value), receiptDays = Number(f.receiptDays.value);
+  if (!Number.isInteger(snapshotDays) || snapshotDays < 1 || snapshotDays > 365) throw new Error('Keep snapshot files for a whole number of days from 1 to 365.');
+  if (!Number.isInteger(receiptDays) || receiptDays < 7 || receiptDays > 3650) throw new Error('Keep tool-call receipts for a whole number of days from 7 to 3650.');
+  $('retention-state').textContent = 'Saving…';
+  try { fillRetention(await api('settings/retention', {snapshotDays, receiptDays})); notice('Cleanup settings saved. They apply from the next daily cleanup.', true); }
+  catch (error) { $('retention-state').textContent = 'Could not save'; throw error; }
 });
 // Each Settings panel folds away by its title; which ones are folded is remembered per browser.
 (() => {

@@ -37,6 +37,7 @@ import { activityHistory, savedPositionContext, savedRequestDetails } from '../r
 import { textPage } from '../agents/savedResults';
 import { startResearch, researchStatus } from '../agents/researcher';
 import { readEvidence } from '../journal/evidence';
+import { retentionSettings, saveRetentionSettings, type RetentionSettings } from '../journal/retention';
 import type { Source } from '../collect/research';
 import type { Trader } from '../agents/trader';
 import type { FeedEntry, HeadlessUI } from '../ui/headless';
@@ -216,6 +217,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/agent-commands': 'Every agent request (trader, assistant, researcher) with status and result.',
   '/api/lessons': 'Saved lessons, active and inactive.',
   '/api/settings/ai': 'AI daily call limit and how much of it is used.',
+  '/api/settings/retention': 'How many days old scan snapshot files and tool-call receipts are kept before the daily cleanup deletes them.',
   '/api/settings/ai-connection': 'The LLM server, provider and model in use, and where the key comes from (never the key itself).',
   '/api/strategy': 'The full saved strategy settings and playbook, with its hash.',
   '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
@@ -584,6 +586,17 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     try { saveAiSettings({ maxRequestsPerDay: input.maxRequestsPerDay as number | null }); }
     catch (err: any) { throw new HttpError(400, err.message); }
     return modelBudgetStatus();
+  });
+  add('GET', '/api/settings/retention', () => retentionSettings());
+  add('POST', '/api/settings/retention', async ({ body }) => {
+    const input = await body(), change: Partial<RetentionSettings> = {};
+    for (const field of ['snapshotDays', 'receiptDays'] as const) {
+      if (!Object.hasOwn(input, field)) continue;
+      if (typeof input[field] !== 'number') throw new HttpError(400, `${field} must be a number`);
+      change[field] = input[field] as number;
+    }
+    try { return saveRetentionSettings(change); }
+    catch (err: any) { throw new HttpError(400, err.message); }
   });
   add('GET', '/api/settings/ai-connection', () => aiConnectionStatus());
   // `null` clears a saved value so `.env` applies again; a missing field is left as it is.

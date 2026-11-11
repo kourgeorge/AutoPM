@@ -148,6 +148,17 @@
     <div class="actions"><button id="save-ai-settings" class="primary" disabled>Save AI settings</button><button type="button" id="reload-ai-settings">Reload AI settings</button><span id="ai-settings-state" role="status">Loading…</span></div>
   </form>
 </section>
+<section id="retention-settings" class="panel" aria-labelledby="retention-title">
+  <div class="pane-title"><h2 id="retention-title">Storage cleanup</h2></div>
+  <p class="section-description">Once a day, old saved data is deleted. Anything a recorded decision used as evidence is always kept.</p>
+  <form id="retention-form">
+    <div class="form-grid">
+      <label>Days to keep snapshot files<input name="snapshotDays" type="number" min="1" max="365" step="1" required disabled><small>The full scan results behind each watchlist scan are deleted once they are this many days old.</small></label>
+      <label>Days to keep tool-call receipts<input name="receiptDays" type="number" min="7" max="3650" step="1" required disabled><small>The record of each tool the agents used, with what it returned, is deleted once it is this many days old.</small></label>
+    </div>
+    <div class="actions"><button id="save-retention" class="primary" disabled>Save cleanup settings</button><span id="retention-state" role="status">Loading…</span></div>
+  </form>
+</section>
 <section id="strategy" class="panel" aria-labelledby="strategy-title"><div class="pane-title"><h2 id="strategy-title">Strategy settings</h2></div><p class="section-description">Changes apply to future decisions. Orders approved under an older revision must be proposed again.</p><form id="settings">
 <fieldset class="risk-profile"><legend>Risk profile</legend>
 <label>Profile<select name="riskProfile" aria-label="Profile"><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option><option value="custom">Custom</option></select></label>
