@@ -30,7 +30,7 @@ import { getPolicy } from '../policy/load';
 import type { ToolDefinition } from '../core/types';
 import { LEARNING_ETFS, LEARNING_UNIVERSE, loadUniverse } from './history';
 import { computeOutcomes, type TradeOutcome } from '../review/ledger';
-import { buildUniverse, rankCorrelation, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
+import { buildUniverse, rankCorrelation, recentStats, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
 import { compileSignal, checkCode, WINDOW } from './sandbox';
 import { LEARNED_PREFIX, SandboxedSignal } from '../signals/sandboxed';
 
@@ -41,6 +41,8 @@ export type CandidateStatus = 'testing' | 'rejected' | 'shadow' | 'active' | 're
 export interface Candidate {
   id: string; name: string; idea: string; code: string;
   status: CandidateStatus; createdAt: string; liveSince: string;
+  /** The day it became active; older records lack it and fall back to `liveSince`. */
+  activeSince?: string;
   reason: string; history: { at: string; status: CandidateStatus; reason: string }[];
   report?: SignalReport; maxSimilarity?: { to: string; value: number } | null;
 }
@@ -65,7 +67,12 @@ const MAX_ACTIVE = 3, MAX_STEP = 0.2, MAX_WEIGHT = 2;
 const MIN_T_TO_MOVE = 1.5;   // below this the recent record is too unsure to move a weight
 const IC_FULL = 0.03;          // a mean IC of 0.03 on five-day returns is already a strong signal
 const SIMILAR = 0.7;           // above this a new idea is a copy of one we have
-const SHADOW_DAYS = 40, SHADOW_MAX_DAYS = 120, ACTIVE_REVIEW_DAYS = 60;
+export const SHADOW_DAYS = 40, SHADOW_MAX_DAYS = 120, ACTIVE_REVIEW_DAYS = 60;
+// An active signal is judged (weight and retire check) only on its newest 60 live days since it
+// became active. Days after `activeSince` only, because the shadow days are what got it picked;
+// the newest 60 only, so a signal that worked for months and then flips is retired within weeks
+// instead of needing as many bad days as it once had good ones.
+export const ACTIVE_WINDOW_DAYS = 60;
 const PROPOSE_EVERY_DAYS = 7, IDEAS_PER_ROUND = 3;
 
 export function learningSettings(): LearningSettings {
@@ -131,6 +138,27 @@ export function capDrift(name: string, proposed: number, past: LearningRun[], fa
   return { weight, base, clamped: Math.abs(weight - proposed) > 1e-9 };
 }
 
+/**
+ * What happens next to a shadow or active model-written signal, or null to leave it as it is.
+ * `live`: every day since it went into shadow; `recent`: an active one's newest days since it
+ * became active (ACTIVE_WINDOW_DAYS); `activeCount`: how many are active now.
+ */
+export function judgeLearned(status: CandidateStatus, live: PeriodStats, recent: PeriodStats | null, activeCount: number): { status: CandidateStatus; reason: string } | null {
+  if (status === 'shadow') {
+    if (live.days >= SHADOW_DAYS && live.meanIC! > 0 && live.tStat! >= 1) {
+      if (activeCount < MAX_ACTIVE) return { status: 'active', reason: `held up on ${live.days} live days (IC ${live.meanIC}, t ${live.tStat}); now counts in the composite` };
+      // Passing but no free slot: it may not wait forever.
+      if (live.days >= SHADOW_MAX_DAYS) return { status: 'retired', reason: `held up live but no active slot freed up in ${live.days} days (IC ${live.meanIC}, t ${live.tStat}; ${MAX_ACTIVE} already active)` };
+      return null;
+    }
+    if (live.days >= SHADOW_DAYS && !(live.meanIC! > 0)) return { status: 'retired', reason: `stopped working once live (IC ${live.meanIC} over ${live.days} days)` };
+    if (live.days >= SHADOW_MAX_DAYS) return { status: 'retired', reason: `never proved itself live after ${live.days} days (IC ${live.meanIC}, t ${live.tStat})` };
+  } else if (status === 'active' && recent) {
+    if (recent.days >= ACTIVE_REVIEW_DAYS && !(recent.meanIC! > 0)) return { status: 'retired', reason: `its recent live record turned non-positive (IC ${recent.meanIC} over the last ${recent.days} days)` };
+  }
+  return null;
+}
+
 function setStatus(c: Candidate, status: CandidateStatus, reason: string, at: string): string {
   c.status = status; c.reason = reason; c.history.push({ at, status, reason });
   return `${c.name}: ${status} — ${reason}`;
@@ -180,6 +208,7 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
       try { c.report.etfOnly = report(etfU, scoreSignals(etfU, [new SandboxedSignal(c.id, c.name, c.code, c.idea)], policy), 0, c.liveSince).periods; }
       catch { /* the main run already worked; a failure here only leaves the ETF figure out */ }
     }
+    if (c.status === 'active') c.report.recentLive = recentStats(sc, 0, c.activeSince ?? c.liveSince, ACTIVE_WINDOW_DAYS);
     const { learn, exam, live } = c.report.periods;
     if (c.status === 'testing') {
       const scoredShare = sc.points.reduce((a, p) => a + p.scores.filter(v => v !== null).length, 0) / Math.max(1, sc.points.reduce((a, p) => a + p.fwd.length, 0));
@@ -189,21 +218,20 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
       else if (!(exam.meanIC! > 0) || !(exam.tStat! >= examBar)) changes.push(setStatus(c, 'rejected', `failed the exam on the last two years (IC ${exam.meanIC}, t ${exam.tStat}, needed t ≥ ${examBar} after ${ideasTested} ideas)`, at));
       else if (c.maxSimilarity && Math.abs(c.maxSimilarity.value) > SIMILAR) changes.push(setStatus(c, 'rejected', `it is ${Math.round(Math.abs(c.maxSimilarity.value) * 100)}% the same as ${c.maxSimilarity.to}`, at));
       else { c.liveSince = today; changes.push(setStatus(c, 'shadow', `passed the exam (IC ${exam.meanIC}, t ${exam.tStat}); now scored live without counting`, at)); }
-    } else if (c.status === 'shadow') {
-      if (live.days >= SHADOW_DAYS && live.meanIC! > 0 && live.tStat! >= 1) {
-        const activeCount = all.filter(x => x.status === 'active').length;
-        if (activeCount < MAX_ACTIVE) changes.push(setStatus(c, 'active', `held up on ${live.days} live days (IC ${live.meanIC}, t ${live.tStat}); now counts in the composite`, at));
-      } else if (live.days >= SHADOW_DAYS && !(live.meanIC! > 0)) changes.push(setStatus(c, 'retired', `stopped working once live (IC ${live.meanIC} over ${live.days} days)`, at));
-      else if (live.days >= SHADOW_MAX_DAYS) changes.push(setStatus(c, 'retired', `never proved itself live after ${live.days} days (IC ${live.meanIC}, t ${live.tStat})`, at));
-    } else if (c.status === 'active') {
-      if (live.days >= ACTIVE_REVIEW_DAYS && !(live.meanIC! > 0)) changes.push(setStatus(c, 'retired', `its live record turned non-positive (IC ${live.meanIC} over ${live.days} days)`, at));
+    } else {
+      const next = judgeLearned(c.status, live, c.report.recentLive ?? null, all.filter(x => x.status === 'active').length);
+      if (next) {
+        changes.push(setStatus(c, next.status, next.reason, at));
+        if (next.status === 'active') c.activeSince = today;
+      }
     }
     if (!['rejected', 'retired'].includes(c.status as string)) learnedScored.set(c.name, sc);
     saveRecord(KIND, c.id, c);
   }
 
   // Weights: built-ins from the exam years; a learned signal starts at 0.5 when promoted and
-  // then follows its LIVE record (its exam years were part of what got it chosen).
+  // then follows its recent live record since promotion (its exam years and shadow days were
+  // part of what got it chosen; see ACTIVE_WINDOW_DAYS).
   const prev = readValue<LearningLive>('learningLive');
   const weights: Record<string, number> = {};
   const past = learningRuns();
@@ -225,8 +253,8 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
   }
   const active = all.filter(c => c.status === 'active');
   for (const c of active) {
-    const key = LEARNED_PREFIX + c.name, live = c.report!.periods.live;
-    const t = live.days >= 20 ? targetWeight({ ...c.report!, periods: { ...c.report!.periods, exam: live } }, null) : { target: 0.5, why: `only ${live.days} live days; starts at 0.5` };
+    const key = LEARNED_PREFIX + c.name, live = c.report!.recentLive ?? { ...c.report!.periods.live, days: 0 };
+    const t = live.days >= 20 ? targetWeight({ ...c.report!, periods: { ...c.report!.periods, exam: live } }, null) : { target: 0.5, why: `only ${live.days} live days since it became active; starts at 0.5` };
     const before = prev?.weights?.[key];
     if (before === undefined) { weights[key] = 0.5; rows.push({ name: key, ic: live.meanIC, t: live.tStat, before: 0.5, after: 0.5, reason: 'newly active; starts at 0.5' }); }
     else setWeight(key, before, step(before, t.target), t.why, live);
@@ -379,7 +407,7 @@ export function rollbackLearning(runId: string, now = new Date()): LearningRun {
     weightsAfter: { ...target.weightsAfter }, active: target.active, signals: [], changes, restoredFrom: target.id };
   transaction(() => {
     for (const c of candidates()) {
-      if (keep.has(c.id) && c.status !== 'active') changes.push(setStatus(c, 'active', note, at));
+      if (keep.has(c.id) && c.status !== 'active') { changes.push(setStatus(c, 'active', note, at)); c.activeSince = etDate(now); }
       else if (!keep.has(c.id) && c.status === 'active') changes.push(setStatus(c, 'shadow', note, at));
       else continue;
       saveRecord(KIND, c.id, c);

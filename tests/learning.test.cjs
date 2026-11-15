@@ -199,3 +199,48 @@ test('real closed trades are graded per signal from the scores saved at entry; o
   assert.equal(card.realTrades.withSignals, 3);
   for (const kind of ['journal', 'fills']) storage.forgetEphemeralRecords(kind);
 });
+
+test('an active learned signal that flips is retired within about 60 days, judged on its recent days since promotion', () => {
+  const loop = from('learning/loop');
+  // The hidden driver in `v` points the right way until day `flip`, then backwards.
+  const flip = 700, days = flip + 80, r = rng(11), series = [];
+  const start = Date.UTC(2020, 0, 1);
+  for (let s = 0; s < 20; s++) {
+    const out = []; let price = 100;
+    const drift = Array.from({ length: days }, () => (r() - 0.5) * 0.004);
+    for (let d = 0; d < days; d++) {
+      const futureDrift = drift.slice(d + 1, d + 6).reduce((a, x) => a + x, 0) * (d < flip ? 1 : -1);
+      const o = price; price = price * (1 + drift[d] + (r() - 0.5) * 0.002);
+      out.push({ t: new Date(start + d * 86_400_000).toISOString(), o, h: Math.max(o, price) * 1.001, l: Math.min(o, price) * 0.999, c: price, v: 1e6 + futureDrift * 1e8 });
+    }
+    series.push(out);
+  }
+  const day = i => series[0][i].t.slice(0, 10);
+  const liveSince = day(flip - 160), activeSince = day(flip - 120);   // 40 shadow days, then 120 good active days
+  const code = 'function signal(o,h,l,c,v){ return (v[v.length-1] - 1e6) / 1e6 }';
+  const at = afterFlip => {
+    const bars = new Map(series.map((s, i) => [i === 0 ? 'SPY' : 'S' + i, s.slice(0, flip + afterFlip + 7)]));
+    const u = evaluate.buildUniverse(bars), sc = evaluate.scoreSignals(u, sandboxed('flips', code), policy());
+    const rep = evaluate.report(u, sc, 0, liveSince);
+    const recent = evaluate.recentStats(sc, 0, activeSince, loop.ACTIVE_WINDOW_DAYS);
+    return { live: rep.periods.live, recent, next: loop.judgeLearned('active', rep.periods.live, recent, 1) };
+  };
+  const before = at(0);
+  assert.equal(before.next, null, 'still working at the flip: stays active');
+  assert.ok(before.recent.meanIC > 0.3, JSON.stringify(before.recent));
+  const later = at(60);
+  // The old rule (whole period since shadow, non-positive mean) would still keep it.
+  assert.ok(later.live.meanIC > 0, JSON.stringify(later.live));
+  assert.equal(later.next?.status, 'retired', JSON.stringify(later.recent));
+  assert.match(later.next.reason, /last 60 days/);
+});
+
+test('a passing shadow signal blocked by three active ones is retired after SHADOW_MAX_DAYS', () => {
+  const loop = from('learning/loop');
+  const live = days => ({ days, meanIC: 0.04, tStat: 2.5, hitRate: 0.6, spreadPct: 0.3, upMarketIC: 0.04, downMarketIC: 0.04 });
+  assert.equal(loop.judgeLearned('shadow', live(loop.SHADOW_MAX_DAYS - 1), null, 3), null, 'waits for a slot');
+  assert.equal(loop.judgeLearned('shadow', live(loop.SHADOW_DAYS), null, 2).status, 'active', 'a free slot promotes it');
+  const out = loop.judgeLearned('shadow', live(loop.SHADOW_MAX_DAYS), null, 3);
+  assert.equal(out.status, 'retired');
+  assert.match(out.reason, /no active slot/);
+});

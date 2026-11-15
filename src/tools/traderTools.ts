@@ -51,7 +51,7 @@ import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { decision, readDecisions, readDecisionsNewestFirst, recordDecision } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 import { sleepRefusedBefore, unresolvedDecisions } from '../journal/reviewDecisions';
-import { recordLesson, listLessons } from '../journal/lessons';
+import { recordLesson, listLessons, allLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
 import { readFills } from '../review/fills';
@@ -86,10 +86,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
       stopLoss: { type: 'number', minimum: 0.01 }, takeProfit: { type: 'number', minimum: 0.01 },
     }, required: ['symbol', 'price', 'stopLoss', 'takeProfit'] },
   },
-  { name: 'get_lessons', description: 'Read your saved lessons (your memory across cycles). Filter by symbol to see what you learned about one stock before trading it, or by category.', input_schema: { type: 'object', properties: {
+  { name: 'get_lessons', description: 'Read your saved lessons (your memory across cycles). Filter by symbol to see what you learned about one stock before trading it, or by category. Returns up to 100 lessons, newest first, plus `total`; if `nextOffset` is set there are more, so call again with offset = nextOffset.', input_schema: { type: 'object', properties: {
     symbol: { type: 'string', description: 'Only lessons about this stock.' },
     category: { type: 'string', enum: ['stock', 'behaviour', 'mistake'] },
     includeRetired: { type: 'boolean', description: 'Also show retired or replaced lessons. Default false.' },
+    offset: { type: 'integer', minimum: 0, description: 'Skip this many of the newest lessons (paging). Default 0.' },
   }, required: [] } },
   { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked order IDs. Read get_orders for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
   {
@@ -395,8 +396,11 @@ async function dispatchTraderTool(
     switch (name) {
       case 'sleep': return toolSleep(input);
       case 'get_lessons': {
-        const rows = listLessons(100, input.includeRetired !== true, { symbol: input.symbol as string | undefined, category: input.category as string | undefined });
-        return JSON.stringify({ count: rows.length, lessons: rows.map(l => ({ id: l.id, category: l.category ?? 'behaviour', symbol: l.symbol ?? null, text: l.text, at: l.at, active: l.active,
+        const matching = allLessons(input.includeRetired !== true, { symbol: input.symbol as string | undefined, category: input.category as string | undefined });
+        const offset = Math.max(0, Math.floor(Number(input.offset) || 0));
+        const rows = matching.slice(offset, offset + 100);
+        const nextOffset = offset + rows.length < matching.length ? offset + rows.length : null;
+        return JSON.stringify({ count: rows.length, total: matching.length, offset, nextOffset, lessons: rows.map(l => ({ id: l.id, category: l.category ?? 'behaviour', symbol: l.symbol ?? null, text: l.text, at: l.at, active: l.active,
           evidenceIds: l.evidenceIds, ...(l.replacedBy ? { replacedBy: l.replacedBy } : {}) })) });
       }
       case 'get_requests': return JSON.stringify(listRequests());

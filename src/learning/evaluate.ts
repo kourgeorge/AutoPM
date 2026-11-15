@@ -41,8 +41,11 @@ export interface PeriodStats {
   upMarketIC: number | null;   // meanIC on days SPY was above its 200-day average
   downMarketIC: number | null; // ... and below it
 }
-/** `etfOnly`: the same periods measured on the ETFs alone (see `LEARNING_ETFS`), when they were scored. */
-export interface SignalReport { name: string; periods: Record<Period, PeriodStats>; etfOnly?: Record<Period, PeriodStats> }
+/**
+ * `etfOnly`: the same periods measured on the ETFs alone (see `LEARNING_ETFS`), when they were scored.
+ * `recentLive`: for an active model-written signal, the recent live days its weight and retire check use (see `recentStats`).
+ */
+export interface SignalReport { name: string; periods: Record<Period, PeriodStats>; etfOnly?: Record<Period, PeriodStats>; recentLive?: PeriodStats }
 
 interface DayPoint { date: string; daily: boolean; up: boolean | null; scores: (number | null)[]; fwd: number[] }
 
@@ -213,6 +216,11 @@ export function report(u: Universe, sc: Scored, k: number, liveSince: string): S
     live: stats(rows.filter(r => r.date > liveSince), HORIZON),
     lastYear: stats(sparse.filter(r => r.date >= lastYearStart)),
   } };
+}
+
+/** The newest `lastN` scored days after `since` (YYYY-MM-DD), every day, t corrected for the overlap like `live`. */
+export function recentStats(sc: Scored, k: number, since: string, lastN: number): PeriodStats {
+  return stats(dayResults(sc, k).filter(r => r.date > since).slice(-lastN), HORIZON);
 }
 
 /** Whether a date is on the every-fifth-day grid (daily dates in the last year are a superset). */
