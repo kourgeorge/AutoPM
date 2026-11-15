@@ -763,24 +763,31 @@ export async function actExit(symbol: string, reason: string, v: ValidatedExit, 
       reject('external_order', 'Another order reserves this position; the bot will not cancel orders it does not own');
     }
     for (const order of sells) {
-      try {
-        await guardedBroker().cancelOrder(order.id);
-      } catch (err: any) {
-        // Refuse the exit rather than sell into a reservation that is still standing. Nothing
-        // has changed at this point — the order still rests, the position is still protected —
-        // so aborting is the cheap outcome and the venue's own words are the reason.
-        //
-        // Strict on purpose. An order that had already filled or been cancelled would not have
-        // come back from `getOpenOrders`, so the only way here is a genuine venue failure or
-        // the narrow race between the list and the cancel; the retry after that race succeeds
-        // because the order is no longer listed.
-        const venueMessage = err?.response?.data?.message ?? err?.message ?? String(err);
-        reject(
-          'resting_order_not_cancelled',
-          `Cannot exit ${symbol}: ${describe(order)} reserves the shares and the venue refused `
-          + `to cancel it — ${venueMessage}`,
-          venueMessage,
-        );
+      // Re-read before each cancel. On Alpaca the stop and target are one linked (OCO) order:
+      // cancelling one leg cancels the other, so a leg that is no longer listed is already gone
+      // and cancelling it again would only earn a 422 "not cancelable".
+      const stillListed = (await broker.getOpenOrders()).some(o => o.id === order.id);
+      if (stillListed) {
+        try {
+          await guardedBroker().cancelOrder(order.id);
+        } catch (err: any) {
+          // The cancel may have failed only because the venue had already cancelled the order
+          // (a linked leg going with its sibling, or the race between the list and the cancel).
+          // Ask the venue: a finished cancel is what we wanted. Anything else — still open,
+          // filled, unknown, or the lookup failing — refuses the exit rather than selling into
+          // a reservation that may still stand. Nothing has changed at that point, so aborting
+          // is the cheap outcome and the venue's own words are the reason.
+          const after = await broker.getOrder(order.id).catch(() => null);
+          if (after?.status !== 'cancelled') {
+            const venueMessage = err?.response?.data?.message ?? err?.message ?? String(err);
+            reject(
+              'resting_order_not_cancelled',
+              `Cannot exit ${symbol}: ${describe(order)} reserves the shares and the venue refused `
+              + `to cancel it — ${venueMessage}`,
+              venueMessage,
+            );
+          }
+        }
       }
       // Recorded per order, the moment it is true: if a later cancel in this loop throws, an id
       // already gone from the venue must not stay in state reading as protection.

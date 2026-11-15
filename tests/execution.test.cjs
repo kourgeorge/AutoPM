@@ -167,6 +167,74 @@ test('an exit whose stop cancel succeeds and target cancel fails forgets only th
   } finally { orders.validateExit = validate; }
 });
 
+/** Runs an automatic AAPL exit against a linked stop + target pair; `setup` shapes the book. */
+async function exitLinkedPair(setup) {
+  const { BrokerRejection } = require('../src/broker/errors');
+  held = [{ symbol: 'AAPL', qty: 2, marketValue: 200 }];
+  state.openPositionSnapshot({ symbol: 'AAPL', stopLevel: 95, takeProfitLevel: 110, stopOrderId: 'stop-1', takeProfitOrderId: 'tp-1' });
+  const tp = { id: 'tp-1', symbol: 'AAPL', side: 'sell', type: 'limit', qty: 2, filled: 0, limitPrice: 110 };
+  const stop = { id: 'stop-1', symbol: 'AAPL', side: 'sell', type: 'stop', qty: 2, filled: 0, stopPrice: 95 };
+  const notCancelable = id => new BrokerRejection(422, 'order status is not cancelable', 42210000, { method: 'DELETE', path: '/v2/orders/' + id });
+  const ctx = { book: [tp, stop], cancels: [], notCancelable };
+  brokerOrder = { id: 'broker-1', symbol: 'AAPL', side: 'sell', qty: 2, filledQty: 0, filledPrice: null, status: 'open' };
+  broker.getOpenOrders = async () => ctx.book;
+  setup(ctx);
+  const validate = orders.validateExit;
+  orders.validateExit = async () => ({ pos: held[0], sellQty: 2, price: 100, pnl: 0, session: 'open' });
+  try {
+    const p = actions.createOrder({ kind: 'exit', symbol: 'AAPL', venue: 'paper', params: { qty: 2 }, reason: 'test', timeoutMs: 60000, automatic: true });
+    await executor.sweepOrders();
+    return { ...ctx, order: actions.getOrder(p.id) };
+  } finally { orders.validateExit = validate; }
+}
+
+test('an exit whose target cancel also takes the linked stop skips the stop and sells once', async () => {
+  const r = await exitLinkedPair(ctx => {
+    broker.cancelOrder = async id => {
+      ctx.cancels.push(id);
+      if (id === 'stop-1') throw ctx.notCancelable(id);
+      if (id === 'tp-1') ctx.book = []; // OCO: the stop goes with the target
+    };
+  });
+  assert.ok(['submitted', 'executed'].includes(r.order.status), JSON.stringify(r.order.result));
+  assert.deepEqual(r.cancels, ['tp-1'], 'the already-gone stop is not cancelled again');
+  assert.equal(placed, 1, 'exactly one sell');
+  const snap = state.getPositionSnapshot('AAPL');
+  assert.equal(snap?.stopOrderId, undefined);
+  assert.equal(snap?.takeProfitOrderId, undefined);
+});
+
+test('a 422 on a leg the venue already cancelled counts as cleared', async () => {
+  const r = await exitLinkedPair(ctx => {
+    // A stale listing: the stop still shows, but the venue has already cancelled it.
+    broker.cancelOrder = async id => { ctx.cancels.push(id); if (id === 'stop-1') throw ctx.notCancelable(id); };
+    broker.getOrder = async id => ({ id, symbol: 'AAPL', side: 'sell', qty: 2, filledQty: 0, filledPrice: null, status: id === 'stop-1' ? 'cancelled' : 'open' });
+  });
+  assert.ok(['submitted', 'executed'].includes(r.order.status), JSON.stringify(r.order.result));
+  assert.deepEqual(r.cancels, ['tp-1', 'stop-1']);
+  assert.equal(placed, 1, 'exactly one sell');
+  const snap = state.getPositionSnapshot('AAPL');
+  assert.equal(snap?.stopOrderId, undefined);
+  assert.equal(snap?.takeProfitOrderId, undefined);
+});
+
+test('an exit is still refused when a resting sell cannot be cancelled and is still open', async () => {
+  const r = await exitLinkedPair(ctx => {
+    broker.cancelOrder = async id => {
+      ctx.cancels.push(id);
+      if (id === 'stop-1') throw ctx.notCancelable(id);
+      ctx.book = ctx.book.filter(o => o.id !== id); // unlinked: the stop stays
+    };
+    broker.getOrder = async id => ({ id, symbol: 'AAPL', side: 'sell', qty: 2, filledQty: 0, filledPrice: null, status: 'open' });
+  });
+  assert.equal(r.order.status, 'failed');
+  assert.match(r.order.result.error, /not cancelable/);
+  assert.equal(placed, 0, 'no sell into a standing reservation');
+  const snap = state.getPositionSnapshot('AAPL');
+  assert.equal(snap.stopOrderId, 'stop-1', 'the stop still rests and is still recorded');
+  assert.equal(snap.takeProfitOrderId, undefined);
+});
+
 test('the stop lock stays held until its last holder finishes', async () => {
   const { withStopLock, isStopLocked } = require('../src/strategy/stopOrders');
   let releaseFirst, releaseSecond;
