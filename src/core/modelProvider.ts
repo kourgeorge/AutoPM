@@ -17,6 +17,12 @@ const MODEL_CALL_RETRIES = 2;
 const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 /**
+ * Sent as the `x-litellm-tags` header on every model request, so a LiteLLM proxy can label
+ * this app's traffic (spend and usage per tag). Change the tags here; both providers read it.
+ */
+export const LITELLM_TAGS = 'app:autotrade,project:autotrade';
+
+/**
  * POST a chat request and parse its JSON, retrying a stuck request, a dropped connection
  * ("fetch failed") or a busy/overloaded proxy. Safe to repeat: no tool runs until a response
  * arrives. The caller's own stop is never retried.
@@ -28,7 +34,7 @@ async function postWithRetry(url: string, apiKey: string, body: string, signal?:
       const response = await fetch(url, {
         method: 'POST',
         signal: AbortSignal.any([signal ?? new AbortController().signal, AbortSignal.timeout(MODEL_CALL_TIMEOUT_MS)]),
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'x-litellm-tags': LITELLM_TAGS },
         body,
       });
       if (response.ok) return await response.json();
@@ -67,6 +73,7 @@ export class AnthropicProvider implements ModelProvider {
     this.client = new Anthropic({
       timeout: MODEL_CALL_TIMEOUT_MS, maxRetries: MODEL_CALL_RETRIES,
       apiKey: cfg.apiKey,
+      defaultHeaders: { 'x-litellm-tags': LITELLM_TAGS },
       ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
     });
     this.model = cfg.model;
