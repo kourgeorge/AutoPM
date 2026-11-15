@@ -45,7 +45,7 @@ export function recordLesson(text: string, evidenceIds: string[] = [], details: 
   if (details.supersedes && !replaced) throw new Error(`Unknown lesson to replace: ${details.supersedes}`);
 
   if (ephemeral) return body;
-  const duplicate = listLessons(100, true).find(l => normalize(l.text) === normalize(body));
+  const duplicate = allLessons(true).find(l => normalize(l.text) === normalize(body));
   if (duplicate) { recordToolResult({ ok: true, lessonId: duplicate.id, stored: body, duplicate: true }); return duplicate.id; }
 
   const id = context?.toolCallId ?? crypto.randomUUID();
@@ -59,12 +59,21 @@ export function recordLesson(text: string, evidenceIds: string[] = [], details: 
   return id;
 }
 
-export function listLessons(limit = 100, activeOnly = false, filter: { symbol?: string; category?: string } = {}): Lesson[] {
+export interface LessonFilter { symbol?: string; category?: string }
+
+/** Every matching lesson, newest first, with no cap. */
+export function allLessons(activeOnly = false, filter: LessonFilter = {}): Lesson[] {
   if (ephemeral) return [];
   const symbol = filter.symbol ? canonicalSymbol(filter.symbol) : undefined;
-  return listRecords<Lesson>('lessons', { desc: true, limit: Math.min(100, limit), where: l =>
+  return listRecords<Lesson>('lessons', { desc: true, where: l =>
     (!activeOnly || l.active === true) && (!symbol || l.symbol === symbol) && (!filter.category || (l.category ?? 'behaviour') === filter.category) })
     .map(r => r.value);
+}
+
+/** One page of lessons, newest first: at most 100 rows, skipping the newest `offset`. */
+export function listLessons(limit = 100, activeOnly = false, filter: LessonFilter = {}, offset = 0): Lesson[] {
+  const start = Math.max(0, Math.floor(offset));
+  return allLessons(activeOnly, filter).slice(start, start + Math.max(0, Math.min(100, limit)));
 }
 
 /** One lesson as the trader reads it: the text in full, then where it came from. */
@@ -84,7 +93,7 @@ export function readLessons(limit = 20): string[] {
  * cycle's events) come first and are never dropped for space; the rest fill up to `max`.
  */
 export function lessonsForContext(focusSymbols: string[], max = 30): { text: string; shown: number; total: number } {
-  const all = listLessons(100, true);
+  const all = allLessons(true);
   if (!all.length) return { text: '', shown: 0, total: 0 };
   const focus = new Set(focusSymbols.map(canonicalSymbol));
   const pinned = all.filter(l => l.symbol && focus.has(l.symbol));
