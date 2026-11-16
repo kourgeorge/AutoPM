@@ -99,11 +99,39 @@ export function turnMessageLimit(systemPrompt: string, tools: unknown): number {
   return REQUEST_CHAR_LIMIT - JSON.stringify({ systemPrompt, tools }).length - REQUEST_OVERHEAD_MARGIN;
 }
 
-/** Repair legacy histories and trim whole exchanges, never leaving orphaned tool results. */
-export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT): ChatMessage[] {
+/**
+ * The pinned blocks in messages[0]. Both are rebuilt in place, never appended: one trimming note
+ * per turn used to be pushed on EVERY trim, and in the 2026-11-12 turns 217–294 of them filled
+ * 55–75k of the ~100k left for the conversation, so the model saw only its last round, re-read
+ * everything and failed at the request cap (docs/research/trader-token-use.md).
+ */
+const TRIM_MARK = 'TRIMMED: ';
+const PROGRESS_MARK = 'TURN PROGRESS';
+/** Room kept for the one trimming note; its text is a few hundred characters. */
+const NOTE_ROOM = 700;
+const isPinned = (b: ContentBlock) => b.type === 'text' && (b.text.startsWith(TRIM_MARK) || b.text.startsWith(PROGRESS_MARK));
+function trimNote(count: number, id: string | null): ContentBlock {
+  return { type: 'text', text: `${TRIM_MARK}${count} earlier messages of this conversation were left out to fit context.`
+    + (id ? ` The latest left-out part is saved as ${id} ; each saved part names the part before it ("earlier"). Read them with get_saved_context.` : '')
+    + ' Saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty; the TURN PROGRESS block lists what this turn already read and recorded.' };
+}
+function parseNote(b: ContentBlock | undefined): { count: number; id: string | null } {
+  const m = b?.type === 'text' ? /^TRIMMED: (\d+) earlier(?:[^]*?saved as (\S+) ;)?/.exec(b.text) : null;
+  return { count: m ? Number(m[1]) : 0, id: m?.[2] ?? null };
+}
+
+/**
+ * Repair legacy histories and trim whole exchanges, never leaving orphaned tool results.
+ * `progress` (the TURN PROGRESS text) is pinned in messages[0] and never trimmed; it and the one
+ * trimming note count toward `limit`.
+ */
+export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT, progress = ''): ChatMessage[] {
   const messages: ChatMessage[] = [];
+  let note: ContentBlock | undefined;
   for (let i = 0; i < input.length; i++) {
     const m = structuredClone(input[i]);
+    note ??= m.content.find(b => b.type === 'text' && b.text.startsWith(TRIM_MARK));
+    m.content = m.content.filter(b => !isPinned(b));
     if (m.role === 'user' && m.content.every(b => b.type === 'tool_result')) continue;
     messages.push(m);
     const calls = m.content.filter((b): b is ToolCall => b.type === 'tool_use');
@@ -116,24 +144,99 @@ export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT
         return { type: 'tool_result', tool_use_id: call.id, receiptId, content: boundedResult(result?.type === 'tool_result' ? result.content : errorResult('Previous tool outcome unavailable. Inspect command/action status before retrying.'), receiptId) };
       });
       // A note sent with the results (the turn-limit warning) stays with them.
-      messages.push({ role: 'user', content: [...answered, ...(results.length ? next.content.filter(b => b.type !== 'tool_result') : [])] });
+      messages.push({ role: 'user', content: [...answered, ...(results.length ? next.content.filter(b => b.type !== 'tool_result' && !isPinned(b)) : [])] });
       if (results.length) i++;
     }
   }
+  const pinned: ContentBlock[] = progress ? [{ type: 'text', text: progress }] : [];
+  const pinnedSize = JSON.stringify(pinned).length + NOTE_ROOM;
   const removed: ChatMessage[] = [];
-  while (JSON.stringify(messages).length > limit - 400 && messages.length > 3) {
+  while (JSON.stringify(messages).length + pinnedSize > limit && messages.length > 3) {
     // Keep the latest user's request and the latest complete exchanges.
     const nextUser = messages.findIndex((m,i) => i > 0 && m.role === 'user' && m.content.some(b => b.type === 'text') && !m.content.some(b => b.type === 'tool_result'));
     if (nextUser > 0) removed.push(...messages.splice(0, nextUser));
     else removed.push(...messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1));
   }
   if (removed.length) {
-    const id = saveContext(JSON.stringify(withoutResults(removed)));
-    const note: ContentBlock = { type: 'text', text: `Earlier exchanges omitted to fit context.${id ? ` Retrieve ${id} with get_saved_context;` : ''} Saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty.` };
-    if (messages[0]?.role === 'user') messages[0].content.push(note);
-    else messages.unshift({ role: 'user', content: [note] });
+    // One note, replaced: it counts every left-out message and points at the newest saved part,
+    // which names the one before it, so the note stays the same size however often it trims.
+    const before = parseNote(note);
+    const id = saveContext(JSON.stringify({ earlier: before.id, messages: withoutResults(removed) }));
+    note = trimNote(before.count + removed.length, id ?? before.id);
+  }
+  const head = [...(note ? [note] : []), ...pinned];
+  if (head.length) {
+    if (messages[0]?.role === 'user' && !messages[0].content.some(b => b.type === 'tool_result')) messages[0].content.push(...head);
+    else messages.unshift({ role: 'user', content: head });
   }
   return messages;
+}
+
+interface Receipt { id: string; round: number; name: string; input: Record<string, any>; value: any; finishedAt?: string }
+const parseJson = (text?: string) => { try { return text === undefined ? undefined : JSON.parse(text); } catch { return undefined; } };
+const succeeded = (v: any) => v != null && typeof v === 'object' && v.ok !== false && !v.error;
+/** Input fields that say WHAT was read. Free-text fields (reasons, notes) are left out, not cut. */
+const KEY_INPUTS = ['symbol', 'symbols', 'snapshotId', 'receiptId', 'id', 'offset', 'before', 'kind', 'timeframe', 'query'];
+const keyInput = (input: Record<string, any>) => JSON.stringify(Object.fromEntries(KEY_INPUTS.filter(k => input?.[k] !== undefined).map(k => [k, input[k]])));
+const REVIEW_TOOLS = ['record_candidate_review', 'record_position_review'];
+const ORDER_TOOLS = ['execute_entry', 'execute_exit'];
+/** Distinct reads listed; older ones are counted, not listed (fewer rows, never shorter text). */
+const PROGRESS_READ_ROWS = 40;
+const sameSym = (a: unknown, b: unknown) => typeof a === 'string' && typeof b === 'string' && a.toUpperCase() === b.toUpperCase();
+
+/**
+ * The TURN PROGRESS block: facts from this turn's receipts, so a trimmed round does not make the
+ * model re-read what it already has, and a refused sleep's open list stays in view until each
+ * item is resolved. It lists items only; it never quotes or shortens the model's reason text.
+ */
+export function turnProgress(receipts: Receipt[], now = Date.now()): string {
+  if (!receipts.length) return '';
+  const age = (at?: string) => {
+    const ms = at ? now - Date.parse(at) : NaN;
+    return !Number.isFinite(ms) ? 'age unknown' : ms < 60_000 ? 'under 1 min ago' : `${Math.round(ms / 60_000)} min ago`;
+  };
+  const reads = new Map<string, { r: Receipt; times: number }>();
+  const reviews: string[] = [], acks: string[] = [], orders: string[] = [];
+  let refusal: { index: number; r: Receipt } | undefined;
+  receipts.forEach((r, index) => {
+    const ok = succeeded(r.value);
+    const symbol = r.input?.symbol ?? r.value?.symbol;
+    if (r.name === 'sleep') { if (!ok) refusal = { index, r }; return; }
+    if (!ok) return;
+    if (REVIEW_TOOLS.includes(r.name)) reviews.push(`- ${r.name} ${symbol ?? ''} decision ${r.value?.review?.decision ?? 'recorded'} (receipt ${r.id})`);
+    else if (r.name === 'ack_event') acks.push(`- ${r.input?.id} ${r.input?.disposition ?? ''} (receipt ${r.id})`);
+    else if (ORDER_TOOLS.includes(r.name)) orders.push(`- ${r.name} ${symbol ?? ''}${r.value?.orderId ? ` order ${r.value.orderId}` : ''}${r.value?.status ? ` status ${r.value.status}` : ''} (receipt ${r.id})`);
+    else {
+      const key = `${r.name} ${keyInput(r.input)}`;
+      const seen = reads.get(key);
+      reads.delete(key); reads.set(key, { r, times: (seen?.times ?? 0) + 1 });
+    }
+  });
+  const lines = [`${PROGRESS_MARK} (kept by the system and rebuilt every round from this turn's receipts; never trimmed). What this turn has already done:`];
+  if (reads.size) {
+    const all = [...reads.entries()], shown = all.slice(-PROGRESS_READ_ROWS);
+    lines.push('Reads done (newest last; the age is when the read ran; re-read only when you need fresher data):');
+    if (all.length > shown.length) lines.push(`- ${all.length - shown.length} older distinct reads are not listed here; their receipts still read with get_tool_result.`);
+    for (const [key, { r, times }] of shown) lines.push(`- ${key} receipt ${r.id}, ${age(r.finishedAt)}${times > 1 ? `, read ${times} times` : ''}`);
+  }
+  if (reviews.length) lines.push('Reviews recorded:', ...reviews);
+  if (acks.length) lines.push('Events acked:', ...acks);
+  if (orders.length) lines.push('Orders sent:', ...orders);
+  if (refusal) {
+    const after = receipts.slice(refusal.index + 1).filter(r => succeeded(r.value));
+    const open: { symbol: string | null; problem: string }[] = Array.isArray(refusal.r.value?.open) ? refusal.r.value.open : [];
+    const resolved = (item: { symbol: string | null }) => after.some(r => {
+      if (item.symbol == null) return r.name === 'get_watchlist_scan';
+      if (!sameSym(r.input?.symbol ?? r.value?.symbol, item.symbol)) return false;
+      if (ORDER_TOOLS.includes(r.name) || r.name === 'request_research') return true;
+      return REVIEW_TOOLS.includes(r.name) && !['buy', 'reduce', 'exit'].includes(r.value?.review?.decision);
+    });
+    const still = open.filter(item => !resolved(item));
+    if (still.length) lines.push(`Your sleep was refused (receipt ${refusal.r.id}). Still open:`, ...still.map(i => `- ${i.symbol ?? '(account)'}: ${i.problem}`));
+    else if (open.length) lines.push(`Your sleep was refused (receipt ${refusal.r.id}); all open decisions are recorded, call sleep.`);
+    else lines.push(`Your sleep was refused (receipt ${refusal.r.id}): ${refusal.r.value?.error ?? 'see the receipt'}`);
+  }
+  return lines.join('\n');
 }
 
 export async function runAgentLoop(opts: {
@@ -153,6 +256,19 @@ export async function runAgentLoop(opts: {
   const limit = turnMessageLimit(opts.systemPrompt, opts.registry.definitions);
   const context = { ...opts.context, signal, saved: current.saved ??= {} };
   const checkpoint = () => saveRecord('trajectories', id, { ...current, messages: withoutResults(current.messages) });
+  // This turn's finished receipts, read once each, for the TURN PROGRESS block.
+  const receipts = new Map<string, Receipt>();
+  const progress = () => {
+    for (let round = 1; round <= current.rounds; round++) for (let index = 0; ; index++) {
+      const receiptId = `${id}:${round}:${index}`;
+      if (receipts.has(receiptId)) continue;
+      const rec = readRecord<ToolCallRecord & { finishedAt?: string }>('tool-calls', receiptId);
+      if (!rec) break;
+      if (rec.result === undefined) continue;
+      receipts.set(receiptId, { id: receiptId, round, name: rec.name, input: (rec.input ?? {}) as Record<string, any>, value: parseJson(rec.result), finishedAt: rec.finishedAt });
+    }
+    return turnProgress([...receipts.values()].sort((a, b) => a.round - b.round || a.id.localeCompare(b.id, undefined, { numeric: true })));
+  };
   return agentContext.run(context, async () => {
     try {
       signal.throwIfAborted();
@@ -221,7 +337,7 @@ export async function runAgentLoop(opts: {
             logger.warn(`[${context.role}] ${id}: turn near its limit (${current.rounds} rounds, ${current.inTokens} input tokens); told the model to decide now`);
           }
         }
-        current.messages = compactMessages(current.messages, limit);
+        current.messages = compactMessages(current.messages, limit, progress());
         const response = await abortable(opts.provider.chat({ systemPrompt: opts.systemPrompt, messages: current.messages,
           tools: opts.registry.definitions, maxTokens: opts.maxTokens, signal }), signal);
         signal.throwIfAborted();

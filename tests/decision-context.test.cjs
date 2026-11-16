@@ -126,7 +126,7 @@ test('saved contexts and receipts preserve every character and pages preserve fu
   for (let i = 0; i < 10; i++) exchanges.push({ role: 'assistant', content: [{ type: 'tool_use', name: 'read', id: String(i), input: {} }] },
     { role: 'user', content: [{ type: 'tool_result', tool_use_id: String(i), receiptId: 'receipt-' + i, content: 'x'.repeat(3000) }] });
   const compact = from('agents/agentLoop').compactMessages(exchanges, 12000);
-  assert.match(JSON.stringify(compact[0]), /Earlier exchanges omitted/);
+  assert.match(JSON.stringify(compact[0]), /TRIMMED: \d+ earlier messages/);
   assert.ok(JSON.stringify(compact).length <= 12000);
 });
 
