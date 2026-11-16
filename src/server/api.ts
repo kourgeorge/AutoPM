@@ -6,7 +6,7 @@ import { listLessons, reviewLesson } from '../journal/lessons';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { modelUsage, modelBudgetStatus, saveAiSettings } from '../core/modelBudget';
+import { modelUsage, modelBudgetStatus, saveAiSettings, aiSettings } from '../core/modelBudget';
 import { aiConnectionStatus, saveAiConnection } from '../core/aiConnection';
 import { llmUsage, llmUsageForDay } from '../review/llmUsage';
 import { candidates, signalScorecard, saveLearningSettings, triggerLearning, learningRuns, rollbackLearning } from '../learning/loop';
@@ -592,11 +592,15 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('GET', '/api/settings/ai', () => modelBudgetStatus());
   add('POST', '/api/settings/ai', async ({ body }) => {
     const input = await body();
-    if (!Object.hasOwn(input, 'maxRequestsPerDay') ||
-      (input.maxRequestsPerDay !== null && typeof input.maxRequestsPerDay !== 'number')) {
-      throw new HttpError(400, 'Daily AI call limit must be a number or null for unlimited');
+    const has = (key: string) => Object.hasOwn(input, key);
+    const bad = (key: string) => has(key) && input[key] !== null && typeof input[key] !== 'number';
+    if (!has('maxRequestsPerDay') && !has('maxInputTokensPerDay')) throw new HttpError(400, 'Send maxRequestsPerDay and/or maxInputTokensPerDay');
+    if (bad('maxRequestsPerDay')) throw new HttpError(400, 'Daily AI call limit must be a number or null for unlimited');
+    if (bad('maxInputTokensPerDay')) throw new HttpError(400, 'Daily AI input-token limit must be a number or null for unlimited');
+    try {
+      saveAiSettings({ ...(has('maxRequestsPerDay') ? { maxRequestsPerDay: input.maxRequestsPerDay as number | null } : { maxRequestsPerDay: aiSettings().maxRequestsPerDay }),
+        ...(has('maxInputTokensPerDay') ? { maxInputTokensPerDay: input.maxInputTokensPerDay as number | null } : {}) });
     }
-    try { saveAiSettings({ maxRequestsPerDay: input.maxRequestsPerDay as number | null }); }
     catch (err: any) { throw new HttpError(400, err.message); }
     return modelBudgetStatus();
   });

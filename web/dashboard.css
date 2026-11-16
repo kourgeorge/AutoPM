@@ -115,6 +115,9 @@ h1 { font-size: clamp(25px, 2.4vw, 36px); line-height: 1.2; font-weight: 500; le
 .engine-version { font-family: var(--mono, ui-monospace, monospace); cursor: help; }
 .engine-version::before { content: none; }
 .engine-version.behind { color: var(--down); border-color: var(--down); }
+.ai-budget-warning { color: var(--warn, #b7791f); border-color: currentColor; font-weight: 600; }
+.ai-budget-warning.stop { color: var(--down); }
+.ai-budget-warning[hidden] { display: none; }
 .session-pill::before { content: '●'; font-size: 8px; margin-right: 7px; color: var(--ink-3); }.session-pill.open::before { color: var(--up); }
 .metrics { grid-column: 1 / -1; display: grid; grid-template-columns: 1.15fr 1fr 1fr 1fr; padding: 21px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .metrics > div { min-width: 0; padding: 0 24px; border-right: 1px solid var(--line); }.metrics > div:last-child { border: 0; }

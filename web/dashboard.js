@@ -649,6 +649,8 @@ function renderStatus(s) {
   if (s.health.dailyLossHalted) issues.push('The daily loss limit is latched. New entries are disabled for this session.');
   if (!s.engine) issues.push('The engine predates the version indicator, so it is running old code. Restart it (after npm run build if it runs from dist/).');
   else if (s.engine.behind) issues.push(`The engine is running ${s.engine.commits[0]?.hash}, but the folder is at ${s.engine.headNow}. Restart the engine${s.engine.build === 'dist' ? ' after npm run build' : ''} to run the new code.`);
+  issues.push(...aiBudgetWarnings(s.aiBudget));
+  renderAiBudgetPill(s.aiBudget);
   $('health').textContent = issues.join('\n');
   const pf = s.portfolio;
   $('exposure').textContent = pf?.grossDeployedPct != null ? `Deployed ${pf.grossDeployedPct.toFixed(1)}% · largest holding ${pf.maxWeightSymbol ?? '—'} ${pf.maxWeightPct?.toFixed(1) ?? '—'}%${pf.maxSectorName && pf.maxSectorWeightPct != null ? ` · top sector ${pf.maxSectorName} ${pf.maxSectorWeightPct.toFixed(1)}%` : ''}${pf.drawdownFromPeakPct != null ? ` · ${pf.drawdownFromPeakPct.toFixed(2)}% below peak` : ''}` : '';
@@ -1444,13 +1446,31 @@ symbolInput.oninput = () => symbolFeedback();
 symbolInput.onkeydown = event => {
   if (event.key === 'Enter' && !event.isComposing) { event.preventDefault();addAllowedSymbols(); }
 };
+/** Plain-English AI budget warnings for the health panel: plan limit, token budget (80% / 100%), call cap. */
+function aiBudgetWarnings(b) {
+  if (!b) return [];
+  const out = [], at = iso => new Date(iso).toLocaleString([], {dateStyle:'medium',timeStyle:'short'});
+  if (b.planLimit) out.push(`AI plan limit reached, resets at ${at(b.planLimit.resetsAt)}. AI calls are paused until then; broker protection continues.`);
+  if (b.tokenBudgetReached) out.push(`Daily AI token budget reached (${b.usage.inputTokens.toLocaleString()} of ${b.tokenLimit.toLocaleString()} input tokens). The trader stops until ${at(b.resetsAt)}; broker protection continues.`);
+  else if (b.tokenWarning) out.push(`AI token use is at ${Math.floor(b.tokenUsedPct)}% of today's budget (${b.usage.inputTokens.toLocaleString()} of ${b.tokenLimit.toLocaleString()} input tokens). At 100% the trader stops; broker protection continues.`);
+  if (b.remaining === 0) out.push('Daily AI call cap reached. The trader stops until the counter restarts; broker protection continues.');
+  return out;
+}
+function renderAiBudgetPill(b) {
+  const el = $('ai-budget-warning'), warnings = aiBudgetWarnings(b);
+  el.hidden = !warnings.length;
+  el.classList.toggle('stop', !!(b?.planLimit || b?.tokenBudgetReached || b?.remaining === 0));
+  el.textContent = !b || !warnings.length ? '' : b.planLimit ? 'AI plan limit reached'
+    : b.tokenBudgetReached ? 'AI token budget used up' : b.remaining === 0 ? 'AI call cap reached' : `AI tokens ${Math.floor(b.tokenUsedPct)}% used`;
+  el.title = warnings.join('\n');
+}
 function renderAiBudget(budget) {
   if (!budget) return;
   const {settings,usage,remaining,assistantLimit,researchLimit,resetsAt} = budget, limit = settings.maxRequestsPerDay;
   $('ai-limit-status').textContent = limit === null ? 'Unlimited' : remaining === 0 ? 'Daily cap reached' : `${limit.toLocaleString()} calls / day`;
   $('ai-usage-calls').textContent = usage.requests.toLocaleString();
   $('ai-usage-remaining').textContent = remaining === null ? 'Unlimited' : remaining.toLocaleString();
-  $('ai-usage-tokens').textContent = `${usage.inputTokens.toLocaleString()} / ${usage.outputTokens.toLocaleString()}`;
+  $('ai-usage-tokens').textContent = `${usage.inputTokens.toLocaleString()} / ${usage.outputTokens.toLocaleString()}${budget.tokenLimit == null ? '' : ` (${budget.tokenUsedPct}% of ${budget.tokenLimit.toLocaleString()} input)`}`;
   $('ai-usage-reset').textContent = `Usage day: ${usage.day} (UTC). Counter restarts ${new Date(resetsAt).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})} (your local time), at midnight UTC.`;
   $('ai-assistant-allowance').textContent = limit === null
     ? 'No daily call cap applies to the trader, chat or research.'
@@ -1466,6 +1486,7 @@ function fillAiSettings(budget) {
   const f = $('ai-settings-form').elements, limit = budget.settings.maxRequestsPerDay;
   f.limitMode.value = limit === null ? 'unlimited' : 'limited';
   f.maxRequestsPerDay.value = limit === null ? '' : String(limit);
+  f.maxInputTokensPerDay.value = budget.settings.maxInputTokensPerDay == null ? '' : String(budget.settings.maxInputTokensPerDay);
   aiSettingsLoaded = true;
   syncAiLimitField();
   renderAiBudget(budget);
@@ -1495,13 +1516,15 @@ $('ai-settings-form').onsubmit = attempt(async () => {
   const f = $('ai-settings-form').elements;
   const limit = f.limitMode.value === 'unlimited' ? null : Number(f.maxRequestsPerDay.value);
   if (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 5000)) throw new Error('Choose unlimited or a whole number from 1 to 5000 calls per day.');
+  const tokens = f.maxInputTokensPerDay.value.trim() === '' ? null : Number(f.maxInputTokensPerDay.value);
+  if (tokens !== null && (!Number.isInteger(tokens) || tokens < 1000 || tokens > 1e9)) throw new Error('Leave the token limit empty for unlimited, or choose a whole number from 1,000 to 1,000,000,000.');
   aiSettingsSaving = true;
   f.limitMode.disabled = true;
   $('save-ai-settings').disabled = true;
   syncAiLimitField();
   $('ai-settings-state').textContent = 'Saving…';
   try {
-    fillAiSettings(await api('settings/ai', {maxRequestsPerDay:limit}));
+    fillAiSettings(await api('settings/ai', {maxRequestsPerDay:limit, maxInputTokensPerDay:tokens}));
     notice('AI settings saved and applied immediately.', true);
   } catch (error) { $('ai-settings-state').textContent = 'Could not save'; throw error; }
   finally {
