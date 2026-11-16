@@ -8,7 +8,19 @@ import type { AiConfig } from './types';
  * with no restart. The server (`AI_PROVIDER`, `AI_BASE_URL`) stays an `.env` choice: it decides
  * where the key is sent, so it is shown but not editable here.
  */
-export interface AiConnection { model?: string; apiKey?: string }
+export interface AiConnection { model?: string; apiKey?: string; reasoningEffort?: ReasoningEffort }
+
+/**
+ * How hard the model thinks before answering, on the OpenAI-style route only (the Anthropic
+ * route ignores it). 'none' is today's behaviour. `.env` AI_REASONING_EFFORT gives the default.
+ */
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high'] as const;
+export type ReasoningEffort = typeof REASONING_EFFORTS[number];
+const isEffort = (v: unknown): v is ReasoningEffort => (REASONING_EFFORTS as readonly unknown[]).includes(v);
+export function envReasoningEffort(): ReasoningEffort {
+  const raw = process.env.AI_REASONING_EFFORT?.trim().toLowerCase();
+  return isEffort(raw) ? raw : 'none';
+}
 
 const KNOWN_SERVERS: Record<string, string> = {
   anthropic: 'https://api.anthropic.com',
@@ -29,6 +41,10 @@ function validate(c: AiConnection): AiConnection {
     }
     out[field] = value.trim();
   }
+  if (c.reasoningEffort !== undefined) {
+    if (!isEffort(c.reasoningEffort)) throw new Error(`Reasoning effort must be one of: ${REASONING_EFFORTS.join(', ')}`);
+    out.reasoningEffort = c.reasoningEffort;
+  }
   return out;
 }
 
@@ -37,16 +53,16 @@ export function savedAiConnection(): AiConnection {
 }
 
 /** What every model call uses right now: `.env` with the saved overrides on top. */
-export function activeAiConfig(): AiConfig {
-  return { ...config.ai, ...savedAiConnection() };
+export function activeAiConfig(): AiConfig & { reasoningEffort: ReasoningEffort } {
+  return { ...config.ai, reasoningEffort: envReasoningEffort(), ...savedAiConnection() };
 }
 
 /** `null` for a field clears its override, so `.env` applies again; `undefined` leaves it alone. */
-export function saveAiConnection(change: { model?: string | null; apiKey?: string | null }): AiConnection {
+export function saveAiConnection(change: { model?: string | null; apiKey?: string | null; reasoningEffort?: string | null }): AiConnection {
   const next: AiConnection = { ...savedAiConnection() };
-  for (const field of ['model', 'apiKey'] as const) {
+  for (const field of ['model', 'apiKey', 'reasoningEffort'] as const) {
     if (change[field] === null) delete next[field];
-    else if (change[field] !== undefined) next[field] = change[field]!;
+    else if (change[field] !== undefined) (next as Record<string, unknown>)[field] = change[field];
   }
   const valid = validate(next);
   saveValue('aiConnection', valid);
@@ -67,5 +83,8 @@ export function aiConnectionStatus() {
     envModel: config.ai.model,
     keyHint: maskKey(active.apiKey),
     keySource: saved.apiKey ? 'settings' : 'env',
+    reasoningEffort: active.reasoningEffort,
+    reasoningEffortSource: saved.reasoningEffort ? 'settings' : 'env',
+    reasoningEfforts: REASONING_EFFORTS,
   } as const;
 }

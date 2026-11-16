@@ -1586,15 +1586,18 @@ function fillAiConnection(c) {
   $('ai-connection-badge').textContent = c.model;
   f.model.value = c.model;
   f.apiKey.value = '';
+  f.reasoningEffort.replaceChildren(...(c.reasoningEfforts ?? ['none']).map(v => new Option(v, v)));
+  f.reasoningEffort.value = c.reasoningEffort ?? 'none';
+  f.reasoningEffort.dataset.loaded = f.reasoningEffort.value;
   const from = source => source === 'settings' ? 'saved here' : 'from .env';
-  $('ai-connection-source').textContent = `Model ${from(c.modelSource)}${c.modelSource === 'settings' ? ` (.env says ${c.envModel})` : ''}; key ${from(c.keySource)}.`;
-  $('reset-ai-connection').hidden = c.modelSource === 'env' && c.keySource === 'env';
+  $('ai-connection-source').textContent = `Model ${from(c.modelSource)}${c.modelSource === 'settings' ? ` (.env says ${c.envModel})` : ''}; key ${from(c.keySource)}; reasoning effort ${c.reasoningEffort ?? 'none'} ${from(c.reasoningEffortSource)} (OpenAI-style servers only).`;
+  $('reset-ai-connection').hidden = c.modelSource === 'env' && c.keySource === 'env' && c.reasoningEffortSource !== 'settings';
   aiConnectionLoaded = true;
   $('ai-connection-state').textContent = 'Saved';
 }
 function setAiConnectionBusy(busy) {
   const f = $('ai-connection-form').elements;
-  f.model.disabled = f.apiKey.disabled = busy || !aiConnectionLoaded;
+  f.model.disabled = f.apiKey.disabled = f.reasoningEffort.disabled = busy || !aiConnectionLoaded;
   $('save-ai-connection').disabled = $('reset-ai-connection').disabled = busy || !aiConnectionLoaded;
 }
 async function loadAiConnection() {
@@ -1616,11 +1619,13 @@ $('ai-connection-form').onsubmit = attempt(async () => {
   if (!aiConnectionLoaded) return;
   const f = $('ai-connection-form').elements, model = f.model.value.trim(), apiKey = f.apiKey.value.trim();
   if (!model) throw new Error('Enter a model name.');
-  await saveAiConnection({model, ...(apiKey ? {apiKey} : {})}, 'AI model saved. It applies from the next AI call.');
+  // Only save the effort when it was changed, so an untouched .env value stays the .env value.
+  const effort = f.reasoningEffort.value, effortChanged = effort !== f.reasoningEffort.dataset.loaded;
+  await saveAiConnection({model, ...(effortChanged ? {reasoningEffort: effort} : {}), ...(apiKey ? {apiKey} : {})}, 'AI model saved. It applies from the next AI call.');
 });
 $('reset-ai-connection').onclick = attempt(async () => {
-  if (!confirm('Forget the model and key saved here and go back to the .env values?')) return;
-  await saveAiConnection({model:null, apiKey:null}, 'Back to the .env model and key.');
+  if (!confirm('Forget the model, key and reasoning effort saved here and go back to the .env values?')) return;
+  await saveAiConnection({model:null, apiKey:null, reasoningEffort:null}, 'Back to the .env model, key and effort.');
 });
 async function loadStrategy() {
   strategy=await api('strategy');const f=$('settings').elements,p=strategy.policy;

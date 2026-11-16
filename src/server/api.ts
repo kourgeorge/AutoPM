@@ -218,7 +218,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/lessons': 'Saved lessons, active and inactive.',
   '/api/settings/ai': 'AI daily call limit and how much of it is used.',
   '/api/settings/retention': 'How many days old scan snapshot files and tool-call receipts are kept before the daily cleanup deletes them.',
-  '/api/settings/ai-connection': 'The LLM server, provider and model in use, and where the key comes from (never the key itself).',
+  '/api/settings/ai-connection': 'The LLM server, provider and model in use, the reasoning effort, and where the key comes from (never the key itself).',
   '/api/strategy': 'The full saved strategy settings and playbook, with its hash.',
   '/api/settings/prompts': 'The exact system prompt each agent gets right now.',
   '/api/broker-orders': 'Orders resting at the broker from the last tick.',
@@ -618,8 +618,8 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
   add('GET', '/api/settings/ai-connection', () => aiConnectionStatus());
   // `null` clears a saved value so `.env` applies again; a missing field is left as it is.
   add('POST', '/api/settings/ai-connection', async ({ body }) => {
-    const input = await body(), change: { model?: string | null; apiKey?: string | null } = {};
-    for (const field of ['model', 'apiKey'] as const) {
+    const input = await body(), change: { model?: string | null; apiKey?: string | null; reasoningEffort?: string | null } = {};
+    for (const field of ['model', 'apiKey', 'reasoningEffort'] as const) {
       if (!Object.hasOwn(input, field)) continue;
       if (input[field] !== null && typeof input[field] !== 'string') throw new HttpError(400, `${field} must be text or null`);
       change[field] = input[field] as string | null;
