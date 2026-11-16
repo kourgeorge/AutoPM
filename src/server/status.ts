@@ -1,7 +1,7 @@
 import { runtimeStatus } from '../core/runtime';
 import { getLastTick } from '../features/lastTick';
 import { pendingOrders } from '../core/orders';
-import { getState } from '../state/state';
+import { getState, getPositionSnapshot } from '../state/state';
 import { protectionIntents } from '../strategy/protectionIntent';
 import { sameSymbol } from '../core/symbols';
 
@@ -20,7 +20,7 @@ export function serviceStatus() {
   const protection = Object.values(protectionIntents()).filter(p => p.status !== 'confirmed');
   if (protection.length) issues.push(`${protection.length} protection request(s) need review`);
   const unprotected = !tick || tick.positionsStale || tick.ordersStale ? [] : Object.values(tick.positions).filter(p => {
-    const snap = state.positionSnapshots[p.symbol];
+    const snap = getPositionSnapshot(p.symbol);
     return snap && !tick.orders?.some(o => o.id === snap.stopOrderId && sameSymbol(o.symbol, p.symbol) && o.type === 'stop' && o.side === 'sell' && o.qty - o.filled >= p.qty);
   }).map(p => p.symbol);
   if (unprotected.length) issues.push('Managed positions without confirmed full stop coverage: ' + unprotected.join(', '));

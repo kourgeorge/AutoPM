@@ -408,6 +408,20 @@ test('unheld snapshots wait for consecutive reads and do not depend on protectiv
   assert.equal(lookups, 0);
 });
 
+test('health check finds the dotted holding record the buy guard uses', () => {
+  const { serviceStatus } = require('../src/server/status');
+  const { recordTick, resetLastTick } = require('../src/features/lastTick');
+  state.openPositionSnapshot({symbol:'BRKB',stopLevel:532.32,stopOrderId:'gone-stop'});
+  recordTick({tickAt:new Date().toISOString(),positionsStale:false,ordersStale:false,
+    positions:{'BRK.B':{symbol:'BRK.B',qty:1,entryPrice:540,price:540}},orders:[],
+    watchlist:{},account:{equity:100000,cash:99000},portfolio:{}});
+  try {
+    const s = serviceStatus();
+    assert.deepEqual(s.unprotected, ['BRK.B']);
+    assert.equal(s.ready, false);
+  } finally { resetLastTick(); }
+});
+
 test('a burst of missing reads inside the time window keeps the snapshot', async () => {
   const { sweepStops } = require('../src/strategy/stopOrders');
   held = [{symbol:'MSFT',qty:1,avgCost:100,marketValue:100}];
