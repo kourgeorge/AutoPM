@@ -113,7 +113,7 @@ const isPinned = (b: ContentBlock) => b.type === 'text' && (b.text.startsWith(TR
 function trimNote(count: number, id: string | null): ContentBlock {
   return { type: 'text', text: `${TRIM_MARK}${count} earlier messages of this conversation were left out to fit context.`
     + (id ? ` The latest left-out part is saved as ${id} ; each saved part names the part before it ("earlier"). Read them with get_saved_context.` : '')
-    + ' Saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty; the TURN PROGRESS block lists what this turn already read and recorded.' };
+    + ' Saved tool receiptIds retrieve full results with get_tool_result. Omitted evidence is unknown, not empty, but do not re-read what the TURN PROGRESS block lists as already read this turn; re-read only for fresher data before an order.' };
 }
 function parseNote(b: ContentBlock | undefined): { count: number; id: string | null } {
   const m = b?.type === 'text' ? /^TRIMMED: (\d+) earlier(?:[^]*?saved as (\S+) ;)?/.exec(b.text) : null;
