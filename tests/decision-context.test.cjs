@@ -102,6 +102,18 @@ test('saved contexts and receipts preserve every character and pages preserve fu
   storage.saveRecord('trajectories', context.requestId, { id: context.requestId, saved });
   assert.equal(JSON.parse(readSavedResult('get_saved_context', { snapshotId: id, limit: 4000 })).totalCharacters, brief.length);
   assert.equal(boundedCycleContext(brief, 2000), brief);   // outside a turn nothing is saved or omitted
+  // The header names every omitted section with the offset that fetches just it.
+  const many = '=== ACCOUNT ===\nKnown\n=== PORTFOLIO CONTEXT ===\n' + 'p'.repeat(3000) + '\n=== PROTECTION ===\n' + 'q'.repeat(3000) + '\n=== NOTES ===\nshort\n';
+  const header = agentContext.run({ ...context, saved: {} }, () => boundedCycleContext(many, 3000));
+  assert.ok(header.length <= 3000);
+  const listed = /Omitted sections: (.*)\n/.exec(header)?.[1] ?? '';
+  for (const name of ['PORTFOLIO CONTEXT', 'PROTECTION']) {
+    const at = many.indexOf('=== ' + name);
+    assert.ok(listed.includes(`${name} (offset ${at},`), `header lists ${name} at offset ${at}: ${listed}`);
+    assert.ok(header.includes(`offset ${at});`), `placeholder for ${name} says how to fetch just it`);
+  }
+  assert.ok(!listed.includes('ACCOUNT') && !listed.includes('NOTES'), 'kept sections are not listed as omitted');
+  assert.match(header, /UNKNOWN, not empty/); assert.match(header, /TURN PROGRESS/); assert.match(header, /Known/);
   const rows = Array.from({ length: 30 }, (_, i) => ({ symbol: 'ROW' + i, rationale: 'x'.repeat(800) }));
   const first = recordPage('scan', { rows }, 'rows', { limit: 20 });
   let all = [...first.rows], next = first.nextOffset;
