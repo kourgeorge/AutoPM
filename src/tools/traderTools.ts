@@ -8,7 +8,7 @@ import { validateAnnotation } from '../strategy/annotation';
 export { actAnnotation } from '../strategy/annotation';
 import { ToolRegistry } from '../agents/toolRegistry';
 import { agentContext } from '../core/agentContext';
-import { listRequests, getRequest, operatorOrigin, isOperatorRequest } from '../core/requests';
+import { requestFeed, getRequest, operatorOrigin, isOperatorRequest } from '../core/requests';
 import { broker } from '../broker';
 import {
   GuardRejection,
@@ -92,7 +92,11 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
     includeRetired: { type: 'boolean', description: 'Also show retired or replaced lessons. Default false.' },
     offset: { type: 'integer', minimum: 0, description: 'Skip this many of the newest lessons (paging). Default 0.' },
   }, required: [] } },
-  { name: 'get_requests', description: 'Read recent requests with their IDs, initiating actor, processing status, and linked order IDs. Read get_orders for broker outcomes.', input_schema: { type: 'object', properties: {}, required: [] } },
+  { name: 'get_requests', description: 'Read requests in short form: ID, role, initiating actor, status, a short title, and linked order IDs. Without arguments: open requests plus the few that changed last. Pass the returned cursor as since to get only requests that changed after it (an empty list with unchangedSince means nothing is new). Pass id for one request in full, with its text and result. Only read this again when a new request event arrived; it does not change otherwise. Read get_orders for broker outcomes.', input_schema: { type: 'object', properties: {
+    since: { type: 'string', description: 'The cursor from an earlier get_requests call. Only requests that changed after it are returned.' },
+    id: { type: 'string', description: 'One request ID: returns that request in full.' },
+    limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many requests at most. Default 10 (open requests are always included without since).' },
+  }, required: [] } },
   {
     name: 'get_market_status',
     description: 'Get current market status: session (regular, extended or closed), ET time, and minutes until the next regular open or close. Entries and exits can trade in the extended session as well as regular hours.',
@@ -403,7 +407,13 @@ async function dispatchTraderTool(
         return JSON.stringify({ count: rows.length, total: matching.length, offset, nextOffset, lessons: rows.map(l => ({ id: l.id, category: l.category ?? 'behaviour', symbol: l.symbol ?? null, text: l.text, at: l.at, active: l.active,
           evidenceIds: l.evidenceIds, ...(l.replacedBy ? { replacedBy: l.replacedBy } : {}) })) });
       }
-      case 'get_requests': return JSON.stringify(listRequests());
+      case 'get_requests': {
+        if (input.id) {
+          const request = getRequest(String(input.id));
+          return JSON.stringify(request ? { ok: true, request } : { ok: false, error: `No request with id ${input.id}.` });
+        }
+        return JSON.stringify(requestFeed({ since: input.since ? String(input.since) : undefined, limit: input.limit == null ? undefined : Number(input.limit) }));
+      }
       case 'get_market_status':   return await toolGetMarketStatus();
       case 'get_account':         return await toolGetAccount();
       case 'get_positions':       return await toolGetPositions();

@@ -8,6 +8,8 @@ export type WakeReason = 'startup' | 'event' | 'message' | 'operator';
 export interface AgentRequest {
   id: string; role: AgentRole; actorId: string; text: string;
   parentId?: string; createdAt: string;
+  /** When the request last changed (created, status, result, orders). Older records lack it. */
+  updatedAt?: string;
   status: 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
   result?: string; orderIds: string[];
   /** Trader cycles: every pending event the cycle was shown, including older ones it already saw. */
@@ -26,6 +28,52 @@ export function getRequest(id: string): AgentRequest | undefined { return readRe
 export function listRequests(limit = 50): AgentRequest[] {
   return listRecords<AgentRequest>('requests', { desc: true, limit: Math.min(100, limit) }).map(r => r.value);
 }
+/** When a request last changed; records written before `updatedAt` existed use their creation time. */
+export const requestChangedAt = (r: AgentRequest): string => r.updatedAt ?? r.createdAt;
+let lastStamp = '';
+/** A change time that always moves forward, so two changes in the same millisecond still sort apart. */
+function changeStamp(): string {
+  let at = new Date().toISOString();
+  if (at <= lastStamp) at = new Date(Date.parse(lastStamp) + 1).toISOString();
+  return lastStamp = at;
+}
+const OPEN = ['queued', 'running', 'waiting', 'interrupted'];
+const TITLE_CHARS = 120;
+/** One request in a list: enough to tell what it is; `getRequest(id)` has the full text and result. */
+export interface RequestSummary {
+  id: string; role: AgentRole; actorId: string; status: AgentRequest['status']; title: string;
+  orderIds: string[]; parentId?: string; createdAt: string; updatedAt: string; hasResult: boolean;
+}
+export function summarizeRequest(r: AgentRequest): RequestSummary {
+  const text = r.text.replace(/\s+/g, ' ').trim();
+  return { id: r.id, role: r.role, actorId: r.actorId, status: r.status,
+    title: text.length > TITLE_CHARS ? text.slice(0, TITLE_CHARS - 1) + '…' : text,
+    orderIds: r.orderIds, ...(r.parentId ? { parentId: r.parentId } : {}),
+    createdAt: r.createdAt, updatedAt: requestChangedAt(r), hasResult: !!r.result };
+}
+export interface RequestFeed { cursor: string | null; requests: RequestSummary[]; unchangedSince?: string; more?: boolean }
+/**
+ * The compact request list agents read. Without `since`: open requests plus the few that changed
+ * last. With `since` (a cursor from an earlier call): only requests that changed after it, or
+ * `unchangedSince` and an empty list when nothing did, oldest change first. Pass the returned
+ * `cursor` next time.
+ */
+export function requestFeed(opts: { since?: string; limit?: number } = {}): RequestFeed {
+  const limit = Math.max(1, Math.min(50, Math.floor(opts.limit ?? 10) || 10));
+  const recent = listRequests(100).sort((a, b) => requestChangedAt(b).localeCompare(requestChangedAt(a)));
+  const cursor = recent.length ? requestChangedAt(recent[0]) : null;
+  if (opts.since) {
+    const changed = recent.filter(r => requestChangedAt(r) > opts.since!);
+    if (!changed.length) return { cursor: opts.since, unchangedSince: opts.since, requests: [] };
+    // Oldest change first, so a cut-short page's cursor lets the next call pick up the rest.
+    const page = changed.reverse().slice(0, limit);
+    return { cursor: requestChangedAt(page[page.length - 1]), requests: page.map(summarizeRequest), ...(changed.length > limit ? { more: true } : {}) };
+  }
+  const picked = new Set(recent.slice(0, limit));
+  for (const r of recent) if (OPEN.includes(r.status)) picked.add(r);
+  const rows = recent.filter(r => picked.has(r));
+  return { cursor, requests: rows.map(summarizeRequest), ...(recent.length > rows.length ? { more: true } : {}) };
+}
 export function pendingRequests(role: AgentRole): AgentRequest[] {
   return listRecords<AgentRequest>('requests', { where: c => c.role === role && ['queued','running','interrupted'].includes(c.status), limit: 20 })
     .map(r => r.value);
@@ -40,7 +88,7 @@ export function enqueueRequest(role: AgentRole, text: string, actorId = 'operato
     if (!text.trim() || text.length > 4000) throw new Error('A message must contain 1–4000 characters');
     if (pendingRequests(role).length >= 20) throw new Error('Agent queue is full; wait for a pending request to finish');
     const command: AgentRequest = { id, role, actorId: parent?.actorId ?? actorId, parentId: parent?.requestId,
-      text, createdAt: new Date().toISOString(), status: 'queued', orderIds: [], ...options };
+      text, createdAt: new Date().toISOString(), updatedAt: changeStamp(), status: 'queued', orderIds: [], ...options };
     saveRecord('requests', id, command);
     if (parent) recordToolResult({ ok: true, receipt: { requestId: id, status: getState().paused && command.actorId === 'system' ? 'queued_paused' : 'queued' } });
     return command;
@@ -73,7 +121,7 @@ export function updateRequest(id: string, patch: Partial<Pick<AgentRequest, 'sta
   return transaction(() => {
     const current = getRequest(id);
     if (!current) throw new Error('Unknown command');
-    const next = { ...current, ...patch };
+    const next = { ...current, ...patch, updatedAt: changeStamp() };
     saveRecord('requests', id, next);
     // Only the assistant talks to the operator. A trader result is a log line, not a chat reply;
     // the assistant reads it back through get_requests when asked. Work asked for from chat is
