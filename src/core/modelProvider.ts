@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { withModelBudget } from './modelBudget';
-import { activeAiConfig } from './aiConnection';
+import { activeAiConfig, ReasoningEffort } from './aiConnection';
+import { agentContext } from './agentContext';
 import { AiConfig, ChatMessage, ContentBlock, ModelResponse, ToolDefinition } from './types';
 
 // ── Provider interface ────────────────────────────────────────────────────────
@@ -21,6 +22,15 @@ const RETRY_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
  * this app's traffic (spend and usage per tag). Change the tags here; both providers read it.
  */
 export const LITELLM_TAGS = 'app:autotrade,project:autotrade';
+
+/**
+ * Sent as `prompt_cache_key` on OpenAI-style requests. One fixed key per agent role, so the
+ * server routes that role's calls (same system prompt + tools) to the same prompt cache.
+ * Calls outside an agent (e.g. the learning loop, scripts) share `autotrade-other`.
+ */
+export function promptCacheKey(role: string | undefined = agentContext.getStore()?.role): string {
+  return `autotrade-${role ?? 'other'}`;
+}
 
 /**
  * POST a chat request and parse its JSON, retrying a stuck request, a dropped connection
@@ -185,8 +195,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
   private baseUrl: string;
   private apiKey: string;
   private model: string;
+  private reasoningEffort: ReasoningEffort;
 
-  constructor(cfg: AiConfig) {
+  constructor(cfg: AiConfig & { reasoningEffort?: ReasoningEffort }) {
+    this.reasoningEffort = cfg.reasoningEffort ?? 'none';
     const known = KNOWN_BASE_URLS[cfg.provider.toLowerCase()];
     if (!cfg.baseUrl && !known) {
       throw new Error(
@@ -277,8 +289,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
       }
     }
 
-    // Convert tool definitions to OpenAI format (they already match JSON Schema)
-    const openaiTools = tools.map(tool => ({
+    // Convert tool definitions to OpenAI format (they already match JSON Schema). Sorted by
+    // name so the tool list is byte-identical on every call, whatever order it was built in —
+    // a changed prefix would miss the prompt cache.
+    const openaiTools = [...tools].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).map(tool => ({
       type: 'function',
       function: {
         name: tool.name,
@@ -323,9 +337,15 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // the temperature line below.
     const bareModel = this.model.replace(/^[^/]+\//, '');
     const isGptReasoningModel = /^gpt-[5-9]/.test(bareModel);
-    const reasoningParam = isGptReasoningModel && openaiTools.length > 0
-      ? { reasoning_effort: 'none' }
-      : {};
+    //
+    // A reasoning-effort setting other than 'none' (AI_REASONING_EFFORT or the Settings page)
+    // is sent as-is, and then no temperature is sent: reasoning models reject one.
+    const reasoningOn = this.reasoningEffort !== 'none';
+    const reasoningParam = reasoningOn
+      ? { reasoning_effort: this.reasoningEffort }
+      : isGptReasoningModel && openaiTools.length > 0
+        ? { reasoning_effort: 'none' }
+        : {};
 
     // Make the API request
     const data = await postWithRetry(`${this.baseUrl}/chat/completions`, this.apiKey, JSON.stringify({
@@ -338,7 +358,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
         // o-series and gpt-5+ models don't accept a temperature override — omit it
         // entirely for those so the API uses its default. Legacy models get 0 for
         // deterministic output.
-        ...(usesCompletionTokens ? {} : { temperature: 0 }),
+        ...(usesCompletionTokens || reasoningOn ? {} : { temperature: 0 }),
+        prompt_cache_key: promptCacheKey(),
       }), params.signal);
 
     const choice = data?.choices?.[0];
@@ -384,6 +405,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       usage: {
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
+        cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
       },
     };
   }
@@ -429,7 +451,7 @@ export function createModelProvider(cfg: AiConfig): ModelProvider {
 export function createLiveModelProvider(): ModelProvider {
   let built: { key: string; provider: ModelProvider } | null = null;
   const current = (): ModelProvider => {
-    const cfg = activeAiConfig(), key = JSON.stringify([cfg.provider, cfg.baseUrl, cfg.model, cfg.apiKey]);
+    const cfg = activeAiConfig(), key = JSON.stringify([cfg.provider, cfg.baseUrl, cfg.model, cfg.apiKey, cfg.reasoningEffort]);
     if (built?.key !== key) built = { key, provider: rawProvider(cfg) };
     return built.provider;
   };
