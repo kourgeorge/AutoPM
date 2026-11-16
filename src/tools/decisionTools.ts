@@ -12,7 +12,7 @@ import { THESIS_METRICS, savePositionReview, evaluatePremises, validateThesis, t
 import { decisionFollowup, saveCandidateReview, type CandidateReview, type CandidateReviewDetails } from '../review/decisionFollowup';
 import { assessEntryRisk, entryLimitPrice, volatilityModel } from '../strategy/riskBudget';
 import { collectRiskInputs } from '../strategy/riskData';
-import { recordPage } from './paging';
+import { LARGE_PAGE_CHAR_BUDGET, LARGE_PAGE_MAX_ROWS, recordPage } from './paging';
 import { textPage } from '../agents/savedResults';
 
 const symbolSchema = { type: 'string', maxLength: 30 };
@@ -41,7 +41,7 @@ export const DECISION_TOOL_DEFINITIONS: ToolDefinition[] = [
     symbol: symbolSchema, decision: { type: 'string', enum: ['buy', 'wait', 'skip'] }, reason: { type: 'string', minLength: 20, maxLength: 2000 }, evidenceIds: idsSchema, snapshotId: { type: 'string' },
     thesis: THESIS_SCHEMA, entryPlanId: { type: 'string' }, unknowns: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: 300 } },
   }, ['symbol', 'decision', 'reason', 'evidenceIds', 'snapshotId', 'unknowns']),
-  definition('get_market_context', 'Measure completed-session benchmark/sector-proxy returns and breadth across the approved watchlist plus holdings. This is explicitly not exchange-wide breadth. Paginated stable rows and null missing inputs; no forecast score.', pages),
+  definition('get_market_context', 'Measure completed-session benchmark/sector-proxy returns and breadth across the approved watchlist plus holdings. This is explicitly not exchange-wide breadth. Paginated stable rows and null missing inputs; no forecast score. One page holds many rows (a normal watchlist fits in 1-3 pages), so leave limit unset and follow nextOffset with snapshotId until null.', { ...pages, limit: { type: 'integer', minimum: 1, maximum: LARGE_PAGE_MAX_ROWS } }),
   definition('get_intraday_volume', 'Compare completed five-minute regular-session volume with identical ET time bins on prior sessions. Delayed tape and coverage are reported. Do not compare partial-day volume to a full-day average.', { symbol: symbolSchema }, ['symbol']),
   definition('compare_position_actions', 'Compare keep/reduce/exit and optionally replacement from current prices, actual protection, measured spread costs and projected risk budgets. A replacement preview assumes an exit fills first and does not approve or send either order. Supply supported candidate levels.', {
     symbol: symbolSchema, reduceQty: { type: 'integer', minimum: 1 }, candidate: symbolSchema, candidateStop: { type: 'number', minimum: 0.01 }, candidateTarget: { type: 'number', minimum: 0.01 },
@@ -135,7 +135,8 @@ export async function executeDecisionTool(name: string, input: Record<string, un
       thesis: input.thesis as CandidateReviewDetails['thesis'], entryPlanId: input.entryPlanId as string | undefined,
       unknowns: input.unknowns as string[] | undefined,
     }); break;
-    case 'get_market_context': result = recordPage(name, input.snapshotId ? { rows: [] } : await marketContext(), 'rows', input); break;
+    case 'get_market_context': result = recordPage(name, input.snapshotId ? { rows: [] } : await marketContext(), 'rows', input,
+      { budget: LARGE_PAGE_CHAR_BUDGET, defaultLimit: LARGE_PAGE_MAX_ROWS, maxLimit: LARGE_PAGE_MAX_ROWS }); break;
     case 'get_intraday_volume': result = await getIntradayVolume(ticker); break;
     case 'compare_position_actions': result = await compareActions(input); break;
     case 'get_economic_calendar': result = await economicCalendar(Number(input.days ?? 14)); break;
