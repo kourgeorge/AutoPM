@@ -17,7 +17,22 @@ export interface Trajectory {
   responseStopReason?: string;
   /** Texts left out of the model's context, by id; get_saved_context reads them. */
   saved?: Record<string, string>;
+  /** Set when the turn was stopped by its round or input-token limit (see `TurnLimits`). */
+  endReason?: TurnEndReason;
+  /** The "decide now" warning was already sent to the model in this turn. */
+  limitWarned?: boolean;
 }
+export type TurnEndReason = 'round_limit' | 'token_limit';
+/**
+ * How far one turn may run. Without it a single trader turn once ran 24 hours (346 model round
+ * trips, 414 tool calls). `warnRounds` rounds before the round limit (or at 80% of the token
+ * limit) the model is told to decide with what it has; at the limit the turn ends cleanly
+ * after its last tool batch has run, with `endReason` saved in the trajectory.
+ */
+export interface TurnLimits { maxRounds: number; maxInputTokens: number; warnRounds: number }
+/** What the model reads when its turn is close to the limit. */
+export const TURN_LIMIT_WARNING = 'TURN LIMIT: this turn is nearly out of rounds. Do not read or look up anything more. Decide now with the evidence you already have: record each open decision (trade or hold, with its reason), then call sleep.';
+
 type ToolCall = Extract<ContentBlock, { type: 'tool_use' }>;
 interface ToolCallRecord { name: string; input: unknown; result?: string }
 /** What the operator reads instead of the platform's "The operation was aborted due to timeout". */
@@ -25,9 +40,9 @@ export const SLOW_MODEL_MESSAGE = 'The AI service is responding slowly right now
 /** What the operator reads instead of Node's bare "fetch failed" once every retry has dropped. */
 export const UNREACHABLE_MODEL_MESSAGE = 'Could not reach the AI service — the connection kept dropping, even after retries. Please try again in a minute.';
 /**
- * A turn has no overall deadline and no round cap: the agent takes as many rounds as it needs and
- * ends when it stops calling tools (or the operator stops it). Only a single hung model request
- * times out — the fetch deadline (DOMException TimeoutError) or the Anthropic SDK's own timeout error.
+ * A turn has no overall deadline. It ends when the agent stops calling tools, the operator stops
+ * it, or it reaches the caller's optional round/input-token limit (`TurnLimits`). A single hung
+ * model request times out — the fetch deadline (DOMException TimeoutError) or the Anthropic SDK's own timeout error.
  */
 function isTimeout(err: any): boolean {
   return err?.name === 'TimeoutError' || err instanceof Anthropic.APIConnectionTimeoutError;
@@ -95,18 +110,20 @@ export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT
     if (m.role === 'assistant' && calls.length) {
       const next = input[i+1];
       const results = next?.role === 'user' ? next.content.filter(b => b.type === 'tool_result') : [];
-      messages.push({ role: 'user', content: calls.map(call => {
+      const answered: ContentBlock[] = calls.map(call => {
         const result = results.find(b => b.type === 'tool_result' && b.tool_use_id === call.id);
         const receiptId = result?.type === 'tool_result' ? result.receiptId : undefined;
         return { type: 'tool_result', tool_use_id: call.id, receiptId, content: boundedResult(result?.type === 'tool_result' ? result.content : errorResult('Previous tool outcome unavailable. Inspect command/action status before retrying.'), receiptId) };
-      }) });
-      if (next?.content.every(b => b.type === 'tool_result')) i++;
+      });
+      // A note sent with the results (the turn-limit warning) stays with them.
+      messages.push({ role: 'user', content: [...answered, ...(results.length ? next.content.filter(b => b.type !== 'tool_result') : [])] });
+      if (results.length) i++;
     }
   }
   const removed: ChatMessage[] = [];
   while (JSON.stringify(messages).length > limit - 400 && messages.length > 3) {
     // Keep the latest user's request and the latest complete exchanges.
-    const nextUser = messages.findIndex((m,i) => i > 0 && m.role === 'user' && m.content.some(b => b.type === 'text'));
+    const nextUser = messages.findIndex((m,i) => i > 0 && m.role === 'user' && m.content.some(b => b.type === 'text') && !m.content.some(b => b.type === 'tool_result'));
     if (nextUser > 0) removed.push(...messages.splice(0, nextUser));
     else removed.push(...messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1));
   }
@@ -124,6 +141,8 @@ export async function runAgentLoop(opts: {
   messages: () => Promise<ChatMessage[]>; maxTokens: number;
   signal?: AbortSignal; beforeTool?: () => void;
   revision?: string;
+  /** Optional cap on this turn's rounds and input tokens; none means no cap. */
+  limits?: TurnLimits;
 }): Promise<Trajectory> {
   const id = opts.context.requestId;
   let run = readTrajectory(id);
@@ -180,6 +199,27 @@ export async function runAgentLoop(opts: {
           }
           current.messages.push({ role: 'user', content: results }); checkpoint();
           if (finish) { current.status = 'completed'; break; }
+        }
+        const limits = opts.limits;
+        if (limits) {
+          const endReason: TurnEndReason | undefined = current.rounds >= limits.maxRounds ? 'round_limit'
+            : current.inTokens >= limits.maxInputTokens ? 'token_limit' : undefined;
+          if (endReason) {
+            // The last tool batch has fully run; stop before asking the model again.
+            current.endReason = endReason; current.status = 'completed';
+            current.text = endReason === 'round_limit'
+              ? `Turn stopped at its round limit (${current.rounds} of ${limits.maxRounds} rounds).`
+              : `Turn stopped at its input-token limit (${current.inTokens} of ${limits.maxInputTokens} tokens).`;
+            logger.warn(`[${context.role}] ${id}: ${current.text}`);
+            break;
+          }
+          const lastMessage = current.messages.at(-1);
+          if (!current.limitWarned && lastMessage?.role === 'user'
+            && (current.rounds >= limits.maxRounds - limits.warnRounds || current.inTokens >= limits.maxInputTokens * 0.8)) {
+            lastMessage.content.push({ type: 'text', text: TURN_LIMIT_WARNING });
+            current.limitWarned = true; checkpoint();
+            logger.warn(`[${context.role}] ${id}: turn near its limit (${current.rounds} rounds, ${current.inTokens} input tokens); told the model to decide now`);
+          }
         }
         current.messages = compactMessages(current.messages, limit);
         const response = await abortable(opts.provider.chat({ systemPrompt: opts.systemPrompt, messages: current.messages,
