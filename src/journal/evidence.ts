@@ -57,12 +57,37 @@ export function evidenceResult(tool: string, result: string, symbol?: string): s
   return JSON.stringify({ ...data, evidenceId: recordEvidence(tool, data, symbol).id });
 }
 
+/**
+ * The newest evidence ids for `symbol`, this turn's first, so a wrong-id error can name the right
+ * ones instead of costing another round (T-21 #7).
+ */
+export function evidenceIdsFor(symbol: string, max = 5): Evidence[] {
+  const found: Evidence[] = [], requestId = agentContext.getStore()?.requestId;
+  const scan = (opts: { requestId?: string }) => {
+    let seen = 0;
+    for (const { id, value } of iterateRecords<Receipt>('tool-calls', { desc: true, ...opts })) {
+      if (found.length >= max || ++seen > 5000) return;
+      const e = fromReceipt(id, value);
+      if (e?.symbol && sameSymbol(e.symbol, symbol) && !found.some(f => f.id === e.id)) found.push(e);
+    }
+  };
+  if (requestId) scan({ requestId });
+  if (!found.length) scan({});
+  return found;
+}
+function rightIds(symbol?: string): string {
+  if (!symbol) return '';
+  const ids = evidenceIdsFor(symbol);
+  return ids.length ? ` Evidence IDs for ${symbol}: ${ids.map(e => `${e.id} (${e.tool})`).join(', ')}.`
+    : ` No evidence for ${symbol} was found; call get_position_review for ${symbol} and use its evidenceId.`;
+}
+
 export function validateEvidenceIds(ids: string[], symbol?: string): Evidence[] {
   if (!Array.isArray(ids) || !ids.length || ids.length > 10) throw new Error('Supply 1–10 existing observation evidence IDs');
   return [...new Set(ids)].map(id => {
     const row = readEvidence(id);
-    if (!row) throw new Error('Unknown observation evidence ID: ' + id);
-    if (symbol && row.symbol && !sameSymbol(row.symbol, symbol)) throw new Error('Evidence belongs to a different symbol: ' + id);
+    if (!row) throw new Error('Unknown observation evidence ID: ' + id + '.' + rightIds(symbol));
+    if (symbol && row.symbol && !sameSymbol(row.symbol, symbol)) throw new Error(`Evidence belongs to a different symbol: ${id} is ${row.symbol} evidence (${row.tool}), not ${symbol}.` + rightIds(symbol));
     return row;
   });
 }

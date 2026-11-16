@@ -4,7 +4,7 @@ import type { ChatMessage, ContentBlock } from '../core/types';
 import type { ModelProvider } from '../core/modelProvider';
 import { agentContext, type AgentContext } from '../core/agentContext';
 import { readRecord, saveRecord } from '../core/storage';
-import { saveContext } from './savedResults';
+import { saveContext, INLINE_RESULT_LIMIT } from './savedResults';
 import type { ToolRegistry } from './toolRegistry';
 import { logger } from '../core/logger';
 import { REQUEST_CHAR_LIMIT } from '../core/modelBudget';
@@ -57,7 +57,7 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 function boundedResult(raw: string, receiptId?: string): string {
-  return raw.length <= 10000 ? raw : JSON.stringify({ truncated: true, receiptId, totalCharacters: raw.length,
+  return raw.length <= INLINE_RESULT_LIMIT ? raw : JSON.stringify({ truncated: true, receiptId, totalCharacters: raw.length,
     note: receiptId ? 'Read get_tool_result(receiptId, offset, limit) for complete pages. No evidence was discarded.' : 'Legacy result is oversized; repeat a narrower query to retrieve complete evidence.' });
 }
 
