@@ -3,7 +3,7 @@ import { readAccount, readPositions, readOrders } from '../core/accountRead';
 import { DECISION_TOOL_DEFINITIONS, DECISION_TOOL_NAMES, executeDecisionTool, THESIS_SCHEMA } from './decisionTools';
 import { evidenceResult, validateEvidenceIds } from '../journal/evidence';
 import { validateThesis, evaluatePremises, type EntryThesis } from '../journal/thesis';
-import { recordPage } from './paging';
+import { LARGE_PAGE_CHAR_BUDGET, LARGE_PAGE_MAX_ROWS, recordPage } from './paging';
 import { validateAnnotation } from '../strategy/annotation';
 export { actAnnotation } from '../strategy/annotation';
 import { ToolRegistry } from '../agents/toolRegistry';
@@ -313,10 +313,10 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_watchlist_scan',
-    description: 'Read compact stable pages of the last computed watchlist. Follow nextOffset with snapshotId until null. Compact rows include composite, meanReversionComposite, price staleness, RSI, ATR and risk fit; details:true retrieves full signal evidence from the SAME snapshot. All non-held symbols are preserved, including notScored rows; heldExcluded identifies holdings. tickAt and ageMs describe freshness. Signals and riskAdjustedScore are measured heuristics, not independent confirmations or expected returns. Get fresh get_signals and an entry plan with supported levels for a researched candidate.',
+    description: 'Read compact stable pages of the last computed watchlist. One page holds many rows (about 100+ compact rows; a normal watchlist fits in 1-3 pages), so leave limit unset. Follow nextOffset with snapshotId until null. Compact rows hold only what is needed to pick candidates: symbol, composite, meanReversionComposite, riskAdjustedScore, price and staleness, RSI, ATR, chasing, notScored and risk fit (allowed, maxQty, the rules that block it); details:true retrieves full signal evidence from the SAME snapshot. All non-held symbols are preserved, including notScored rows; heldExcluded identifies holdings. tickAt and ageMs describe freshness. Signals and riskAdjustedScore are measured heuristics, not independent confirmations or expected returns. Get fresh get_signals and an entry plan with supported levels for a researched candidate.',
     input_schema: {
       type: 'object',
-      properties: { snapshotId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 }, details: { type: 'boolean' } },
+      properties: { snapshotId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: LARGE_PAGE_MAX_ROWS }, details: { type: 'boolean' } },
       required: [],
     },
   },
@@ -413,9 +413,9 @@ async function dispatchTraderTool(
       case 'get_signal_scorecard': return JSON.stringify(signalScorecard());
       case 'get_watchlist_scan': {
         const scan = input.snapshotId ? { rows: [] } : await riskAwareWatchlistScan();
-        const page = recordPage(name, scan, 'rows', input);
-        const result = input.details ? page : { ...page, rows: page.rows.map((r: any) => ({ symbol: r.symbol, price: r.price, priceStale: r.priceStale, notScored: r.notScored, composite: r.tally.composite, meanReversionComposite: r.meanReversionTally.composite, chasing: r.reversal.chasing, atr: r.atr, rsi: r.rsi, riskAdjustedScore: r.riskAdjustedScore ?? null, riskFit: r.riskFit ? { allowed: r.riskFit.allowed, maxQty: r.riskFit.maxQty, violations: r.riskFit.violations } : null })) };
-        return JSON.stringify(result);
+        // The page is sized on the rows it actually returns, so compact pages hold many more stocks.
+        return JSON.stringify(recordPage(name, scan, 'rows', input, { budget: LARGE_PAGE_CHAR_BUDGET, defaultLimit: LARGE_PAGE_MAX_ROWS,
+          maxLimit: LARGE_PAGE_MAX_ROWS, project: input.details ? undefined : compactScanRow }));
       }
       case 'get_entry_plan':     return JSON.stringify(await entryPlan(input as { symbol: string; price: number; stopLoss: number; takeProfit: number }));
       case 'get_correlation':     return await toolGetCorrelation(input);
@@ -454,6 +454,22 @@ async function dispatchTraderTool(
     // talks to the broker's order endpoints (the order executor does), so this is the rest.
     return JSON.stringify({ error: err.message });
   }
+}
+
+/**
+ * A scan row cut to the fields needed to pick candidates. Fields are dropped whole; no text is shortened.
+ * Full evidence (signals, summaries, risk messages) stays behind details:true and get_signals.
+ */
+export function compactScanRow(r: any) {
+  const row: Record<string, unknown> = { symbol: r.symbol, composite: r.tally?.composite ?? null, meanReversionComposite: r.meanReversionTally?.composite ?? null,
+    riskAdjustedScore: r.riskAdjustedScore ?? null, price: r.price, priceStale: r.priceStale, rsi: r.rsi, atr: r.atr };
+  if (r.priceStale && r.priceStaleReason) row.priceStaleReason = r.priceStaleReason;
+  if (r.reversal?.chasing) row.chasing = true;
+  if (r.notScored) row.notScored = r.notScored;
+  if (r.held) row.held = true;
+  row.riskFit = r.riskFit ? { allowed: r.riskFit.allowed, maxQty: r.riskFit.maxQty,
+    ...(r.riskFit.violations?.length ? { blockedBy: r.riskFit.violations.map((v: any) => v.rule) } : {}) } : null;
+  return row;
 }
 
 const OBSERVATION_TOOLS = new Set(['get_market_status','get_account','get_positions','get_open_orders','get_macro_regime','get_signals','get_signal_scorecard','get_watchlist_scan','get_entry_plan','get_correlation','get_exposure','get_calendar','get_fundamentals','get_pending_events', ...ALPACA_DATA_TOOL_NAMES, 'web_search']);

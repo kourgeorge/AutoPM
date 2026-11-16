@@ -6,6 +6,7 @@ import { DATA_DIR } from '../core/paths';
 import { writeFileAtomic } from '../core/fsAtomic';
 import { agentContext } from '../core/agentContext';
 import { sameSymbol } from '../core/symbols';
+import { REQUEST_CHAR_LIMIT } from '../core/modelBudget';
 
 type Snapshot = { kind: string; data: Record<string, any> };
 /** What a receipt keeps: where the snapshot file is, not the data. `file` is relative to DATA_DIR/db. */
@@ -73,8 +74,31 @@ function findSnapshot(kind: string, start: string): { id: string; snapshot: Snap
   return undefined;
 }
 
+/** Default size of one page, in characters of the whole page result. */
+export const PAGE_CHAR_BUDGET = 9000;
+/**
+ * Page size for wide tables the trader reads whole (watchlist scan, market context). Each call
+ * re-sends the conversation, so few big pages are far cheaper than many small ones; a sixth of
+ * the request limit leaves room for the instructions, tools and the rest of the turn.
+ */
+export const LARGE_PAGE_CHAR_BUDGET = Math.floor(REQUEST_CHAR_LIMIT / 6);
+/** Most rows one large page may hold. */
+export const LARGE_PAGE_MAX_ROWS = 200;
+
+export interface PageOptions {
+  /** Most characters a page may hold (a page always holds at least one row). */
+  budget?: number;
+  /** Rows per page when the caller passes no limit. */
+  defaultLimit?: number;
+  /** Largest limit the caller may pass. */
+  maxLimit?: number;
+  /** Shapes each row for this page (for example a compact view). Rows are dropped whole, never shortened. */
+  project?: (row: any) => any;
+}
+
 /** Stable pages from one immutable observation, with complete rows and explicit omissions. */
-export function recordPage(kind: string, data: Record<string, any>, key: string, input: Record<string, unknown>) {
+export function recordPage(kind: string, data: Record<string, any>, key: string, input: Record<string, unknown>, options: PageOptions = {}) {
+  const budget = options.budget ?? PAGE_CHAR_BUDGET, maxLimit = options.maxLimit ?? 50, project = options.project ?? ((row: any) => row);
   const found = input.snapshotId ? findSnapshot(kind, String(input.snapshotId)) : undefined;
   if (input.snapshotId && !found) throw new Error(`Unknown snapshot for this tool: ${input.snapshotId}. Copy snapshotId exactly from the first ${kind} result, or call ${kind} without snapshotId to start a fresh snapshot.`);
   const old = found?.snapshot;
@@ -82,14 +106,16 @@ export function recordPage(kind: string, data: Record<string, any>, key: string,
   if (input.symbol && full.symbol && !sameSymbol(String(input.symbol), String(full.symbol))) throw new Error('Snapshot belongs to a different symbol');
   const id = found ? found.id : saveSnapshot({ kind, data: full });
   const all = full[key] as any[];
-  const offset = Number(input.offset ?? 0), limit = Number(input.limit ?? 20);
-  if (!Array.isArray(all) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error('Invalid rows or page limit');
+  const offset = Number(input.offset ?? 0), limit = Number(input.limit ?? options.defaultLimit ?? 20);
+  if (!Array.isArray(all) || !Number.isSafeInteger(limit) || limit < 1 || limit > maxLimit) throw new Error('Invalid rows or page limit');
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > all.length) throw new Error('Offset is outside the snapshot');
   const out = { ...full, [key]: [] as any[], snapshotId: id, offset, total: all.length, nextOffset: null as number | null };
+  // Size grows row by row: measure the empty page once (with room for any nextOffset), then add each row and its comma.
+  let size = JSON.stringify(out).length + String(all.length).length;
   for (let i = offset; i < all.length && i < offset + limit; i++) {
-    const candidate = { ...out, [key]: [...out[key], all[i]], nextOffset: i + 1 < all.length ? i + 1 : null };
-    if (JSON.stringify(candidate).length > 9000 && out[key].length) break;
-    out[key].push(all[i]);
+    const row = project(all[i]), rowSize = JSON.stringify(row).length + (out[key].length ? 1 : 0);
+    if (size + rowSize > budget && out[key].length) break;
+    out[key].push(row); size += rowSize;
   }
   out.nextOffset = offset + out[key].length < all.length ? offset + out[key].length : null;
   return out;

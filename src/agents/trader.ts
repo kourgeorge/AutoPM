@@ -4,7 +4,18 @@ import { readDecision } from '../journal/journal';
 import { journalUnresolved, endingSleep } from '../journal/reviewDecisions';
 import { getLastTick } from '../features/lastTick';
 import { describeGap, investmentGap } from '../strategy/investment';
-import { runAgentLoop } from './agentLoop';
+import { runAgentLoop, type TurnLimits } from './agentLoop';
+
+/**
+ * How long one trader turn may run. A normal review takes about 10–20 model round trips; 40
+ * leaves room for a busy day without letting one turn run for hours (one ran 24h with 346
+ * round trips). One request is capped at ~200k characters (~50k input tokens), so 40 full
+ * rounds is about 2M input tokens — the token limit stops a turn whose context is always full
+ * even if it has rounds left. Five rounds before the end the model is told to decide now.
+ */
+export const TRADER_TURN_LIMITS: TurnLimits = { maxRounds: 40, maxInputTokens: 2_000_000, warnRounds: 5 };
+/** An operator's direct turn only answers what was asked, so it gets half the room. */
+export const DIRECT_TURN_LIMITS: TurnLimits = { maxRounds: 20, maxInputTokens: 1_000_000, warnRounds: 4 };
 import { boundedCycleContext } from './savedResults';
 import { buildDecisionBrief } from './decisionBrief';
 import { enqueueRequest, pendingRequests, updateRequest, getRequest, operatorOrigin, isOperatorRequest, type WakeReason, type AgentRequest } from '../core/requests';
@@ -144,6 +155,7 @@ export class Trader {
       // what let a routine review describe two unrequested sells as "operator-directed".
       messages: async () => [{ role: 'user', content: [{ type: 'text', text: direct ? await buildRequestContext(relayedText(command)) : await buildCycleContext(getState()) }] }],
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
+      limits: direct ? DIRECT_TURN_LIMITS : TRADER_TURN_LIMITS,
       beforeTool: () => { if ((getState().paused && !direct) || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
     // Normally empty: sleep refuses once while decisions are open. This covers a second sleep, a turn limit or an error.
@@ -154,7 +166,9 @@ export class Trader {
     // An operator's request is answered in the trader's own words — its sleep answer, else its
     // last text, else its sleep reason. "Review completed" alone told them nothing.
     const ended = endingSleep(command.id);
-    const reply = direct ? ended.answer ?? (turn.text.trim() || ended.reason) : turn.text.trim() || undefined;
+    // A turn stopped at its limit says so first, so the Live page shows why it ended.
+    const reply = turn.endReason ? [turn.text.trim(), ended.answer ?? ended.reason].filter(Boolean).join(' ')
+      : direct ? ended.answer ?? (turn.text.trim() || ended.reason) : turn.text.trim() || undefined;
     updateRequest(command.id, { status: turn.status,
       result: turn.error ?? ([reply, queued].filter(Boolean).join(' ') || 'Review completed; no trade action was queued.') });
     // A direct turn left the event queue alone; anything urgent there gets its review now.
