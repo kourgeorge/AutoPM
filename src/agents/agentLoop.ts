@@ -21,8 +21,22 @@ export interface Trajectory {
   endReason?: TurnEndReason;
   /** The "decide now" warning was already sent to the model in this turn. */
   limitWarned?: boolean;
+  /** When this trajectory was last saved; how old a resumed turn is. */
+  updatedAt?: string;
 }
-export type TurnEndReason = 'round_limit' | 'token_limit';
+export type TurnEndReason = 'round_limit' | 'token_limit' | 'stale_resume';
+/**
+ * A saved unfinished turn older than this is not resumed as-is. Turn 39737f35 (2026-11-12)
+ * picked up again after an engine restart 8 h 56 min later and went on paging a scan snapshot
+ * nine hours old (docs/research/trader-token-use.md #9).
+ */
+export const STALE_RESUME_MS = 10 * 60_000;
+/**
+ * What `runAgentLoop` does with a stale saved turn: 'end' records it as ended with
+ * endReason 'stale_resume' (the caller starts a fresh one); 'refresh' resumes it but drops
+ * snapshotIds older than STALE_RESUME_MS from the tool calls not run yet, so they read fresh data.
+ */
+export type StaleResume = 'end' | 'refresh';
 /**
  * How far one turn may run. Without it a single trader turn once ran 24 hours (346 model round
  * trips, 414 tool calls). `warnRounds` rounds before the round limit (or at 80% of the token
@@ -75,6 +89,41 @@ function withResults(messages: ChatMessage[]): ChatMessage[] {
     const saved = readRecord<ToolCallRecord>('tool-calls', b.receiptId)?.result;
     return { ...b, content: saved === undefined ? errorResult('Saved tool receipt is unavailable') : boundedResult(saved, b.receiptId) };
   }) }));
+}
+/** When a saved turn last did anything: its own save time, else (older saves) its newest receipt. */
+function lastActivity(run: Trajectory): number {
+  if (run.updatedAt) return Date.parse(run.updatedAt);
+  let latest = NaN;
+  for (let round = Math.max(0, run.rounds - 1); round <= run.rounds; round++) for (let index = 0; ; index++) {
+    const rec = readRecord<{ startedAt?: string; finishedAt?: string }>('tool-calls', `${run.id}:${round}:${index}`);
+    if (!rec) break;
+    const at = Date.parse(rec.finishedAt ?? rec.startedAt ?? '');
+    if (Number.isFinite(at) && !(at <= latest)) latest = at;
+  }
+  return latest;
+}
+/** Drop old snapshotIds from the tool calls of the last batch that have not run yet; returns how many. */
+function dropStaleSnapshots(run: Trajectory, now: number): number {
+  const last = run.messages.at(-1);
+  if (last?.role !== 'assistant') return 0;
+  let dropped = 0;
+  last.content.forEach((b, index) => {
+    if (b.type !== 'tool_use') return;
+    const input = b.input as Record<string, unknown> | undefined;
+    if (typeof input?.snapshotId !== 'string') return;
+    const receiptId = `${run.id}:${run.rounds}:${index}`;
+    const receipt = readRecord<ToolCallRecord & object>('tool-calls', receiptId);
+    if (receipt?.result !== undefined) return;
+    // Only a paging tool's own snapshot (a receipt of the same tool); evidence ids are left alone.
+    const snap = readRecord<{ name?: string; startedAt?: string; finishedAt?: string }>('tool-calls', input.snapshotId);
+    const at = Date.parse(snap?.finishedAt ?? snap?.startedAt ?? '');
+    if (snap?.name !== b.name || !(now - at > STALE_RESUME_MS)) return;
+    const { snapshotId: _old, ...fresh } = input;
+    b.input = fresh;
+    if (receipt) saveRecord('tool-calls', receiptId, { ...receipt, input: fresh });
+    dropped++;
+  });
+  return dropped;
 }
 export function readTrajectory(id: string): Trajectory | undefined {
   const run = readRecord<Trajectory>('trajectories', id);
@@ -246,6 +295,8 @@ export async function runAgentLoop(opts: {
   revision?: string;
   /** Optional cap on this turn's rounds and input tokens; none means no cap. */
   limits?: TurnLimits;
+  /** What to do with a saved unfinished turn older than STALE_RESUME_MS; none resumes it as-is. */
+  staleResume?: StaleResume;
 }): Promise<Trajectory> {
   const id = opts.context.requestId;
   let run = readTrajectory(id);
@@ -255,7 +306,21 @@ export async function runAgentLoop(opts: {
   const current = run;
   const limit = turnMessageLimit(opts.systemPrompt, opts.registry.definitions);
   const context = { ...opts.context, signal, saved: current.saved ??= {} };
-  const checkpoint = () => saveRecord('trajectories', id, { ...current, messages: withoutResults(current.messages) });
+  const checkpoint = () => { current.updatedAt = new Date().toISOString(); saveRecord('trajectories', id, { ...current, messages: withoutResults(current.messages) }); };
+  // A saved unfinished turn (engine restart, pause) that has sat for hours is not resumed as-is.
+  const now = Date.now(), idle = current.messages.length ? now - lastActivity(current) : NaN;
+  if (opts.staleResume && idle > STALE_RESUME_MS) {
+    const minutes = Math.round(idle / 60_000);
+    if (opts.staleResume === 'end') {
+      current.status = 'completed'; current.endReason = 'stale_resume'; current.error = undefined;
+      current.text = `Turn ended without resuming: it was saved ${minutes} min ago, so its data is out of date. A fresh turn starts instead.`;
+      logger.warn(`[${opts.context.role}] ${id}: ${current.text}`);
+      checkpoint();
+      return current;
+    }
+    const dropped = dropStaleSnapshots(current, now);
+    logger.warn(`[${opts.context.role}] ${id}: resuming a turn saved ${minutes} min ago; dropped ${dropped} old snapshotId(s) so those reads start fresh`);
+  }
   // This turn's finished receipts, read once each, for the TURN PROGRESS block.
   const receipts = new Map<string, Receipt>();
   const progress = () => {

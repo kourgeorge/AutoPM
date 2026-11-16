@@ -156,6 +156,8 @@ export class Trader {
       messages: async () => [{ role: 'user', content: [{ type: 'text', text: direct ? await buildRequestContext(relayedText(command)) : await buildCycleContext(getState()) }] }],
       maxTokens: config.ai.maxTokensPerTurn, signal: this.controller.signal,
       limits: direct ? DIRECT_TURN_LIMITS : TRADER_TURN_LIMITS,
+      // An old saved review ends and a fresh one starts; an operator's question still gets answered.
+      staleResume: direct ? 'refresh' : 'end',
       beforeTool: () => { if ((getState().paused && !direct) || getPolicyHash() !== hash) throw new Error('Trading paused or strategy changed; review this request under the current strategy'); },
     });
     // Normally empty: sleep refuses once while decisions are open. This covers a second sleep, a turn limit or an error.
@@ -173,6 +175,8 @@ export class Trader {
       result: turn.error ?? ([reply, queued].filter(Boolean).join(' ') || 'Review completed; no trade action was queued.') });
     // A direct turn left the event queue alone; anything urgent there gets its review now.
     if (direct && getPendingEvents().some(e => e.severity === 'critical' || e.severity === 'urgent')) this.wakePending = true;
+    // A review saved hours ago (engine restart) was ended unrun; review again now, from fresh data.
+    if (turn.endReason === 'stale_resume') return this.runCycle();
     return { inTokens: turn.inTokens, outTokens: turn.outTokens };
   }
 }

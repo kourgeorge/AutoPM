@@ -605,6 +605,47 @@ test('restart recovers an action receipt saved before its tool result without re
   assert.equal(invoked, 0); assert.equal(turn.status, 'completed');
 });
 
+test('a trader review saved hours ago is ended, not resumed, and a fresh review starts', async () => {
+  const old = commands.enqueueRequest('trader', 'Review current incidents and portfolio under the active strategy.', 'system');
+  commands.updateRequest(old.id, { status: 'running' });
+  const nineHoursAgo = new Date(Date.now() - 9 * 3600_000).toISOString();
+  storage.saveRecord('trajectories', old.id, { id: old.id, messages: [{ role: 'user', content: [{ type: 'text', text: 'old cycle' }] }, { role: 'assistant', content: toolResponse([['get_watchlist_scan', { snapshotId: 'old-scan', offset: 100 }]]).content }],
+    rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '', updatedAt: nineHoursAgo });
+  const trader = new Trader();
+  const seen = [];
+  trader.provider = { chat: async request => { seen.push(request.messages[0].content[0].text); return textResponse(); } };
+  await trader.runCycle();
+  const stale = storage.readRecord('trajectories', old.id);
+  assert.equal(stale.endReason, 'stale_resume');
+  assert.equal(stale.status, 'completed');
+  assert.equal(storage.readRecord('tool-calls', `${old.id}:1:0`), undefined, 'the old batch was not run');
+  assert.equal(commands.getRequest(old.id).status, 'completed');
+  assert.equal(seen.length, 1, 'one fresh model turn');
+  assert.notEqual(seen[0], 'old cycle', 'the fresh turn starts from a new cycle context');
+  const fresh = storage.readRecords('requests').filter(r => r.role === 'trader' && r.id !== old.id);
+  assert.equal(fresh.length, 1);
+  assert.equal(storage.readRecord('trajectories', fresh[0].id).status, 'completed');
+});
+
+test('a turn saved a minute ago still resumes; an old direct turn drops stale snapshot ids', async () => {
+  const registry = new ToolRegistry([{ name: 'read', description: '', input_schema: { type: 'object', properties: { snapshotId: { type: 'string' } }, required: [] } }],
+    async (name, input) => JSON.stringify({ ok: true, input }));
+  const run = async (id, savedAt, staleResume, snapshotId) => {
+    storage.saveRecord('trajectories', id, { id, messages: [{ role: 'user', content: [{ type: 'text', text: 'saved' }] }, { role: 'assistant', content: toolResponse([['read', { snapshotId }]]).content }],
+      rounds: 1, status: 'running', inTokens: 0, outTokens: 0, text: '', updatedAt: savedAt });
+    return runAgentLoop({ context: { role: 'trader', requestId: id, actorId: 'test' }, registry, staleResume, provider: { chat: async () => textResponse() },
+      messages: async () => { throw new Error('Should resume'); }, systemPrompt: '', maxTokens: 100 });
+  };
+  const recent = await run('recent-turn', new Date(Date.now() - 60_000).toISOString(), 'end', 'snap');
+  assert.equal(recent.status, 'completed'); assert.equal(recent.endReason, undefined);
+  assert.deepEqual(storage.readRecord('tool-calls', 'recent-turn:1:0').input, { snapshotId: 'snap' }, 'a recent turn runs its saved batch as-is');
+  const nineHoursAgo = new Date(Date.now() - 9 * 3600_000).toISOString();
+  storage.saveRecord('tool-calls', 'old-snap', { name: 'read', input: {}, result: '{}', startedAt: nineHoursAgo, finishedAt: nineHoursAgo });
+  const direct = await run('old-direct', nineHoursAgo, 'refresh', 'old-snap');
+  assert.equal(direct.status, 'completed'); assert.equal(direct.endReason, undefined);
+  assert.deepEqual(storage.readRecord('tool-calls', 'old-direct:1:0').input, {}, 'the nine-hour-old snapshot id was dropped');
+});
+
 test('canceled unfilled orders and unconfirmed protection are described without claiming execution', () => {
   const { describeDecision } = from('journal/types');
   const record = journal.recordDecision(journal.decision('entry', 'trader', { symbol: 'AAPL', rationale: 'Entry', orderStatus: 'cancelled', executed: false, requestedQty: 5, filledQty: 0, qty: 0, price: null }));
