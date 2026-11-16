@@ -1,29 +1,70 @@
 import crypto from 'crypto';
 import { appendRecord, readValue, saveValue, transaction } from './storage';
 import { agentContext } from './agentContext';
+import { notifyAccount } from './notifications';
 import type { ModelProvider } from './modelProvider';
 interface AgentUsage { requests: number; inputTokens: number; outputTokens: number; missingUsage: number }
-interface Usage extends AgentUsage { day: string; assistantRequests?: number; byAgent?: Partial<Record<'trader' | 'assistant' | 'researcher' | 'unassigned', AgentUsage>> }
+interface Usage extends AgentUsage { day: string; assistantRequests?: number; byAgent?: Partial<Record<'trader' | 'assistant' | 'researcher' | 'unassigned', AgentUsage>>;
+  /** Set once the 80% token warning was sent today, so it is sent only once. */
+  tokenWarned?: boolean }
 const emptyUsage = (): AgentUsage => ({ requests: 0, inputTokens: 0, outputTokens: 0, missingUsage: 0 });
-export interface AiSettings { maxRequestsPerDay: number | null }
-function validateSettings(settings: AiSettings): AiSettings {
+/** Null means unlimited for both limits. */
+export interface AiSettings { maxRequestsPerDay: number | null; maxInputTokensPerDay?: number | null }
+/** Share of the daily token budget at which the app warns. */
+export const TOKEN_WARN_SHARE = 0.8;
+const offValue = (raw: string | undefined) => !raw || raw === 'unlimited' || raw === '0' ? null : Number(raw);
+function validateSettings(settings: AiSettings): Required<AiSettings> {
   const limit = settings.maxRequestsPerDay;
   if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1 || limit > 5000)) {
     throw new Error('Daily AI call limit must be unlimited or a whole number from 1 to 5000');
   }
-  return { maxRequestsPerDay: limit };
+  const tokens = settings.maxInputTokensPerDay ?? null;
+  if (tokens !== null && (!Number.isSafeInteger(tokens) || tokens < 1000 || tokens > 1_000_000_000)) {
+    throw new Error('Daily AI input-token limit must be unlimited or a whole number from 1,000 to 1,000,000,000');
+  }
+  return { maxRequestsPerDay: limit, maxInputTokensPerDay: tokens };
 }
-/** Saved account settings override the optional environment value. Null means unlimited. */
-export function aiSettings(): AiSettings {
+/** Saved account settings override the optional environment values. Null means unlimited. */
+export function aiSettings(): Required<AiSettings> {
   const saved = readValue<AiSettings>('aiSettings');
-  if (saved) return validateSettings(saved);
-  const raw = process.env.AI_MAX_REQUESTS_PER_DAY?.trim().toLowerCase();
-  return validateSettings({ maxRequestsPerDay: !raw || raw === 'unlimited' || raw === '0' ? null : Number(raw) });
+  const envTokens = offValue(process.env.AI_MAX_INPUT_TOKENS_PER_DAY?.trim().toLowerCase());
+  if (saved) return validateSettings({ ...saved, maxInputTokensPerDay: Object.hasOwn(saved, 'maxInputTokensPerDay') ? saved.maxInputTokensPerDay : envTokens });
+  return validateSettings({ maxRequestsPerDay: offValue(process.env.AI_MAX_REQUESTS_PER_DAY?.trim().toLowerCase()), maxInputTokensPerDay: envTokens });
 }
-export function saveAiSettings(settings: AiSettings): AiSettings {
-  const valid = validateSettings(settings);
+/** A setting left out keeps its current value. Saving also clears a remembered plan limit, so the next call tries again. */
+export function saveAiSettings(settings: AiSettings): Required<AiSettings> {
+  const current = aiSettings();
+  const valid = validateSettings({ ...current, ...settings });
   saveValue('aiSettings', valid);
+  saveValue('modelPlanLimit', null);
   return valid;
+}
+
+/**
+ * The provider said the account's plan is used up (e.g. ChatGPT Plus weekly limit, HTTP 429
+ * "usage_limit_reached"). Remembered so calls stop until `resetsAt` instead of failing every wake-up.
+ */
+export interface PlanLimit { at: string; resetsAt: string; message: string }
+/** Without a reset time in the reply, wait this long before trying again. */
+const PLAN_LIMIT_FALLBACK_MS = 60 * 60_000;
+export function planLimitFromError(err: unknown, now = Date.now()): PlanLimit | null {
+  const text = err instanceof Error ? err.message : String(err);
+  if (!/usage_limit_reached|usage limit (has been )?reached/i.test(text)) return null;
+  let resetsAt: number | null = null;
+  const at = text.match(/"?resets_at"?\s*[:=]\s*"?([^",}\s]+)/);
+  if (at) {
+    const n = Number(at[1]);
+    resetsAt = Number.isFinite(n) ? (n < 1e12 ? n * 1000 : n) : Date.parse(at[1]);
+  }
+  const inSec = text.match(/"?resets_in_seconds"?\s*[:=]\s*(\d+)/);
+  if ((resetsAt === null || !Number.isFinite(resetsAt)) && inSec) resetsAt = now + Number(inSec[1]) * 1000;
+  if (resetsAt === null || !Number.isFinite(resetsAt) || resetsAt <= now) resetsAt = now + PLAN_LIMIT_FALLBACK_MS;
+  return { at: new Date(now).toISOString(), resetsAt: new Date(resetsAt).toISOString(), message: text.slice(0, 300) };
+}
+/** The remembered plan limit, or null once it has passed. */
+export function activePlanLimit(now = Date.now()): PlanLimit | null {
+  const saved = readValue<PlanLimit | null>('modelPlanLimit');
+  return saved && Date.parse(saved.resetsAt) > now ? saved : null;
 }
 /** Chat and research each get a share of the daily cap so neither can starve the trader. */
 const SHARES = { assistant: 0.4, researcher: 0.3 } as const;
@@ -35,8 +76,23 @@ export function modelUsage(day = new Date().toISOString().slice(0, 10)): Usage {
 }
 export function modelBudgetStatus() {
   const settings = aiSettings(), usage = modelUsage(), limit = settings.maxRequestsPerDay;
+  const tokenLimit = settings.maxInputTokensPerDay;
+  const tokenShare = tokenLimit === null ? null : usage.inputTokens / tokenLimit;
+  const planLimit = activePlanLimit();
+  const warnings: string[] = [];
+  if (planLimit) warnings.push(`AI plan limit reached, resets at ${planLimit.resetsAt}`);
+  if (tokenShare !== null && tokenShare >= 1) warnings.push(`Daily AI token budget reached (${usage.inputTokens.toLocaleString('en-US')} of ${tokenLimit!.toLocaleString('en-US')} input tokens); broker protection continues`);
+  else if (tokenShare !== null && tokenShare >= TOKEN_WARN_SHARE) warnings.push(`AI token use is at ${Math.floor(tokenShare * 100)}% of today's budget (${usage.inputTokens.toLocaleString('en-US')} of ${tokenLimit!.toLocaleString('en-US')} input tokens)`);
+  if (limit !== null && usage.requests >= limit) warnings.push('Daily AI request budget reached; broker protection continues');
   return { settings, usage,
     remaining: limit === null ? null : Math.max(0, limit - usage.requests),
+    tokenLimit,
+    tokensRemaining: tokenLimit === null ? null : Math.max(0, tokenLimit - usage.inputTokens),
+    tokenUsedPct: tokenShare === null ? null : Math.round(tokenShare * 1000) / 10,
+    tokenWarning: tokenShare !== null && tokenShare >= TOKEN_WARN_SHARE,
+    tokenBudgetReached: tokenShare !== null && tokenShare >= 1,
+    planLimit,
+    warnings,
     assistantLimit: shareLimit(limit, SHARES.assistant),
     researchLimit: shareLimit(limit, SHARES.researcher),
     resetsAt: new Date(Date.parse(usage.day + 'T00:00:00Z') + 86_400_000).toISOString() };
@@ -50,10 +106,13 @@ export function withModelBudget(provider: ModelProvider, modelName: string | (()
     if (JSON.stringify(params).length > REQUEST_CHAR_LIMIT) throw new Error('Model context exceeds the account request limit');
     const day = new Date().toISOString().slice(0, 10);
     const role = agentContext.getStore()?.role ?? 'unassigned';
+    const plan = activePlanLimit();
+    if (plan) throw new Error(`AI plan limit reached, resets at ${plan.resetsAt}; broker protection continues`);
     transaction(() => {
-      const limit = aiSettings().maxRequestsPerDay;
+      const { maxRequestsPerDay: limit, maxInputTokensPerDay: tokenLimit } = aiSettings();
       const usage = modelUsage(day);
       if (limit !== null && usage.requests >= limit) throw new Error('Daily AI request budget reached; broker protection continues');
+      if (tokenLimit !== null && usage.inputTokens >= tokenLimit) throw new Error('Daily AI token budget reached; broker protection continues');
       const assistant = role === 'assistant';
       const chatLimit = shareLimit(limit, SHARES.assistant), researchLimit = shareLimit(limit, SHARES.researcher);
       if (assistant && chatLimit !== null && (usage.assistantRequests ?? 0) >= chatLimit) throw new Error('Chat budget reached; remaining model capacity is reserved for the trader');
@@ -69,13 +128,23 @@ export function withModelBudget(provider: ModelProvider, modelName: string | (()
       response = await provider.chat(params);
     } catch (err) {
       recordModelCall({ startedAt, role, model, inputTokens: 0, outputTokens: 0, error: err instanceof Error ? err.message.slice(0, 300) : String(err) });
+      const limit = planLimitFromError(err);
+      if (limit) {
+        const known = activePlanLimit();
+        saveValue('modelPlanLimit', limit);
+        if (!known) try { notifyAccount('ai_plan_limit', `AI plan limit reached, resets at ${limit.resetsAt}. AI calls pause until then; broker protection continues.`); } catch { /* never mask the model error */ }
+      }
       throw err;
     }
     recordModelCall({ startedAt, role, model, inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens, cachedInputTokens: response.usage.cachedInputTokens });
     params.signal?.throwIfAborted();
+    let warn = null as string | null;
     transaction(() => {
       const usage = modelUsage(day);
       const agent = usage.byAgent?.[role] ?? emptyUsage();
+      const tokenLimit = aiSettings().maxInputTokensPerDay, inputTokens = usage.inputTokens + response.usage.inputTokens;
+      const crossed = tokenLimit !== null && !usage.tokenWarned && inputTokens >= tokenLimit * TOKEN_WARN_SHARE;
+      if (crossed) warn = `AI token use is at ${Math.floor(inputTokens / tokenLimit! * 100)}% of today's budget (${inputTokens.toLocaleString('en-US')} of ${tokenLimit!.toLocaleString('en-US')} input tokens). At 100% the trader stops; broker protection continues.`;
       saveValue('modelUsage', { ...usage,
         byAgent: { ...usage.byAgent, [role]: { ...agent,
           inputTokens: agent.inputTokens + response.usage.inputTokens,
@@ -83,8 +152,10 @@ export function withModelBudget(provider: ModelProvider, modelName: string | (()
           missingUsage: agent.missingUsage + (response.usage.inputTokens + response.usage.outputTokens === 0 ? 1 : 0) } },
         inputTokens: usage.inputTokens + response.usage.inputTokens,
         outputTokens: usage.outputTokens + response.usage.outputTokens,
-        missingUsage: usage.missingUsage + (response.usage.inputTokens + response.usage.outputTokens === 0 ? 1 : 0) });
+        missingUsage: usage.missingUsage + (response.usage.inputTokens + response.usage.outputTokens === 0 ? 1 : 0),
+        ...(crossed || usage.tokenWarned ? { tokenWarned: true } : {}) });
     });
+    if (warn) try { notifyAccount('ai_token_budget', warn); } catch { /* a warning must never fail a model call */ }
     return response;
   } };
 }

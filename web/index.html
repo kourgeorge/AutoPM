@@ -38,7 +38,7 @@
 <div class="app-shell">
 <header class="topbar">
   <div class="breadcrumb"><span class="breadcrumb-root">Workspace</span> <span class="breadcrumb-slash">/</span> <strong id="view-label">Live trading</strong></div>
-  <div class="topbar-right"><span id="market-session" class="session-pill">Waiting for market data</span><span id="account-mode" class="badge">Connecting</span><span id="live" class="live-dot" role="status">Connecting…</span><span id="engine-version" class="session-pill engine-version" title="Engine version">engine …</span><span class="topbar-divider"></span><button id="pause">Pause trading</button></div>
+  <div class="topbar-right"><span id="market-session" class="session-pill">Waiting for market data</span><span id="account-mode" class="badge">Connecting</span><span id="live" class="live-dot" role="status">Connecting…</span><span id="ai-budget-warning" class="session-pill ai-budget-warning" role="alert" hidden></span><span id="engine-version" class="session-pill engine-version" title="Engine version">engine …</span><span class="topbar-divider"></span><button id="pause">Pause trading</button></div>
 </header>
 <p id="notice" role="status" hidden></p>
 <div id="health" role="status"></div>
@@ -143,6 +143,7 @@
     <div class="form-grid">
       <label>Daily AI call limit<select name="limitMode" disabled><option value="unlimited">Unlimited (default)</option><option value="limited">Set a daily cap</option></select></label>
       <label id="ai-daily-limit-field" hidden>Maximum calls per day<input name="maxRequestsPerDay" type="number" min="1" max="5000" step="1" disabled></label>
+      <label>Daily input-token limit (empty = unlimited; warns at 80%)<input name="maxInputTokensPerDay" type="number" min="1000" max="1000000000" step="1000" placeholder="Unlimited"></label>
     </div>
     <p id="ai-assistant-allowance" class="section-description"></p>
     <div class="actions"><button id="save-ai-settings" class="primary" disabled>Save AI settings</button><button type="button" id="reload-ai-settings">Reload AI settings</button><span id="ai-settings-state" role="status">Loading…</span></div>
