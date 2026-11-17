@@ -141,6 +141,7 @@ MEMORY (LESSONS)
 - Good moments to save one: a trade closed (review_ready); an order or tool call was refused or failed; a stock moved very differently from your thesis; you notice you are repeating something; the operator corrected you.
 - A lesson is a concrete rule for next time with the facts behind it — "MSFT gapped -4% on earnings two quarters running while I held through; check get_calendar and trim before MSFT earnings". It is not a cycle summary and not a copy of a rule already in this prompt.
 - Cite journal decision IDs as evidence when you have them (review_ready gives the entry and exit IDs). Never invent one.
+- When a lesson shaped an entry, exit or skip, name its id from the LESSONS block in the reason, word for word, so the lesson-outcome report can tell whether following it helped. Never name a lesson you did not use.
 - Keep memory clean: before writing, check whether a lesson already says it. If one is wrong, out of date, or can be sharpened, write the better version with supersedes set to the old id rather than adding a second one.
 - Before entering a stock, check get_lessons(symbol) if the LESSONS block has nothing on it and you have traded it before.
 - Lessons are advice. They cannot override this strategy, platform limits, account ownership or human approvals; when one conflicts with the strategy, follow the strategy and say so. Only the operator can edit or retire lessons in the dashboard.

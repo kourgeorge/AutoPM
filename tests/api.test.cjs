@@ -251,6 +251,20 @@ test('broker exit labels distinguish a reconciled fill from an outcome with no m
   assert.equal(history.entries.find(entry=>entry.record.id===unmatched.id).status,'recorded outcome');
 });
 
+test('lesson outcomes count closed round trips whose entry recorded the lessons shown',async()=>{
+  const {recordDecision,decision}=require('../src/journal/journal');
+  const {recordFills}=require('../src/review/fills');
+  const fill=(id,symbol,side,price,at)=>({execId:'lo-'+id,brokerOrderId:'lo-order-'+id,permId:null,symbol,side,qty:2,price,fee:null,at});
+  recordDecision(decision('entry','trader',{symbol:'LESSONA',executed:true,brokerOrderId:'lo-order-a1',rationale:'Per lesson lo-1.',lessonsShown:['lo-1'],lessonsCited:['lo-1']}));
+  recordDecision(decision('entry','trader',{symbol:'LESSONB',executed:true,brokerOrderId:'lo-order-b1',rationale:'Breakout.',lessonsShown:[]}));
+  recordFills([fill('a1','LESSONA','buy',10,'2026-10-01T14:00:00Z'),fill('a2','LESSONA','sell',12,'2026-10-02T14:00:00Z'),
+    fill('b1','LESSONB','buy',10,'2026-10-03T14:00:00Z'),fill('b2','LESSONB','sell',9,'2026-10-04T14:00:00Z')]);
+  const report=(await request('/api/lesson-outcomes')).body;
+  assert.equal(report.tracked,2);
+  const lesson=report.lessons.find(l=>l.lessonId==='lo-1');
+  assert.equal(lesson.withLesson.trades,1);assert.equal(lesson.withoutLesson.trades,1);assert.equal(lesson.cited.trades,1);
+  assert.equal((await request('/api/lesson-outcomes?days=0')).res.status,400);
+});
 test('the assistant can read every dashboard page in-process, read-only',async()=>{
   const {appEndpoints,readAppEndpoint}=require('../src/server/api');
   const list=appEndpoints();

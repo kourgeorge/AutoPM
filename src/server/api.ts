@@ -32,6 +32,7 @@ import { getLastTick } from '../features/lastTick';
 import { heartbeatCadenceMs } from '../features/detectors/heartbeat';
 import { getPolicy } from '../policy/load';
 import { scorecard } from '../review/metrics';
+import { lessonOutcomes } from '../review/lessonOutcomes';
 import { benchmarkChart } from '../review/benchmark';
 import { activityHistory, savedPositionContext, savedRequestDetails } from '../review/activity';
 import { textPage } from '../agents/savedResults';
@@ -211,6 +212,7 @@ const ROUTE_DOCS: Record<string, string> = {
   '/api/llm-usage': 'AI model usage history: calls, tokens and cost per day, per agent and per model. ?days=N.',
   '/api/llm-usage/day': 'AI model usage for one day, call by call. ?day=YYYY-MM-DD.',
   '/api/scorecard': 'Closed round-trip statistics. ?days=N.',
+  '/api/lesson-outcomes': 'Did each lesson help: closed round trips entered with the lesson shown, without it, and citing it, with caveats about small samples. ?days=N.',
   '/api/benchmark-chart': 'Account equity against benchmarks, as % change per session, with return, Sharpe, volatility and drawdown for each. ?days=N&symbols=SPY,QQQ (up to 5).',
   '/api/feed': 'The activity feed. ?tail=N for the newest N, or ?after=SEQ&limit=N.',
   '/api/commands': 'Slash commands the operator can run.',
@@ -521,6 +523,14 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     const days = Number(raw);
     if (!Number.isInteger(days) || days <= 0) throw new HttpError(400, 'days must be a whole number above 0');
     return scorecard({ days });
+  });
+
+  add('GET', '/api/lesson-outcomes', ({ url }) => {
+    const raw = url.searchParams.get('days');
+    if (raw == null) return lessonOutcomes();
+    const days = Number(raw);
+    if (!Number.isInteger(days) || days <= 0) throw new HttpError(400, 'days must be a whole number above 0');
+    return lessonOutcomes({ days });
   });
 
   // Each call hits the broker's portfolio history and one bar fetch per symbol, so a
