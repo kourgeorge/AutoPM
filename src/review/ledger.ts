@@ -64,6 +64,9 @@ export interface TradeOutcome {
   policyVersion: number | null;
   /** Each signal's score for this symbol when the entry was journalled; null on older entries. */
   signalsAtEntry: Record<string, number> | null;
+  /** Lessons in the entry's cycle context, and those its reason cited; null when not tracked. */
+  lessonsShown: string[] | null;
+  lessonsCited: string[] | null;
 
   /**
    * True when the fills for this round trip do not add up — a sell larger than the position
@@ -270,6 +273,8 @@ function assemble(
     triggerEventId:   entryDecision?.triggerEventId ?? null,
     policyVersion:    entryDecision?.policyVersion ?? null,
     signalsAtEntry:   entryDecision?.signalsAtEntry ?? null,
+    lessonsShown:     entryDecision?.lessonsShown ?? null,
+    lessonsCited:     entryDecision?.lessonsCited ?? null,
     unexplained,
   };
 }

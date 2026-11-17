@@ -1,4 +1,5 @@
 import { withAccountRead } from '../core/accountRead';
+import { agentContext } from '../core/agentContext';
 import { describeDecision } from '../journal/types';
 import { readDecision } from '../journal/journal';
 import { journalUnresolved, endingSleep } from '../journal/reviewDecisions';
@@ -30,6 +31,7 @@ import { getPolicy } from '../policy/load';
 import { getState, updateState } from '../state/state';
 import { readDecisions } from '../journal/journal';
 import { lessonsForContext } from '../journal/lessons';
+import { noteLessonsShown } from '../journal/lessonUse';
 import { getPendingEvents, type Severity } from '../features/eventBus';
 import { pendingOrders } from '../core/orders';
 import { exposure, type Exposure, type ExposurePosition } from '../strategy/exposure';
@@ -710,7 +712,9 @@ function describeOrder(o: OpenOrder): string {
 function buildLessons(state: ReturnType<typeof getState>): string {
   const focus = [...Object.keys(state.positionSnapshots ?? {}),
     ...getPendingEvents().map(e => e.symbol).filter((s): s is string => !!s)].map(canonicalSymbol);
-  const { text, shown, total } = lessonsForContext([...new Set(focus)], MAX_LESSONS);
+  const { text, shown, total, ids } = lessonsForContext([...new Set(focus)], MAX_LESSONS);
+  // Remembered per request, so this cycle's entries record which lessons they were made with.
+  noteLessonsShown(agentContext.getStore()?.requestId, ids);
   const lines = [`=== LESSONS — YOUR MEMORY (${total ? `${shown}${total > shown ? ` of ${total}, get_lessons for the rest` : ''}` : 'empty'}) ===`];
   if (!total) {
     lines.push('Nothing saved yet. When you learn something about a stock, notice a habit of your own, or make a mistake, save it with write_lesson so the next cycle knows it.');

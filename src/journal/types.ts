@@ -113,6 +113,10 @@ export interface DecisionRecord {
    * entry was journalled. Absent on older entries and when no tick had scored the symbol.
    */
   signalsAtEntry?: Record<string, number>;
+  /** On an `entry`: ids of the lessons in the cycle context it was made in (journal/lessonUse.ts). Absent = not tracked. */
+  lessonsShown?: string[];
+  /** Shown lesson ids the trader named in its reason or thesis. */
+  lessonsCited?: string[];
 }
 
 export interface EntryPlanSummary {

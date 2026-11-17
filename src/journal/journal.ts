@@ -6,6 +6,7 @@ import { canonicalSymbol } from '../core/symbols';
 import { appendRecord, readRecord, saveRecord, listRecords, transaction } from '../core/storage';
 import { agentContext, assertAgentActive } from '../core/agentContext';
 import { getLastTick } from '../features/lastTick';
+import { lessonLinks } from './lessonUse';
 
 let ephemeral = false;
 export function useEphemeralJournal(): void { ephemeral = true; }
@@ -59,6 +60,11 @@ export function recordDecision(input: DecisionInput, id: string = crypto.randomU
   if (input.kind === 'entry' && input.signalsAtEntry === undefined) {
     const symbol = input.symbol ?? (input.orderId && !ephemeral ? readRecord<Order>('orders', input.orderId)?.symbol : undefined);
     input = { ...input, signalsAtEntry: signalsNow(symbol) };
+  }
+  if (input.lessonsShown === undefined && input.lessonsCited === undefined) {
+    const order = input.orderId && !ephemeral ? readRecord<Order>('orders', input.orderId) : undefined;
+    const thesis = input.thesis ?? (order?.params as Record<string, unknown> | undefined)?.thesis;
+    input = { ...input, ...lessonLinks(input.kind, input.requestId ?? context?.requestId, [input.rationale, thesis ? JSON.stringify(thesis) : null]) };
   }
   const record = { requestId: context?.requestId, actorId: context?.actorId, ...input, id, at: new Date().toISOString() };
   if (ephemeral) return record;

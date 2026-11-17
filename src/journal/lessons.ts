@@ -92,9 +92,9 @@ export function readLessons(limit = 20): string[] {
  * The memory block for a trader cycle. Lessons about stocks in play (held, or named by this
  * cycle's events) come first and are never dropped for space; the rest fill up to `max`.
  */
-export function lessonsForContext(focusSymbols: string[], max = 30): { text: string; shown: number; total: number } {
+export function lessonsForContext(focusSymbols: string[], max = 30): { text: string; shown: number; total: number; ids: string[] } {
   const all = allLessons(true);
-  if (!all.length) return { text: '', shown: 0, total: 0 };
+  if (!all.length) return { text: '', shown: 0, total: 0, ids: [] };
   const focus = new Set(focusSymbols.map(canonicalSymbol));
   const pinned = all.filter(l => l.symbol && focus.has(l.symbol));
   const rest = all.filter(l => !pinned.includes(l)).slice(0, Math.max(0, max - pinned.length));
@@ -110,7 +110,7 @@ export function lessonsForContext(focusSymbols: string[], max = 30): { text: str
     lines.push('', `${title}:`);
     for (const l of rows) lines.push(describeLesson(l));
   }
-  return { text: lines.join('\n'), shown: chosen.size, total: all.length };
+  return { text: lines.join('\n'), shown: chosen.size, total: all.length, ids: [...chosen].map(l => l.id) };
 }
 
 export function reviewLesson(id: string, text: string, active: boolean): Lesson {
