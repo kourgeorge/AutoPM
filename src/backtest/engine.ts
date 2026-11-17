@@ -24,8 +24,7 @@ import type { Maybe } from '../collect/types';
 import type { Policy } from '../policy/types';
 import type { ModelProvider } from '../core/modelProvider';
 import { atr } from '../strategy/indicators';
-import { computeSignals, signalTally } from '../strategy/signals';
-import { computeMeanReversionSignals } from '../strategy/meanReversion';
+import { compositeWith, liveSignalSetup, type SignalSetup } from '../signals/registry';
 import { crossSectionalComposite, type CrossSectionalEntry } from '../signals/builtin/crossSectional';
 import { entrySignalVeto, positionSizeVeto, exposureVeto } from '../strategy/orderManager';
 import { trailTarget } from '../strategy/trailingStop';
@@ -71,6 +70,12 @@ export interface BacktestConfig {
   takeProfitRMult: number;
   /** Which signal family scores entry candidates. Defaults to `'trend'` — see `SignalSet`. */
   signalSet?: SignalSet;
+  /**
+   * The weights and learned signals to score with. Absent = a copy of the live set, read once
+   * at the start so the whole run uses one set. `LEARNING_OFF` (registry) = every weight 1, no
+   * learned signals. The AI path's dossier still reads the live set.
+   */
+  learning?: SignalSetup;
   ai?: AiBacktestOptions;
 }
 
@@ -136,6 +141,7 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
   const { policy, exitMode, start, end, slippagePct, initialEquity, takeProfitRMult, ai } = config;
   const symbols = policy.strategy.watchlist;
   const caveats: string[] = [];
+  const setup = config.learning ?? liveSignalSetup();
   if (hasRiskProfile(policy.risk)) {
     caveats.push('Risk-profile sizing uses only history through the decision session. Historical sectors are unavailable, so concentration uses the largest possible overlap. The historical cache uses raw prices and corporate-action jumps may inflate its volatility estimate; live risk histories adjust for splits.');
     if (exitMode !== 'stop_takeprofit' && policy.risk.minRewardRisk != null) {
@@ -381,15 +387,18 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
         if (tIdx == null || t1Idx == null) continue;
 
         const window = bars.slice(0, tIdx + 1);
-        const veto = entrySignalVeto(symbol, fresh(window, t), policy, policy.strategy.compositeMin);
+        // Data checks only here; the composite gate is applied below with this run's setup, so
+        // the live learned weights never leak into a run that was given its own.
+        const veto = entrySignalVeto(symbol, fresh(window, t), policy, -Infinity);
         if (veto) continue;
 
-        const { composite } = signalTally(computeSignals(window, policy));
+        const composite = compositeWith('trend', window, policy, setup);
+        if (composite == null || composite < policy.strategy.compositeMin) continue;
         const atrSeries = atr(window, policy.strategy.atrPeriod);
         if (atrSeries.length === 0) continue;
         candidates.push({
           symbol,
-          composite: composite!,
+          composite,
           price: window[window.length - 1].c,
           atrVal: atrSeries[atrSeries.length - 1],
         });
@@ -422,7 +431,7 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
       const compositesBySymbol = new Map<string, number>();
       if (config.signalSet === 'meanReversion') {
         for (const e of eligible) {
-          const { composite } = signalTally(computeMeanReversionSignals(e.window, policy));
+          const composite = compositeWith('meanReversion', e.window, policy, setup);
           if (composite != null) compositesBySymbol.set(e.symbol, composite);
         }
       } else if (config.signalSet === 'crossSectional') {
@@ -431,8 +440,8 @@ export async function runBacktest(config: BacktestConfig): Promise<BacktestResul
       } else {
         // blend: one vote per family — average the two composites, not a signal concatenation.
         for (const e of eligible) {
-          const { composite: trendComposite } = signalTally(computeSignals(e.window, policy));
-          const { composite: mrComposite } = signalTally(computeMeanReversionSignals(e.window, policy));
+          const trendComposite = compositeWith('trend', e.window, policy, setup);
+          const mrComposite = compositeWith('meanReversion', e.window, policy, setup);
           if (trendComposite != null && mrComposite != null) {
             compositesBySymbol.set(e.symbol, (trendComposite + mrComposite) / 2);
           }
