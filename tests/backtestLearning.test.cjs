@@ -33,9 +33,11 @@ function bars(n) {
   return out;
 }
 
-const LEARNED = { id: 'sig-up', name: 'Always Up', code: 'function signal(){ return 1 }' };
+// The learning run saves each learned signal's median/spread (`scale`); the live score is
+// centred with it: (raw 1 - median 0.25) / (3 * spread 0.25) = exactly +1.
+const LEARNED = { id: 'sig-up', name: 'Always Up', code: 'function signal(){ return 1 }', scale: { median: 0.25, spread: 0.25 } };
 function saveLearning() {
-  // Built-ins weigh 0, the learned "always +1" signal weighs 1: the "on" composite is exactly +1.
+  // Built-ins weigh 0, the learned "always +1" signal (centred to +1) weighs 1: the "on" composite is exactly +1.
   const weights = Object.fromEntries(registry.BUILT_IN_SIGNALS.map(s => [s.name, 0]));
   weights['Learned: Always Up'] = 1;
   storage.saveValue('learningWeights', weights);
