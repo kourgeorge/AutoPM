@@ -541,6 +541,49 @@ test('below the investment target, fitting scan candidates need a decision and t
   } finally { lastTick.resetLastTick(); policy.loadPolicy(); }
 });
 
+test('a candidate decided in an earlier request stays decided until its price, score, news or trading day changes', () => {
+  const rd = from('journal/reviewDecisions'), lastTick = from('features/lastTick'), { etDate } = from('core/time');
+  const base = policy.getPolicy();
+  policy.useEphemeralPolicy({ ...base, risk: { ...base.risk, targetInvestedPct: 80, minInvestedPct: 60 } });
+  const now = Date.now(), iso = ms => new Date(ms).toISOString();
+  // Request B runs 30 minutes after A (1 minute when 30 would cross into the next ET day).
+  const later = new Date(etDate(new Date(now + 30 * 60000)) === etDate(new Date(now)) ? now + 30 * 60000 : now + 60000);
+  lastTick.recordTick({ session: 'open', portfolio: { grossDeployedPct: 0 }, account: { positionCount: 0, dayPnLPct: 0, equity: 100000 }, positions: {},
+    watchlist: { MA: { symbol: 'MA', price: 100.5, stale: false, atr: 3 } }, tickAt: iso(now), policyVersion: 1 });
+  const scan = (id, requestId, at, price = 100, score = 0.74) => storage.saveRecord('tool-calls', id, { name: 'get_watchlist_scan', role: 'trader', requestId, input: {}, startedAt: iso(at),
+    result: JSON.stringify({ rows: [{ symbol: 'MA', price, priceStale: false, composite: score, riskAdjustedScore: score, atr: 3, riskFit: { allowed: true, maxQty: 16 } }] }) });
+  try {
+    scan('scan-a', 'req-a', now - 60000);
+    const skip = agentContext.run({ role: 'trader', requestId: 'req-a', actorId: 'system' }, () =>
+      journal.recordDecision(journal.decision('skip', 'trader', { symbol: 'MA', rationale: 'skip: reward:risk 1.8 is below the 2:1 minimum', reviewDecision: 'skip' })));
+    assert.equal(rd.unresolvedDecisions('req-a').length, 0, 'decided in its own request');
+
+    scan('scan-b', 'req-b', later.getTime());
+    assert.deepEqual(rd.unresolvedDecisions('req-b', later), [], 'same price and score 30 minutes later: the skip still stands');
+    const mark = rd.decisionMark(rd.standingDecision(rd.decisionHistory('req-b', later), { symbol: 'MA', price: 100, atr: 3, composite: 0.74, riskAdjustedScore: 0.74 }));
+    assert.deepEqual(mark, { decided: { at: skip.at, decision: 'skip', id: skip.id } });
+    assert.deepEqual(traderTools.compactScanRow({ symbol: 'MA', price: 100, ...mark }).decided, mark.decided, 'the compact scan row carries the mark');
+    assert.equal(journal.readDecision(skip.id).rationale, 'skip: reward:risk 1.8 is below the 2:1 minimum', 'the reason is pointed to, never shortened');
+    assert.deepEqual(rd.unresolvedDecisions('req-no-scan-b', later), [], 'an earlier scan whose top candidate still stands counts as this cycle\'s scan');
+
+    scan('scan-c', 'req-c', later.getTime(), 103);
+    const moved = rd.unresolvedDecisions('req-c', later);
+    assert.deepEqual(moved.map(o => o.symbol), ['MA']);
+    assert.match(moved[0].problem, /no longer covers it: price \+3\.0% since your skip at \d\d:\d\d ET/);
+    scan('scan-c2', 'req-c2', later.getTime(), 100, 0.5);
+    assert.match(rd.unresolvedDecisions('req-c2', later)[0].problem, /composite 0\.74 → 0\.5/);
+
+    storage.saveRecord('tool-calls', 'news-ma', { name: 'get_news', role: 'trader', requestId: 'req-b', input: { symbols: 'MA' }, startedAt: iso(later.getTime() - 1000),
+      result: JSON.stringify({ news: [{ id: 1, headline: 'Mastercard guidance', created_at: iso(now + 1000), symbols: ['MA'] }] }) });
+    scan('scan-d', 'req-d', later.getTime());
+    assert.match(rd.unresolvedDecisions('req-d', later)[0].problem, /1 new news story since your skip/);
+
+    const tomorrow = new Date(now + 24 * 3600000);
+    scan('scan-e', 'req-e', tomorrow.getTime());
+    assert.match(rd.unresolvedDecisions('req-e', tomorrow)[0].problem, /a new trading day since your skip at \d{4}-\d\d-\d\d \d\d:\d\d ET/);
+  } finally { lastTick.resetLastTick(); policy.loadPolicy(); }
+});
+
 test('get_pending_events groups all-clears to their ids and still serves them in full by kind', async () => {
   events.resetEventRegistry();
   const p = policy.getPolicy();

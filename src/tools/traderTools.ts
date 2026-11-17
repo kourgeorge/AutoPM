@@ -50,7 +50,7 @@ import {
 import { canonicalSymbol, sameSymbol } from '../core/symbols';
 import { decision, readDecisions, readDecisionsNewestFirst, recordDecision } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
-import { sleepRefusedBefore, unresolvedDecisions } from '../journal/reviewDecisions';
+import { decisionHistory, decisionMark, sleepRefusedBefore, standingDecision, unresolvedDecisions } from '../journal/reviewDecisions';
 import { recordLesson, listLessons, allLessons } from '../journal/lessons';
 import { scorecard } from '../review/metrics';
 import { benchmark, symbolStats } from '../review/benchmark';
@@ -317,7 +317,7 @@ export const TRADER_TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_watchlist_scan',
-    description: 'Read compact stable pages of the last computed watchlist. One page holds many rows (about 100+ compact rows; a normal watchlist fits in 1-3 pages), so leave limit unset. Follow nextOffset with snapshotId until null. Compact rows hold only what is needed to pick candidates: symbol, composite, meanReversionComposite, riskAdjustedScore, price and staleness, RSI, ATR, chasing, notScored and risk fit (allowed, maxQty, the rules that block it); details:true retrieves full signal evidence from the SAME snapshot. All non-held symbols are preserved, including notScored rows; heldExcluded identifies holdings. tickAt and ageMs describe freshness. Signals and riskAdjustedScore are measured heuristics, not independent confirmations or expected returns. Get fresh get_signals and an entry plan with supported levels for a researched candidate.',
+    description: 'Read compact stable pages of the last computed watchlist. One page holds many rows (about 100+ compact rows; a normal watchlist fits in 1-3 pages), so leave limit unset. Follow nextOffset with snapshotId until null. Compact rows hold only what is needed to pick candidates: symbol, composite, meanReversionComposite, riskAdjustedScore, price and staleness, RSI, ATR, chasing, notScored and risk fit (allowed, maxQty, the rules that block it); a name you decided in an earlier cycle carries `decided` {at, decision, id} while that decision still stands (no need to decide it again), or `changedSinceDecision` saying what changed (decide it again); details:true retrieves full signal evidence from the SAME snapshot. All non-held symbols are preserved, including notScored rows; heldExcluded identifies holdings. tickAt and ageMs describe freshness. Signals and riskAdjustedScore are measured heuristics, not independent confirmations or expected returns. Get fresh get_signals and an entry plan with supported levels for a researched candidate.',
     input_schema: {
       type: 'object',
       properties: { snapshotId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: LARGE_PAGE_MAX_ROWS }, details: { type: 'boolean' } },
@@ -422,7 +422,7 @@ async function dispatchTraderTool(
       case 'get_signals':         return await toolGetSignals(input);
       case 'get_signal_scorecard': return JSON.stringify(signalScorecard());
       case 'get_watchlist_scan': {
-        const scan = input.snapshotId ? { rows: [] } : await riskAwareWatchlistScan();
+        const scan = input.snapshotId ? { rows: [] } : markDecided(await riskAwareWatchlistScan());
         // The page is sized on the rows it actually returns, so compact pages hold many more stocks.
         return JSON.stringify(recordPage(name, scan, 'rows', input, { budget: LARGE_PAGE_CHAR_BUDGET, defaultLimit: LARGE_PAGE_MAX_ROWS,
           maxLimit: LARGE_PAGE_MAX_ROWS, project: input.details ? undefined : compactScanRow }));
@@ -467,6 +467,22 @@ async function dispatchTraderTool(
 }
 
 /**
+ * The trader's scan marks each name it already decided in an earlier request: `decided` while the
+ * decision still stands (skip it), `changedSinceDecision` with what changed when it needs a fresh
+ * look. Only the decision's id is given; its reason stays whole in the journal / review.
+ */
+function markDecided<S extends { rows: any[] }>(scan: S): S {
+  const context = agentContext.getStore();
+  if (context?.role !== 'trader' || !context.requestId || !scan.rows.length) return scan;
+  const history = decisionHistory(context.requestId);
+  return { ...scan, rows: scan.rows.map(r => {
+    if (r.held || !r.symbol) return r;
+    const mark = decisionMark(standingDecision(history, { symbol: r.symbol, price: r.price, atr: r.atr, composite: r.tally?.composite ?? null, riskAdjustedScore: r.riskAdjustedScore ?? null }));
+    return Object.keys(mark).length ? { ...r, ...mark } : r;
+  }) };
+}
+
+/**
  * A scan row cut to the fields needed to pick candidates. Fields are dropped whole; no text is shortened.
  * Full evidence (signals, summaries, risk messages) stays behind details:true and get_signals.
  */
@@ -477,6 +493,8 @@ export function compactScanRow(r: any) {
   if (r.reversal?.chasing) row.chasing = true;
   if (r.notScored) row.notScored = r.notScored;
   if (r.held) row.held = true;
+  if (r.decided) row.decided = r.decided;
+  if (r.changedSinceDecision) row.changedSinceDecision = r.changedSinceDecision;
   row.riskFit = r.riskFit ? { allowed: r.riskFit.allowed, maxQty: r.riskFit.maxQty,
     ...(r.riskFit.violations?.length ? { blockedBy: r.riskFit.violations.map((v: any) => v.rule) } : {}) } : null;
   return row;
