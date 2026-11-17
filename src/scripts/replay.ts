@@ -40,6 +40,7 @@ import {
 } from '../features/eventBus';
 import { useEphemeralAlertLog } from '../features/alertLog';
 import { getLastTick, recordTick, resetLastTick } from '../features/lastTick';
+import { resetHeartbeatGate } from '../features/detectors/heartbeat';
 import { createLiveRouter } from '../features/router';
 import { watchlistScan } from '../features/watchlistScan';
 import { ensureDailyReset } from '../features/scheduler';
@@ -289,6 +290,8 @@ async function scenario(
   useEphemeralSectors();
   resetEventRegistry();
   resetLastTick();
+  // The quiet-beat gate remembers the last waking beat; a scenario must not inherit it.
+  resetHeartbeatGate();
   try {
     await body();
   } catch (err: any) {

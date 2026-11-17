@@ -153,6 +153,11 @@ export interface DetectorHit {
    * is already confirmed by its own history; making it wait twice is latency for nothing.
    */
   confirmTicks?: number;
+  /**
+   * Called once when this hit becomes an event, never when a gate suppresses it. Lets a
+   * one-shot detector (heartbeat) remember what it last fired with. Not stored on the event.
+   */
+  onFired?: (event: TriggerEvent) => void;
 }
 
 export interface Detector {
@@ -530,6 +535,7 @@ export function processHits(
       disarm(key, firedAt, tick);
       enqueue(event, tick);
       fired.push(event);
+      hit.onFired?.(event);
       continue;
     }
 
