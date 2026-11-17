@@ -239,10 +239,40 @@ test('a passing shadow signal blocked by three active ones is retired after SHAD
   const loop = from('learning/loop');
   const live = days => ({ days, meanIC: 0.04, tStat: 2.5, hitRate: 0.6, spreadPct: 0.3, upMarketIC: 0.04, downMarketIC: 0.04 });
   assert.equal(loop.judgeLearned('shadow', live(loop.SHADOW_MAX_DAYS - 1), null, 3), null, 'waits for a slot');
-  assert.equal(loop.judgeLearned('shadow', live(loop.SHADOW_DAYS), null, 2).status, 'active', 'a free slot promotes it');
+  assert.equal(loop.judgeLearned('shadow', live(loop.SHADOW_DECIDE_DAYS), null, 2).status, 'active', 'a free slot promotes it');
+  assert.equal(loop.judgeLearned('shadow', live(loop.SHADOW_DECIDE_DAYS - 1), null, 2), null, 'not decided before the decision day');
   const out = loop.judgeLearned('shadow', live(loop.SHADOW_MAX_DAYS), null, 3);
   assert.equal(out.status, 'retired');
   assert.match(out.reason, /no active slot/);
+});
+
+test('shadow trial false-pass rate: a no-skill signal is rarely promoted, a real one usually is', () => {
+  const loop = from('learning/loop');
+  const { HORIZON } = evaluate;
+  const r = rng(12345);
+  const gauss = () => { let u = 0; while (!u) u = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * r()); };
+  const r3 = x => Math.round(x * 1000) / 1000;
+  // One shadow trial: a daily IC = true IC + noise, where the noise is shared by HORIZON days in a
+  // row (the five-day returns overlap) with a total spread of 0.1 (about a 100-stock cross-section).
+  // Every day it is judged like the loop does, with t corrected for the overlap like evaluate.ts.
+  const trial = trueIC => {
+    const e = Array.from({ length: loop.SHADOW_MAX_DAYS + HORIZON + 10 }, () => gauss() * 0.1 / Math.sqrt(HORIZON));
+    const ics = [];
+    for (let d = 0; d < loop.SHADOW_MAX_DAYS + 10; d++) {
+      ics.push(trueIC + e.slice(d, d + HORIZON).reduce((a, x) => a + x, 0));
+      const n = ics.length, m = ics.reduce((a, x) => a + x, 0) / n;
+      const sd = n > 1 ? Math.sqrt(ics.reduce((a, x) => a + (x - m) ** 2, 0) / (n - 1)) : 0;
+      const live = { days: n, meanIC: r3(m), tStat: sd ? r3(m / (sd / Math.sqrt(n)) / Math.sqrt(HORIZON)) : null,
+        hitRate: null, spreadPct: null, upMarketIC: null, downMarketIC: null };
+      const next = loop.judgeLearned('shadow', live, null, 0);
+      if (next) return next.status;
+    }
+    return 'shadow';
+  };
+  const rate = (trueIC, runs) => { let p = 0; for (let k = 0; k < runs; k++) if (trial(trueIC) === 'active') p++; return p / runs; };
+  const noSkill = rate(0, 4000), skill = rate(0.05, 1000);
+  assert.ok(noSkill <= 0.1, `no-skill promoted ${noSkill}`);
+  assert.ok(skill >= 0.6, `real-skill promoted ${skill}`);
 });
 
 test('a learned signal is centred with its learning-period median before it enters the composite', () => {

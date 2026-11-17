@@ -73,6 +73,15 @@ const MIN_T_TO_MOVE = 1.5;   // below this the recent record is too unsure to mo
 const IC_FULL = 0.03;          // a mean IC of 0.03 on five-day returns is already a strong signal
 const SIMILAR = 0.7;           // above this a new idea is a copy of one we have
 export const SHADOW_DAYS = 40, SHADOW_MAX_DAYS = 120, ACTIVE_REVIEW_DAYS = 60;
+// The shadow trial is decided ONCE, on the first run with SHADOW_DECIDE_DAYS live days, against
+// SHADOW_T. Before that a shadow signal can only be retired early (IC <= 0 from SHADOW_DAYS on).
+// Why not "promote on the first day from 40 to 120 that t >= 1": looking every day gives luck
+// 80 chances, and a simulated no-skill signal passed 31% of the time (17% with a single look).
+// One look at day 90 with t >= 1.4 lets a no-skill signal through about 9% of the time (t >= 1
+// would still be ~16%, and t on only ~18 independent weeks has fat tails, hence 1.4), while a
+// signal with a real IC of 0.05 still passes about 70% of the time. Simulated in
+// tests/learning.test.cjs ("shadow trial false-pass rate").
+export const SHADOW_DECIDE_DAYS = 90, SHADOW_T = 1.4;
 // An active signal is judged (weight and retire check) only on its newest 60 live days since it
 // became active. Days after `activeSince` only, because the shadow days are what got it picked;
 // the newest 60 only, so a signal that worked for months and then flips is retired within weeks
@@ -150,14 +159,15 @@ export function capDrift(name: string, proposed: number, past: LearningRun[], fa
  */
 export function judgeLearned(status: CandidateStatus, live: PeriodStats, recent: PeriodStats | null, activeCount: number): { status: CandidateStatus; reason: string } | null {
   if (status === 'shadow') {
-    if (live.days >= SHADOW_DAYS && live.meanIC! > 0 && live.tStat! >= 1) {
+    const passes = live.meanIC! > 0 && live.tStat! >= SHADOW_T;
+    if (live.days >= SHADOW_DECIDE_DAYS && passes) {
       if (activeCount < MAX_ACTIVE) return { status: 'active', reason: `held up on ${live.days} live days (IC ${live.meanIC}, t ${live.tStat}); now counts in the composite` };
       // Passing but no free slot: it may not wait forever.
       if (live.days >= SHADOW_MAX_DAYS) return { status: 'retired', reason: `held up live but no active slot freed up in ${live.days} days (IC ${live.meanIC}, t ${live.tStat}; ${MAX_ACTIVE} already active)` };
       return null;
     }
     if (live.days >= SHADOW_DAYS && !(live.meanIC! > 0)) return { status: 'retired', reason: `stopped working once live (IC ${live.meanIC} over ${live.days} days)` };
-    if (live.days >= SHADOW_MAX_DAYS) return { status: 'retired', reason: `never proved itself live after ${live.days} days (IC ${live.meanIC}, t ${live.tStat})` };
+    if (live.days >= SHADOW_DECIDE_DAYS) return { status: 'retired', reason: `did not prove itself live after ${live.days} days (IC ${live.meanIC}, t ${live.tStat}, needed t ≥ ${SHADOW_T})` };
   } else if (status === 'active' && recent) {
     if (recent.days >= ACTIVE_REVIEW_DAYS && !(recent.meanIC! > 0)) return { status: 'retired', reason: `its recent live record turned non-positive (IC ${recent.meanIC} over the last ${recent.days} days)` };
   }
