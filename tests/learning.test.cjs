@@ -244,3 +244,37 @@ test('a passing shadow signal blocked by three active ones is retired after SHAD
   assert.equal(out.status, 'retired');
   assert.match(out.reason, /no active slot/);
 });
+
+test('a learned signal is centred with its learning-period median before it enters the composite', () => {
+  storage.useEphemeralStorage();
+  const { computeSignals } = from('strategy/signals');
+  // Ranks well but always scores high: 0.8 + 0.1 x (its rank feature, -1..+1).
+  const code = 'function signal(o,h,l,c,v){ return 0.8 + 0.1 * Math.max(-1, Math.min(1, (v[v.length-1] - 1e6) / 1e6)) }';
+  const bars = market();
+  const u = evaluate.buildUniverse(bars);
+  const scale = evaluate.scoreScale(u, evaluate.scoreSignals(u, sandboxed('high', code), policy()), 0);
+  assert.ok(Math.abs(scale.median - 0.8) < 0.01 && scale.spread > 0, JSON.stringify(scale));
+  // A neutral stock: flat price, so the built-ins put its composite at about 0.
+  const window = feature => Array.from({ length: 60 }, (_, i) => ({ t: new Date(Date.UTC(2026, 0, 1) + i * 86_400_000).toISOString(),
+    o: 100, h: 100, l: 100, c: 100, v: i === 59 ? 1e6 + feature * 1e6 : 1e6 }));
+  const composite = (feature, active) => {
+    storage.saveValue('learningLive', { at: 'x', weights: {}, active });
+    storage.saveValue('learningWeights', { 'Learned: high': 2 });
+    return signalTally(computeSignals(window(feature), policy())).composite;
+  };
+  const base = composite(0, []);
+  assert.ok(Math.abs(base) < 0.05, `neutral stock composite ${base}`);
+  const entry = { id: 'sig-high', name: 'high', code, scale };
+  assert.ok(Math.abs(composite(0, [entry]) - base) <= 0.01, 'a neutral stock keeps its composite');
+  // Compared with the same stock without it (the volume built-in sees the changed volume too).
+  assert.ok(composite(0.5, [entry]) > composite(0.5, []) + 0.05, 'a high rank still lifts the composite');
+  assert.ok(composite(-0.5, [entry]) < composite(-0.5, []) - 0.05, 'a low rank still lowers it');
+  // An old record with no saved scale and an off-centre median is left out entirely.
+  const old = { id: 'sig-old', name: 'high', code };
+  assert.equal(composite(0.5, [old]), composite(0.5, []));
+  assert.ok(!computeSignals(window(0), policy()).some(s => s.name === 'Learned: high'));
+  // One with no saved scale whose median is near 0 counts as it is.
+  const centred = { id: 'sig-centred', name: 'high', code: 'function signal(o,h,l,c,v){ return 0.1 * Math.max(-1, Math.min(1, (v[v.length-1] - 1e6) / 1e6)) }' };
+  assert.ok(composite(0.5, [centred]) > composite(0.5, []));
+  storage.deleteValue('learningLive'); storage.deleteValue('learningWeights');
+});

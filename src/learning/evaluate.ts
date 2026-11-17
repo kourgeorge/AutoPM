@@ -23,7 +23,7 @@ import type { Bar } from '../core/types';
 import type { Policy } from '../policy/types';
 import { Signal, SignalContext } from '../signals/signal';
 import { BUILT_IN_SIGNALS } from '../signals/registry';
-import { SandboxedSignal } from '../signals/sandboxed';
+import { SandboxedSignal, median, type ScoreScale } from '../signals/sandboxed';
 import { WINDOW, windowAt } from './sandbox';
 
 export const HORIZON = 5;
@@ -221,6 +221,22 @@ export function report(u: Universe, sc: Scored, k: number, liveSince: string): S
 /** The newest `lastN` scored days after `since` (YYYY-MM-DD), every day, t corrected for the overlap like `live`. */
 export function recentStats(sc: Scored, k: number, since: string, lastN: number): PeriodStats {
   return stats(dayResults(sc, k).filter(r => r.date > since).slice(-lastN), HORIZON);
+}
+
+/**
+ * Median and spread (median absolute deviation) of one signal's raw scores over the learning
+ * period (every stock-day before `examStart`; all days if that period is empty). The live
+ * composite centres a learned signal with these (see `signals/sandboxed.ts`), since IC only
+ * grades rank order and says nothing about where the scores sit. Null with no scores at all.
+ */
+export function scoreScale(u: Universe, sc: Scored, k: number): ScoreScale | null {
+  const width = sc.names.length;
+  const collect = (pts: DayPoint[]) => pts.flatMap(p => p.fwd.map((_, s) => p.scores[s * width + k]).filter((v): v is number => v !== null));
+  let xs = collect(sc.points.filter(p => p.date < u.examStart));
+  if (!xs.length) xs = collect(sc.points);
+  const m = median(xs);
+  if (m === null) return null;
+  return { median: r3(m)!, spread: Math.round(median(xs.map(x => Math.abs(x - m)))! * 1e4) / 1e4 };
 }
 
 /** Whether a date is on the every-fifth-day grid (daily dates in the last year are a superset). */

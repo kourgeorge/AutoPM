@@ -104,11 +104,15 @@ test('indicators are computed once per stock and shared by every signal', () => 
 
 test('promoted learned signals join the trend family and its composite', () => {
   const storage = from('core/storage');
-  storage.saveValue('learningLive', { at: '', weights: {}, active: [{ id: 'sig-x', name: 'Always Up', code: 'function signal(){ return 1 }' }] });
+  storage.saveValue('learningLive', { at: '', weights: {}, active: [{ id: 'sig-x', name: 'Always Up', code: 'function signal(){ return 1 }', scale: { median: 0.5, spread: 0.5 } }] });
   try {
     const trend = computeSignals(syntheticBars(60, 8), policy);
     assert.equal(trend.at(-1).name, 'Learned: Always Up');
-    assert.equal(trend.at(-1).score, 1);
+    // Centred with its saved median and spread: (1 - 0.5) / (3 x 0.5).
+    assert.ok(Math.abs(trend.at(-1).score - 1 / 3) < 0.01, String(trend.at(-1).score));
     assert.equal(registry.signalsIn('trend', { learned: false }).length, 5);
+    // The same signal saved before scales existed: its median (1) is not near 0, so it is left out.
+    storage.saveValue('learningLive', { at: '', weights: {}, active: [{ id: 'sig-x-old', name: 'Always Up', code: 'function signal(){ return 1 }' }] });
+    assert.ok(!computeSignals(syntheticBars(60, 8), policy).some(s => s.name === 'Learned: Always Up'));
   } finally { storage.deleteValue('learningLive'); }
 });

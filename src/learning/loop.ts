@@ -30,12 +30,12 @@ import { getPolicy } from '../policy/load';
 import type { ToolDefinition } from '../core/types';
 import { LEARNING_ETFS, LEARNING_UNIVERSE, loadUniverse } from './history';
 import { computeOutcomes, type TradeOutcome } from '../review/ledger';
-import { buildUniverse, rankCorrelation, recentStats, report, requiredT, scoreBuiltIns, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
+import { buildUniverse, rankCorrelation, recentStats, report, requiredT, scoreBuiltIns, scoreScale, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
 import { compileSignal, checkCode, WINDOW } from './sandbox';
-import { LEARNED_PREFIX, SandboxedSignal } from '../signals/sandboxed';
+import { LEARNED_PREFIX, SandboxedSignal, type ScoreScale } from '../signals/sandboxed';
 
 /** What the live engine reads (see `signals/registry.ts`): promoted signals and when they were set. */
-interface LearningLive { at: string; weights: Record<string, number>; active: { id: string; name: string; code: string; idea?: string }[] }
+interface LearningLive { at: string; weights: Record<string, number>; active: { id: string; name: string; code: string; idea?: string; scale?: ScoreScale }[] }
 
 export type CandidateStatus = 'testing' | 'rejected' | 'shadow' | 'active' | 'retired';
 export interface Candidate {
@@ -45,6 +45,11 @@ export interface Candidate {
   activeSince?: string;
   reason: string; history: { at: string; status: CandidateStatus; reason: string }[];
   report?: SignalReport; maxSimilarity?: { to: string; value: number } | null;
+  /**
+   * Median and spread of its raw scores over the learning years, saved when it passes the exam
+   * (older records get it on their next run). The live composite centres its score with them.
+   */
+  scale?: ScoreScale | null;
 }
 export interface LearningReport {
   at: string; tradingDay: string; stocks: number; firstDay: string; lastDay: string; examStart: string;
@@ -217,7 +222,7 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
       else if (!(learn.meanIC! > 0) || !(learn.tStat! >= 2)) changes.push(setStatus(c, 'rejected', `no clear edge even on the learning years (IC ${learn.meanIC}, t ${learn.tStat})`, at));
       else if (!(exam.meanIC! > 0) || !(exam.tStat! >= examBar)) changes.push(setStatus(c, 'rejected', `failed the exam on the last two years (IC ${exam.meanIC}, t ${exam.tStat}, needed t ≥ ${examBar} after ${ideasTested} ideas)`, at));
       else if (c.maxSimilarity && Math.abs(c.maxSimilarity.value) > SIMILAR) changes.push(setStatus(c, 'rejected', `it is ${Math.round(Math.abs(c.maxSimilarity.value) * 100)}% the same as ${c.maxSimilarity.to}`, at));
-      else { c.liveSince = today; changes.push(setStatus(c, 'shadow', `passed the exam (IC ${exam.meanIC}, t ${exam.tStat}); now scored live without counting`, at)); }
+      else { c.liveSince = today; c.scale = scoreScale(u, sc, 0); changes.push(setStatus(c, 'shadow', `passed the exam (IC ${exam.meanIC}, t ${exam.tStat}); now scored live without counting`, at)); }
     } else {
       const next = judgeLearned(c.status, live, c.report.recentLive ?? null, all.filter(x => x.status === 'active').length);
       if (next) {
@@ -225,6 +230,8 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
         if (next.status === 'active') c.activeSince = today;
       }
     }
+    // Records promoted before scales were saved get theirs now (see `signals/sandboxed.ts`).
+    if ((c.status === 'shadow' || c.status === 'active') && !c.scale) c.scale = scoreScale(u, sc, 0);
     if (!['rejected', 'retired'].includes(c.status as string)) learnedScored.set(c.name, sc);
     saveRecord(KIND, c.id, c);
   }
@@ -263,7 +270,7 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
     const before = prev?.weights?.[name] ?? 1;
     if (Math.abs(before - w) >= 0.05) changes.push(`${name} weight ${before.toFixed(2)} → ${w.toFixed(2)} (${rows.find(r => r.name === name)?.reason ?? ''})`);
   }
-  const live: LearningLive = { at, weights, active: active.map(c => ({ id: c.id, name: c.name, code: c.code, idea: c.idea })) };
+  const live: LearningLive = { at, weights, active: active.map(c => ({ id: c.id, name: c.name, code: c.code, idea: c.idea, ...(c.scale ? { scale: c.scale } : {}) })) };
   transaction(() => {
     saveValue('learningLive', live);
     // Kept separately too: the composite reads it on every tick and needs only the numbers.
@@ -334,7 +341,7 @@ ${tried}
 THE CODE
 Write plain JavaScript (no imports, no globals, no Math.random, no Date):
   function signal(o, h, l, c, v) { ... return score; }
-o, h, l, c, v are arrays of the last ${WINDOW} daily open, high, low, close and volume values, oldest first; the last element is the day being scored. Return a number from -1 (expect underperformance) to +1 (expect outperformance), or null if it cannot say. Only relative order across stocks matters, so scale is free. Helper functions may be defined inside the code. The words require, import, process, global, globalThis, constructor, prototype, Function, eval, this, Reflect, Proxy, Symbol, fetch, setTimeout are refused.
+o, h, l, c, v are arrays of the last ${WINDOW} daily open, high, low, close and volume values, oldest first; the last element is the day being scored. Return a number from -1 (expect underperformance) to +1 (expect outperformance), or null if it cannot say. Ideas are graded on the order they put stocks in, but the score also feeds a weighted average with a fixed entry floor, so centre it near 0: a typical stock should score about 0, with positive and negative scores roughly balanced. Helper functions may be defined inside the code. The words require, import, process, global, globalThis, constructor, prototype, Function, eval, this, Reflect, Proxy, Symbol, fetch, setTimeout are refused.
 
 Propose up to ${IDEAS_PER_ROUND} genuinely different ideas — not small parameter changes of what exists or what failed. Favour ideas with an economic reason (e.g. volatility compression, overnight vs intraday returns, volume shocks, distance from highs, trend quality, short-term reversal) over curve-fitting.`;
 }
@@ -403,8 +410,11 @@ export function rollbackLearning(runId: string, now = new Date()): LearningRun {
   const at = now.toISOString(), prev = readValue<LearningLive>('learningLive');
   const keep = new Set(target.active.map(a => a.id)), note = `restored by the operator to the run of ${target.at}`;
   const changes: string[] = [];
+  // Older runs saved no scales; take each signal's from its record when the run lacks it.
+  const scales = new Map(candidates().filter(c => c.scale).map(c => [c.id, c.scale!]));
+  const active = target.active.map(a => a.scale || !scales.has(a.id) ? a : { ...a, scale: scales.get(a.id) });
   const out: LearningRun = { id: 'rollback-' + at, type: 'rollback', at, tradingDay: etDate(now), weightsBefore: prev?.weights ?? {},
-    weightsAfter: { ...target.weightsAfter }, active: target.active, signals: [], changes, restoredFrom: target.id };
+    weightsAfter: { ...target.weightsAfter }, active, signals: [], changes, restoredFrom: target.id };
   transaction(() => {
     for (const c of candidates()) {
       if (keep.has(c.id) && c.status !== 'active') { changes.push(setStatus(c, 'active', note, at)); c.activeSince = etDate(now); }
@@ -412,7 +422,7 @@ export function rollbackLearning(runId: string, now = new Date()): LearningRun {
       else continue;
       saveRecord(KIND, c.id, c);
     }
-    saveValue('learningLive', { at, weights: out.weightsAfter, active: target.active } satisfies LearningLive);
+    saveValue('learningLive', { at, weights: out.weightsAfter, active } satisfies LearningLive);
     saveValue('learningWeights', out.weightsAfter);
     appendRecord(RUNS, out.id, at, out);
   });
