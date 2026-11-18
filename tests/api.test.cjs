@@ -265,6 +265,25 @@ test('lesson outcomes count closed round trips whose entry recorded the lessons 
   assert.equal(lesson.withLesson.trades,1);assert.equal(lesson.withoutLesson.trades,1);assert.equal(lesson.cited.trades,1);
   assert.equal((await request('/api/lesson-outcomes?days=0')).res.status,400);
 });
+test('lesson outcomes count a lesson cited only by the exit, and by a skip',async()=>{
+  const {recordDecision,decision}=require('../src/journal/journal');
+  const {recordFills}=require('../src/review/fills');
+  const lessonUse=require('../src/journal/lessonUse');
+  const {agentContext}=require('../src/core/agentContext');
+  const fill=(id,symbol,side,price,at)=>({execId:'lx-'+id,brokerOrderId:'lx-order-'+id,permId:null,symbol,side,qty:2,price,fee:null,at});
+  agentContext.run({role:'trader',requestId:'lx-req',actorId:'trader'},()=>{
+    lessonUse.noteLessonsShown('lx-req',['lx-exit-lesson','lx-skip-lesson']);
+    recordDecision(decision('entry','trader',{symbol:'LESSONX',executed:true,brokerOrderId:'lx-order-x1',rationale:'Breakout.'}));
+    recordDecision(decision('exit','trader',{symbol:'LESSONX',executed:true,brokerOrderId:'lx-order-x2',rationale:'Sold into strength, as lx-exit-lesson says.'}));
+    recordDecision(decision('skip','trader',{symbol:'LESSONY',rationale:'Gap too big; lx-skip-lesson.'}));
+  });
+  recordFills([fill('x1','LESSONX','buy',10,'2026-10-05T14:00:00Z'),fill('x2','LESSONX','sell',11,'2026-10-06T14:00:00Z')]);
+  const report=(await request('/api/lesson-outcomes')).body;
+  const exitLesson=report.lessons.find(l=>l.lessonId==='lx-exit-lesson');
+  assert.equal(exitLesson.cited.trades,1);
+  assert.equal(exitLesson.cited.feesIncomplete,1,'fills without fees are flagged');
+  assert.equal(report.lessons.find(l=>l.lessonId==='lx-skip-lesson').citedBySkips,1);
+});
 test('the assistant can read every dashboard page in-process, read-only',async()=>{
   const {appEndpoints,readAppEndpoint}=require('../src/server/api');
   const list=appEndpoints();

@@ -36,7 +36,8 @@ async function launch({ state = legacy, env = {}, invalidPolicy = false } = {}) 
       setTimeout(() => child.kill('SIGTERM'), 100);
     }
   });
-  const deadline = setTimeout(() => child.kill('SIGKILL'), 20000);
+  // Generous: under a full parallel test run, ts-node compiling the daemon can take well over 20 s.
+  const deadline = setTimeout(() => child.kill('SIGKILL'), 90000);
   let code, signal;
   try {
     [code, signal] = await new Promise((resolve, reject) => {

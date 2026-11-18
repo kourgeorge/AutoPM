@@ -50,7 +50,7 @@ test('an entry records the lessons its cycle was shown, and any it cited', () =>
 
 test('compareLessons splits round trips by lesson and warns when the sample is small', () => {
   const trip = (day, pnl, shown, cited = null) => ({ entryAt: `2026-01-${String(day).padStart(2, '0')}T15:00:00Z`,
-    grossPnL: pnl, returnPct: pnl / 10, lessonsShown: shown, lessonsCited: cited });
+    grossPnL: pnl, returnPct: pnl / 10, entryPrice: 100, qty: 1, fees: 0, feesComplete: true, netPnL: pnl, lessonsShown: shown, lessonsCited: cited });
   const report = compareLessons([
     trip(1, -20, []), trip(2, -10, []), trip(3, 30, ['lesson-a'], ['lesson-a']), trip(4, 10, ['lesson-a']), trip(5, 5, null),
   ]);
@@ -60,4 +60,20 @@ test('compareLessons splits round trips by lesson and warns when the sample is s
   assert.equal(a.withoutLesson.trades, 2); assert.equal(a.withoutLesson.expectancy, -15);
   assert.equal(a.cited.trades, 1);
   assert.equal(a.caveats.length, 2);
+});
+
+test('compareLessons counts a trip cited only by its exit, and skip/hold decisions that cite a lesson', () => {
+  const trip = { entryAt: '2026-01-01T15:00:00Z', grossPnL: 10, returnPct: 10, entryPrice: 100, qty: 1,
+    fees: 1, feesComplete: true, netPnL: 9, lessonsShown: ['lesson-x'], lessonsCited: null, exitLessonsCited: ['lesson-x'] };
+  const report = compareLessons([trip], [
+    { kind: 'skip', lessonsCited: ['lesson-y'] }, { kind: 'skip', lessonsCited: ['lesson-y', 'lesson-x'] },
+    { kind: 'hold', lessonsCited: ['lesson-y'] }, { kind: 'entry', lessonsCited: ['lesson-y'] },
+  ]);
+  const x = report.lessons.find(l => l.lessonId === 'lesson-x');
+  assert.equal(x.cited.trades, 1);
+  assert.equal(x.cited.pnlAfterFees, 9, 'P&L is after fees, not gross');
+  assert.equal(x.citedBySkips, 1);
+  const y = report.lessons.find(l => l.lessonId === 'lesson-y');
+  assert.equal(y.citedBySkips, 2); assert.equal(y.citedByHolds, 1); assert.equal(y.cited.trades, 0);
+  assert.match(report.pnlBasis, /after fees/);
 });
