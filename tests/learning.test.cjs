@@ -165,6 +165,50 @@ test('a raise needs the ETFs alone to agree: a signal that works only on the sto
   assert.equal(up.proposed, 1.2);
 });
 
+test('a model-written idea must agree with the ETF-only check before shadow', async () => {
+  storage.useEphemeralStorage();
+  const { LEARNING_ETFS, LEARNING_UNIVERSE } = from('learning/history');
+  const loop = from('learning/loop');
+  const dir = path.join(process.env.DATA_DIR, 'learning', 'bars');
+  const code = 'function signal(o,h,l,c,v){ return (v[v.length-1] - 1e6) / 1e6 }';
+  // Saved bars only: the first names of LEARNING_UNIVERSE are the ETFs. `etfs` says how many ETFs
+  // to save; `etfsBackwards` makes the hidden driver point the wrong way on them, so the signal's
+  // edge comes only from the stock part (as with a list of today's winners).
+  const run = async (id, { etfs = LEARNING_ETFS.length, etfsBackwards = false }) => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    const raw = [...market(26, 1600).values()];
+    raw.forEach((series, i) => {
+      const isEtf = i < LEARNING_ETFS.length;
+      if (isEtf && i >= etfs) return;
+      const bars = isEtf && etfsBackwards ? series.map(b => ({ ...b, v: 2e6 - b.v })) : series;
+      fs.writeFileSync(path.join(dir, LEARNING_UNIVERSE[i] + '.json'), JSON.stringify({ fetchedOn: '2099-01-01', bars }));
+    });
+    for (const c of loop.candidates()) storage.deleteRecord('learning-signals', c.id);
+    storage.saveRecord('learning-signals', id, { id, name: id, idea: 'test idea', code, status: 'testing', createdAt: '2026-11-01T00:00:00Z',
+      liveSince: '9999-12-31', reason: 'new', history: [] });
+    await loop.runLearning({ refresh: false, propose: false, now: new Date('2026-11-10T23:00:00Z') });
+    return loop.candidates().find(c => c.id === id);
+  };
+
+  const stocksOnly = await run('stocks-only', { etfsBackwards: true });
+  assert.ok(stocksOnly.report.periods.exam.meanIC > 0 && stocksOnly.report.etfOnly.exam.meanIC < 0, JSON.stringify(stocksOnly.report.etfOnly?.exam));
+  assert.equal(stocksOnly.status, 'rejected', stocksOnly.reason);
+  assert.match(stocksOnly.reason, /ETFs alone its exam IC is -[\d.]+, which does not have the same sign as the main exam IC [\d.]+/);
+
+  const both = await run('both', {});
+  assert.equal(both.status, 'shadow', both.reason);
+  assert.match(both.reason, /ETF-only IC [\d.]+ agrees/);
+
+  const noEtf = await run('no-etf', { etfs: 5 });
+  assert.equal(noEtf.report.etfOnly, undefined);
+  assert.equal(noEtf.status, 'rejected', noEtf.reason);
+  assert.match(noEtf.reason, /no ETF-only exam figure/);
+  for (const c of loop.candidates()) storage.deleteRecord('learning-signals', c.id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  storage.deleteValue('learningLive'); storage.deleteValue('learningWeights');
+});
+
 test('real closed trades are graded per signal from the scores saved at entry; older entries without them are skipped', () => {
   storage.useEphemeralStorage();
   for (const kind of ['journal', 'fills']) storage.forgetEphemeralRecords(kind);
