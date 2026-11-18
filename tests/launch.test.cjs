@@ -7,10 +7,15 @@ require('ts-node/register');
 const { runPair } = require('../src/launch');
 
 test('closing the paired interface gracefully stops its engine', async () => {
-  const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'autotrade-launch-')), 'engine-stopped');
-  const env = { ...process.env, AUTOTRADE_TEST_MARKER: marker };
-  const engine = ['-e', `const fs=require('fs');setInterval(()=>{},1000);process.on('SIGTERM',()=>{fs.writeFileSync(process.env.AUTOTRADE_TEST_MARKER,'stopped');process.exit(0);});`];
-  const ui = ['-e', 'setTimeout(()=>process.exit(0),300)'];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autotrade-launch-'));
+  const marker = path.join(dir, 'engine-stopped');
+  const ready = path.join(dir, 'engine-ready');
+  const env = { ...process.env, AUTOTRADE_TEST_MARKER: marker, AUTOTRADE_TEST_READY: ready };
+  // The interface closes only once the engine has its SIGTERM handler in place
+  // (it writes engine-ready right after), so a busy machine cannot stop the
+  // engine before it can record that it was stopped.
+  const engine = ['-e', `const fs=require('fs');setInterval(()=>{},1000);process.on('SIGTERM',()=>{fs.writeFileSync(process.env.AUTOTRADE_TEST_MARKER,'stopped');process.exit(0);});fs.writeFileSync(process.env.AUTOTRADE_TEST_READY,'ready');`];
+  const ui = ['-e', `const fs=require('fs');const t=setInterval(()=>{if(fs.existsSync(process.env.AUTOTRADE_TEST_READY)){clearInterval(t);process.exit(0);}},10);`];
   assert.equal(await runPair(engine, ui, true, env), 0);
   assert.equal(fs.readFileSync(marker, 'utf8'), 'stopped');
 });
