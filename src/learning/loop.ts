@@ -133,6 +133,17 @@ export function builtInStep(r: SignalReport, before: number): { proposed: number
   return { proposed: before, why: `${t.why}; raise held because ${because}`,
     held: `${r.name} weight held at ${before.toFixed(2)}: the raise to ${proposed.toFixed(2)} was not made because ${because} (the main figure may be helped by the stock list being today's winners)` };
 }
+/**
+ * The same ETF-only rule as `builtInStep`, for a model-written signal at its exam: null when the
+ * ETFs alone show an exam IC of the same sign as the main one, otherwise the plain reason to
+ * reject it. Only the exam needs this: shadow days come after the stock list was fixed, so the
+ * "today's winners" problem cannot help a signal there.
+ */
+function etfDisagrees(main: number | null, etf: number | null): string | null {
+  if (main !== null && etf !== null && etf !== 0 && Math.sign(etf) === Math.sign(main)) return null;
+  if (etf === null) return `there is no ETF-only exam figure to check its exam IC ${main} against (the main figure may be helped by the stock list being today's winners)`;
+  return `on the ETFs alone its exam IC is ${etf}, which does not have the same sign as the main exam IC ${main} (the main figure may come only from the stock list being today's winners)`;
+}
 function step(from: number, to: number): number {
   return round2(from + clamp(to - from, -MAX_STEP, MAX_STEP));
 }
@@ -227,12 +238,14 @@ export async function runLearning(opts: { propose?: boolean; refresh?: boolean; 
     const { learn, exam, live } = c.report.periods;
     if (c.status === 'testing') {
       const scoredShare = sc.points.reduce((a, p) => a + p.scores.filter(v => v !== null).length, 0) / Math.max(1, sc.points.reduce((a, p) => a + p.fwd.length, 0));
+      const etfWhy = etfDisagrees(exam.meanIC, c.report.etfOnly?.exam.meanIC ?? null);
       c.maxSimilarity = maxSimilarity(u, sc, [...compare, ...[...learnedScored].map(([name, s]) => ({ scored: s, k: 0, name }))]);
       if (scoredShare < 0.5) changes.push(setStatus(c, 'rejected', `it gave a score on only ${Math.round(scoredShare * 100)}% of stock-days`, at));
       else if (!(learn.meanIC! > 0) || !(learn.tStat! >= 2)) changes.push(setStatus(c, 'rejected', `no clear edge even on the learning years (IC ${learn.meanIC}, t ${learn.tStat})`, at));
       else if (!(exam.meanIC! > 0) || !(exam.tStat! >= examBar)) changes.push(setStatus(c, 'rejected', `failed the exam on the last two years (IC ${exam.meanIC}, t ${exam.tStat}, needed t ≥ ${examBar} after ${ideasTested} ideas)`, at));
+      else if (etfWhy) changes.push(setStatus(c, 'rejected', etfWhy, at));
       else if (c.maxSimilarity && Math.abs(c.maxSimilarity.value) > SIMILAR) changes.push(setStatus(c, 'rejected', `it is ${Math.round(Math.abs(c.maxSimilarity.value) * 100)}% the same as ${c.maxSimilarity.to}`, at));
-      else { c.liveSince = today; c.scale = scoreScale(u, sc, 0); changes.push(setStatus(c, 'shadow', `passed the exam (IC ${exam.meanIC}, t ${exam.tStat}); now scored live without counting`, at)); }
+      else { c.liveSince = today; c.scale = scoreScale(u, sc, 0); changes.push(setStatus(c, 'shadow', `passed the exam (IC ${exam.meanIC}, t ${exam.tStat}; ETF-only IC ${c.report.etfOnly?.exam.meanIC} agrees); now scored live without counting`, at)); }
     } else {
       const next = judgeLearned(c.status, live, c.report.recentLive ?? null, all.filter(x => x.status === 'active').length);
       if (next) {
