@@ -9,31 +9,63 @@
  *   - fewer than MIN_SIDE trades on either side cannot separate a lesson from luck;
  *   - "without" trades are mostly OLDER (a lesson exists only after it is written, usually
  *     after a loss), so a difference may be the market or other changes, not the lesson.
+ *
+ * A trip counts as "cited" when its entry OR its exit decision named the lesson. Skips and
+ * holds never become round trips, so the decisions that cite a lesson there are only counted.
+ *
+ * P&L is after fees, the same reading as realTradeStats (learning/loop.ts): net when every fee
+ * is known, else gross minus the fees that were reported. Alpaca bills most fees separately,
+ * so there the number is often still close to gross; `feesIncomplete` says how many trips that is.
  */
 import { computeOutcomes, type TradeOutcome } from './ledger';
+import { readDecisions } from '../journal/journal';
+import type { DecisionRecord } from '../journal/types';
 import { r } from './metrics';
 
 export const MIN_SIDE = 5;
 
-export interface SideStats { trades: number; wins: number; winRate: number | null; grossPnL: number;
+export interface SideStats { trades: number; wins: number; winRate: number | null;
+  /** Sum of P&L after the fees the fills report. */
+  pnlAfterFees: number;
+  /** Trips whose fills did not state every fee, so their P&L may still miss some costs. */
+  feesIncomplete: number;
   expectancy: number | null; avgReturnPct: number | null }
 
-export interface LessonOutcome { lessonId: string; withLesson: SideStats; withoutLesson: SideStats; cited: SideStats; caveats: string[] }
+export interface LessonOutcome { lessonId: string; withLesson: SideStats; withoutLesson: SideStats; cited: SideStats;
+  /** Skip and hold decisions whose reason named this lesson. They have no P&L, so this is a count only. */
+  citedBySkips: number; citedByHolds: number; caveats: string[] }
 
-export interface LessonOutcomeReport { tracked: number; untracked: number; lessons: LessonOutcome[] }
+export interface LessonOutcomeReport { tracked: number; untracked: number; pnlBasis: string; lessons: LessonOutcome[] }
 
-function side(list: TradeOutcome[]): SideStats {
-  const gross = list.reduce((a, o) => a + o.grossPnL, 0);
-  const wins = list.filter(o => o.grossPnL > 0).length;
-  return { trades: list.length, wins, winRate: list.length ? r(wins / list.length * 100) : null, grossPnL: r(gross)!,
-    expectancy: list.length ? r(gross / list.length) : null,
-    avgReturnPct: list.length ? r(list.reduce((a, o) => a + o.returnPct, 0) / list.length) : null };
+const PNL_BASIS = 'P&L after fees: net when every fee is known, else gross minus the fees reported (the same reading as the signal report).';
+
+/** P&L after the costs the fills report — matches realTradeStats in learning/loop.ts. */
+function pnlAfterCosts(o: TradeOutcome): number { return o.netPnL ?? o.grossPnL - (o.fees ?? 0); }
+
+function returnAfterCosts(o: TradeOutcome): number {
+  const cost = o.entryPrice * o.qty;
+  return Number.isFinite(cost) && cost > 0 ? pnlAfterCosts(o) / cost * 100 : o.returnPct;
 }
 
-/** Pure part, for tests: compare outcomes by lesson. */
-export function compareLessons(outcomes: TradeOutcome[]): LessonOutcomeReport {
+function side(list: TradeOutcome[]): SideStats {
+  const pnl = list.reduce((a, o) => a + pnlAfterCosts(o), 0);
+  const wins = list.filter(o => pnlAfterCosts(o) > 0).length;
+  return { trades: list.length, wins, winRate: list.length ? r(wins / list.length * 100) : null, pnlAfterFees: r(pnl)!,
+    feesIncomplete: list.filter(o => !o.feesComplete).length,
+    expectancy: list.length ? r(pnl / list.length) : null,
+    avgReturnPct: list.length ? r(list.reduce((a, o) => a + returnAfterCosts(o), 0) / list.length) : null };
+}
+
+const citesOnTrip = (o: TradeOutcome, id: string) => !!(o.lessonsCited?.includes(id) || o.exitLessonsCited?.includes(id));
+
+/** Pure part, for tests: compare outcomes by lesson. `decisions` adds the skip/hold citation counts. */
+export function compareLessons(outcomes: TradeOutcome[], decisions: DecisionRecord[] = []): LessonOutcomeReport {
   const tracked = outcomes.filter(o => o.lessonsShown != null);
-  const ids = [...new Set(tracked.flatMap(o => [...o.lessonsShown!, ...(o.lessonsCited ?? [])]))];
+  const skipsAndHolds = decisions.filter(d => (d.kind === 'skip' || d.kind === 'hold') && d.lessonsCited?.length);
+  const ids = [...new Set([
+    ...tracked.flatMap(o => [...o.lessonsShown!, ...(o.lessonsCited ?? []), ...(o.exitLessonsCited ?? [])]),
+    ...skipsAndHolds.flatMap(d => d.lessonsCited!),
+  ])];
   const lessons = ids.map(id => {
     const withL = tracked.filter(o => o.lessonsShown!.includes(id));
     const withoutL = tracked.filter(o => !o.lessonsShown!.includes(id));
@@ -45,14 +77,20 @@ export function compareLessons(outcomes: TradeOutcome[]): LessonOutcomeReport {
       const firstWith = Math.min(...withL.map(o => Date.parse(o.entryAt)));
       if (lastWithout <= firstWith) caveats.push('Every trade without this lesson came before the first trade with it, so a difference may be the market changing, not the lesson.');
     }
+    const noFees = tracked.filter(o => !o.feesComplete).length;
+    if (noFees) caveats.push(`${noFees} of ${tracked.length} trips have no full fee record (no after-fee P&L in the ledger), so their P&L is gross minus only the fees reported.`);
+    const citing = skipsAndHolds.filter(d => d.lessonsCited!.includes(id));
     return { lessonId: id, withLesson: side(withL), withoutLesson: side(withoutL),
-      cited: side(tracked.filter(o => o.lessonsCited?.includes(id))), caveats };
+      cited: side(tracked.filter(o => citesOnTrip(o, id))),
+      citedBySkips: citing.filter(d => d.kind === 'skip').length, citedByHolds: citing.filter(d => d.kind === 'hold').length, caveats };
   }).sort((a, b) => b.withLesson.trades - a.withLesson.trades);
-  return { tracked: tracked.length, untracked: outcomes.length - tracked.length, lessons };
+  return { tracked: tracked.length, untracked: outcomes.length - tracked.length, pnlBasis: PNL_BASIS, lessons };
 }
 
-/** The comparison over closed round trips, optionally only those exited in the last `days`. */
+/** The comparison over closed round trips (and skips/holds), optionally only the last `days`. */
 export function lessonOutcomes(opts: { days?: number } = {}): LessonOutcomeReport {
   const since = opts.days != null ? new Date(Date.now() - opts.days * 86_400_000) : undefined;
-  return compareLessons(computeOutcomes({ since }));
+  const cutoff = since?.toISOString();
+  const decisions = readDecisions({ filter: d => (d.kind === 'skip' || d.kind === 'hold') && !!d.lessonsCited?.length && (!cutoff || d.at >= cutoff) });
+  return compareLessons(computeOutcomes({ since }), decisions);
 }

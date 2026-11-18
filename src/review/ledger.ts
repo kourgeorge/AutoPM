@@ -67,6 +67,8 @@ export interface TradeOutcome {
   /** Lessons in the entry's cycle context, and those its reason cited; null when not tracked. */
   lessonsShown: string[] | null;
   lessonsCited: string[] | null;
+  /** Lessons the exit decision's reason cited; null when the exit is unmatched or cited none. */
+  exitLessonsCited: string[] | null;
 
   /**
    * True when the fills for this round trip do not add up — a sell larger than the position
@@ -275,6 +277,7 @@ function assemble(
     signalsAtEntry:   entryDecision?.signalsAtEntry ?? null,
     lessonsShown:     entryDecision?.lessonsShown ?? null,
     lessonsCited:     entryDecision?.lessonsCited ?? null,
+    exitLessonsCited: exitDecision?.lessonsCited ?? null,
     unexplained,
   };
 }
