@@ -132,6 +132,48 @@ const IB_SIDE: Record<string, 'buy' | 'sell'> = {
   BOT: 'buy', BUY: 'buy', SLD: 'sell', SELL: 'sell',
 };
 
+/**
+ * The side of an order from TWS's `action` field, or null when the spelling is not one we know.
+ * Uses the same table as executions, so `BOT`/`SLD` read the same way here as on a fill.
+ */
+export function ibOrderSide(action: unknown): 'buy' | 'sell' | null {
+  return IB_SIDE[String(action ?? '').trim().toUpperCase()] ?? null;
+}
+
+/**
+ * One TWS open order in this system's terms, or a rejection saying why it could not be read.
+ *
+ * The side is never guessed. The old mapping was `action === 'BUY' ? 'buy' : 'sell'`, which
+ * read a blank or differently spelled buy as a sell; `freeQty` then reserved the shares against
+ * it and the stop sweep left the position with no stop at the venue, silently, every tick.
+ */
+export function mapIbOrder(o: IbOrder): { ok: true; order: OpenOrder } | { ok: false; reason: string } {
+  const side = ibOrderSide(o.order?.action);
+  if (!side) return { ok: false, reason: `unrecognised order side "${o.order?.action ?? ''}"` };
+  const rawType = String(o.order.orderType ?? '');
+  const type = IB_ORDER_TYPES[rawType] ?? 'other';
+  // TWS overloads one field: `auxPrice` is the trigger on a stop and the trail distance
+  // on a TRAIL. Reading it as one or the other is what makes a trailing stop legible.
+  const aux = typeof o.order.auxPrice === 'number' ? o.order.auxPrice : undefined;
+  return { ok: true, order: {
+    id:           String(o.orderId),
+    clientOrderId: o.order.orderRef,
+    groupId: o.order.ocaGroup,
+    symbol:       o.contract?.symbol ?? '',
+    side,
+    qty:          Number(o.order.totalQuantity ?? 0),
+    filled:       o.orderStatus?.filled ?? 0,
+    type,
+    rawType,
+    limitPrice:   o.order.lmtPrice ?? undefined,
+    stopPrice:    type === 'stop' || type === 'stop_limit' ? aux : undefined,
+    trailPercent: o.order.trailingPercent ?? undefined,
+    trailAmount:  type === 'trailing_stop' ? aux : undefined,
+    tif:          o.order.tif ? String(o.order.tif) : undefined,
+    status:       String(o.orderStatus?.status ?? 'Unknown'),
+  } };
+}
+
 export class IBKRBroker implements IBroker {
   /** TWS cannot prove a historical order is absent (see `lookupOrder`). */
   readonly provesOrderAbsence = false;
@@ -235,30 +277,14 @@ export class IBKRBroker implements IBroker {
 
   async getOpenOrders(): Promise<OpenOrder[]> {
     const orders = await withTimeout(this.api.getAllOpenOrders(), 'getOpenOrders');
-    return orders.filter(o => o.order.account === this.account).map(o => {
-      const rawType = String(o.order.orderType ?? '');
-      const type = IB_ORDER_TYPES[rawType] ?? 'other';
-      // TWS overloads one field: `auxPrice` is the trigger on a stop and the trail distance
-      // on a TRAIL. Reading it as one or the other is what makes a trailing stop legible.
-      const aux = typeof o.order.auxPrice === 'number' ? o.order.auxPrice : undefined;
-      return {
-        id:           String(o.orderId),
-        clientOrderId: o.order.orderRef,
-        groupId: o.order.ocaGroup,
-        symbol:       o.contract.symbol ?? '',
-        side:         (o.order.action === 'BUY' ? 'buy' : 'sell') as 'buy' | 'sell',
-        qty:          Number(o.order.totalQuantity ?? 0),
-        filled:       o.orderStatus?.filled ?? 0,
-        type,
-        rawType,
-        limitPrice:   o.order.lmtPrice ?? undefined,
-        stopPrice:    type === 'stop' || type === 'stop_limit' ? aux : undefined,
-        trailPercent: o.order.trailingPercent ?? undefined,
-        trailAmount:  type === 'trailing_stop' ? aux : undefined,
-        tif:          o.order.tif ? String(o.order.tif) : undefined,
-        status:       String(o.orderStatus?.status ?? 'Unknown'),
-      };
-    });
+    const result: OpenOrder[] = [];
+    for (const o of orders) {
+      if (o.order.account !== this.account) continue;
+      const mapped = mapIbOrder(o);
+      if (mapped.ok) result.push(mapped.order);
+      else logger.warn(`[IBKR] Open order ${o.orderId ?? '?'} left out: ${mapped.reason}`);
+    }
+    return result;
   }
 
   async placeOrder(req: OrderRequest): Promise<{ id: string }> {
@@ -346,10 +372,13 @@ export class IBKRBroker implements IBroker {
     for (const order of orders) if (order.order.account === this.account) this.observedOrders.set(String(order.orderId), order);
     const order = [...this.observedOrders.values()].find(o => o.order.account === this.account && (id ? String(o.orderId) === id : o.order.orderRef === ref));
     if (!order) return null; // TWS cannot prove a historical order is absent. Never auto-resubmit.
+    // Never guess the side: a buy read as a sell is shares the stop sweep thinks are committed.
+    const side = ibOrderSide(order.order.action);
+    if (!side) throw new Error(`IBKR order ${order.orderId} has an unrecognised side "${order.order.action ?? ''}"`);
     const filledQty = order.orderStatus?.filled ?? 0;
     const status = String(order.orderStatus?.status ?? '');
     return { id: String(order.orderId), clientOrderId: order.order.orderRef,
-      symbol: order.contract.symbol ?? '', side: order.order.action === 'BUY' ? 'buy' : 'sell',
+      symbol: order.contract.symbol ?? '', side,
       qty: Number(order.order.totalQuantity), filledQty, filledPrice: order.orderStatus?.avgFillPrice ?? null,
       status: status === 'Filled' ? 'filled' : ['Cancelled','ApiCancelled'].includes(status) ? 'cancelled'
         : status === 'Inactive' ? 'rejected' : filledQty > 0 ? 'partial' : 'open' };

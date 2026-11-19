@@ -57,7 +57,7 @@ const { computeOutcomes } = require('../src/review/ledger');
 // which imports the factory, which constructs a broker — loading the class directly first
 // makes that a circular import where the class is still half-initialised.
 require('../src/broker');
-const { IBKRBroker } = require('../src/broker/IBKRBroker');
+const { IBKRBroker, mapIbOrder } = require('../src/broker/IBKRBroker');
 
 const contract = { conId: 1, symbol: 'AAPL', secType: 'STK', currency: 'USD' };
 const execution = (over = {}) => ({
@@ -147,4 +147,44 @@ test('execution timestamps in US/Eastern parse with the DST offset', async () =>
   const at = Object.fromEntries(fills.map(f => [f.execId, f.at]));
   assert.equal(at['winter.01'], '2026-11-27T20:30:00.000Z');
   assert.equal(at['summer.01'], '2026-07-15T19:30:00.000Z');
+});
+
+// An order side the gateway spells in a way we do not know must never read as a sell: the stop
+// sweep reserves shares against every sell order, so a buy misread as a sell leaves the position
+// with no stop at the venue.
+const sideOrder = (orderId, action) => ({
+  orderId, contract,
+  order: { account: 'DU1234567', action, orderType: 'LMT', lmtPrice: 100, totalQuantity: 10, orderRef: `ref-${orderId}` },
+  orderStatus: { status: 'Submitted', filled: 0 },
+});
+
+test('mapIbOrder rejects a blank side instead of calling it a sell', () => {
+  const r = mapIbOrder({ order: { action: '', orderType: 'STP', auxPrice: 95, totalQuantity: 10, account: 'DU1' }, contract: { symbol: 'AAPL' } });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /side/);
+  for (const action of [undefined, 'HOLD', 'SSHORT']) assert.equal(mapIbOrder(sideOrder(1, action)).ok, false);
+});
+
+test('mapIbOrder reads BUY/SELL and the execution spellings BOT/SLD', () => {
+  const side = action => { const r = mapIbOrder(sideOrder(1, action)); assert.equal(r.ok, true); return r.order.side; };
+  assert.equal(side('BUY'), 'buy');
+  assert.equal(side('SELL'), 'sell');
+  assert.equal(side('BOT'), 'buy');
+  assert.equal(side('SLD'), 'sell');
+  assert.equal(side('Buy'), 'buy');
+});
+
+test('getOpenOrders leaves out an order with an unknown side and keeps BOT as a buy', async () => {
+  const b = brokerWith({ orders: [sideOrder(1, ''), sideOrder(2, 'BOT'), sideOrder(3, 'SELL')] });
+  const parsed = await b.getOpenOrders();
+  assert.deepEqual(parsed.map(o => [o.id, o.side]), [['2', 'buy'], ['3', 'sell']]);
+});
+
+test('getOrder/findOrder refuse an unknown side and read BOT as a buy', async () => {
+  const b = brokerWith({ orders: [sideOrder(1, ''), sideOrder(2, 'BOT'), sideOrder(3, 'SLD')] });
+  await assert.rejects(b.getOrder('1'), /unrecognised side/);
+  await assert.rejects(b.findOrder('ref-1'), /unrecognised side/);
+  assert.equal((await b.getOrder('2')).side, 'buy');
+  assert.equal((await b.findOrder('ref-2')).side, 'buy');
+  assert.equal((await b.getOrder('3')).side, 'sell');
 });
