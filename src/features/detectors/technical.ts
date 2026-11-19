@@ -20,6 +20,7 @@
 
 import { boolCrossing, type Detector, type DetectorHit } from '../eventBus';
 import { getCachedRegime } from '../../macro/regime';
+import { resolveCompositeMin } from '../../collect/tickerMetrics';
 import { signalTally } from '../../strategy/signals';
 import { bandOf, pctText } from './util';
 
@@ -106,9 +107,7 @@ export const entrySignalDetector: Detector = {
     const effectiveRsiMin = regime
       ? policy.regime[regime.regime].rsiEntryMin
       : policy.strategy.rsiEntryMin;
-    const effectiveCompositeMin = regime
-      ? policy.regime[regime.regime].compositeMin
-      : policy.strategy.compositeMin;
+    const effectiveCompositeMin = resolveCompositeMin(policy, regime?.regime);
 
     for (const f of Object.values(data.watchlist)) {
       // No entry off a stale price, and none at all until the series is long enough to say

@@ -203,3 +203,34 @@ test('extended-hours prices keep their real trade time; overnight prices are res
   const regular = new Date('2026-11-04T16:00:00Z');
   assert.equal(effectiveAsOf('2026-11-04T15:58:00Z', regular), '2026-11-04T15:58:00.000Z');
 });
+
+test('the entry gate, the entry detector and the ticker page share one entry threshold', async () => {
+  const { resolveCompositeMin, tickerMetrics } = require('../src/collect/tickerMetrics');
+  const { computeSignals, signalTally } = require('../src/strategy/signals');
+  const { entrySignalDetector } = require('../src/features/detectors/technical');
+  const cachedRegime = regime.getCachedRegime;
+  // Thresholds placed either side of what these bars actually score, so the base one lets the
+  // entry through and the raised recession one refuses it.
+  const series = (await bars.collectBars('AAPL')).value, p0 = policy.getPolicy();
+  const composite = signalTally(computeSignals(series, p0)).composite;
+  const p = { ...p0, strategy: { ...p0.strategy, compositeMin: composite - 0.01 },
+    regime: { ...p0.regime, recession: { ...p0.regime.recession, compositeMin: composite + 0.01 } } };
+  policy.useEphemeralPolicy(p);
+  const row = { symbol: 'AAPL', price: 100, stale: false, emaCrossedUp: true, rsi: 99, emaFast: 1, emaSlow: 1, atr: 2,
+    signals: [{ name: 'x', score: 1 }], signalSummary: 'x', reversal: { chasing: false } };
+  const detectorMin = () => entrySignalDetector.evaluate({ watchlist: { AAPL: row } }, p)[0].evidence.compositeMin;
+  const pageMin = r => tickerMetrics({ symbol: 'AAPL', bars: series, policy: p, compositeMin: resolveCompositeMin(p, r) }).trend.compositeMin;
+  try {
+    regime.getCachedRegime = () => null;
+    assert.equal(pageMin(null), p.strategy.compositeMin);
+    assert.equal(detectorMin(), p.strategy.compositeMin);
+    await orders.validateEntry(signal, 2); // clears the base threshold
+
+    regime.getCachedRegime = () => ({ regime: 'recession', confidence: 'high' });
+    const raised = pageMin('recession');
+    assert.equal(raised, p.regime.recession.compositeMin);
+    assert.equal(detectorMin(), raised);
+    await assert.rejects(() => orders.validateEntry(signal, 2),
+      err => err.rule === 'low_composite' && err.message.includes(`entry minimum of +${raised.toFixed(2)}`));
+  } finally { regime.getCachedRegime = cachedRegime; }
+});

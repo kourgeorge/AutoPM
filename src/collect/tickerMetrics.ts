@@ -108,9 +108,9 @@ const mean = (values: number[]): number => values.reduce((s, v) => s + v, 0) / v
 
 /**
  * The entry threshold that actually gates entries: the cached macro regime's `compositeMin` when
- * one is cached, else `policy.strategy.compositeMin`. Same resolution as `entrySignalVeto` in
- * `orderManager.ts` and the armed detector in `technical.ts`, so the page never shows a lower bar
- * than the one entries are refused on.
+ * one is cached, else `policy.strategy.compositeMin`. The one copy of this rule: the entry gate in
+ * `orderManager.ts` and the armed detector in `technical.ts` call it too, so the page never shows
+ * a lower bar than the one entries are refused on.
  */
 export function resolveCompositeMin(policy: Policy, regime: Regime | null | undefined): number {
   return regime ? policy.regime[regime].compositeMin : policy.strategy.compositeMin;
