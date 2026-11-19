@@ -15,6 +15,7 @@ import { canonicalSymbol } from '../core/symbols';
 import type { OpenOrder, Position } from '../broker/IBroker';
 import { collectBars, DEFAULT_COLLECT_REQUEST, isPresent, type Maybe } from '../collect';
 import { getFundamentals, type Fundamentals } from '../collect/fundamentals';
+import { resolveCompositeMin } from '../collect/tickerMetrics';
 import { logger } from '../core/logger';
 import { isCryptoSymbol, sameSymbol } from '../core/symbols';
 import { getPositionSnapshot, getState, updateState, patchPositionSnapshot } from '../state/state';
@@ -187,9 +188,7 @@ export function entrySignalVeto(
  */
 async function refuseUnlessSignalsSupport(symbol: string, regime: Regime | null): Promise<void> {
   const policy = getPolicy();
-  const compositeMin = regime
-    ? policy.regime[regime].compositeMin
-    : policy.strategy.compositeMin;
+  const compositeMin = resolveCompositeMin(policy, regime);
 
   // Same request shape as `get_signals` and as the tick, so a guard, a tool and an event can
   // never report different scores for one symbol at one moment.
