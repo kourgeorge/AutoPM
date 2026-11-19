@@ -204,8 +204,11 @@ test('extended-hours prices keep their real trade time; overnight prices are res
   assert.equal(effectiveAsOf('2026-11-04T15:58:00Z', regular), '2026-11-04T15:58:00.000Z');
 });
 
-test('the entry gate, the entry detector and the ticker page share one entry threshold', async () => {
+test('the entry gate, the entry detector, the ticker page and entry planning share one entry threshold', async () => {
   const { resolveCompositeMin, tickerMetrics } = require('../src/collect/tickerMetrics');
+  const scanMod = require('../src/features/watchlistScan'), riskData = require('../src/strategy/riskData');
+  const riskBudget = require('../src/strategy/riskBudget'), { riskAwareWatchlistScan } = require('../src/strategy/entryPlanning');
+  const kept = { scan: scanMod.watchlistScan, inputs: riskData.collectRiskInputs, assess: riskBudget.assessEntryRisk };
   const { computeSignals, signalTally } = require('../src/strategy/signals');
   const { entrySignalDetector } = require('../src/features/detectors/technical');
   const cachedRegime = regime.getCachedRegime;
@@ -213,9 +216,14 @@ test('the entry gate, the entry detector and the ticker page share one entry thr
   // entry through and the raised recession one refuses it.
   const series = (await bars.collectBars('AAPL')).value, p0 = policy.getPolicy();
   const composite = signalTally(computeSignals(series, p0)).composite;
-  const p = { ...p0, strategy: { ...p0.strategy, compositeMin: composite - 0.01 },
+  const p = { ...p0, risk: { ...p0.risk, riskPerTradePct: 1 }, strategy: { ...p0.strategy, compositeMin: composite - 0.01 },
     regime: { ...p0.regime, recession: { ...p0.regime.recession, compositeMin: composite + 0.01 } } };
   policy.useEphemeralPolicy(p);
+  // Entry planning's shortlist: one scored row with risk checks stubbed to "fits", so only the threshold decides.
+  scanMod.watchlistScan = () => ({ rows: [{ symbol: 'AAPL', price: 100, atr: 2, tally: { composite } }], caveats: [] });
+  riskData.collectRiskInputs = async () => ({});
+  riskBudget.assessEntryRisk = () => ({ allowed: true, volatilityBeforePct: 0, volatilityAfterPct: 0 });
+  const planned = async () => { const s = await riskAwareWatchlistScan(); return { min: s.effectiveCompositeMin, ranked: s.rows[0].riskAdjustedScore != null }; };
   const row = { symbol: 'AAPL', price: 100, stale: false, emaCrossedUp: true, rsi: 99, emaFast: 1, emaSlow: 1, atr: 2,
     signals: [{ name: 'x', score: 1 }], signalSummary: 'x', reversal: { chasing: false } };
   const detectorMin = () => entrySignalDetector.evaluate({ watchlist: { AAPL: row } }, p)[0].evidence.compositeMin;
@@ -224,13 +232,18 @@ test('the entry gate, the entry detector and the ticker page share one entry thr
     regime.getCachedRegime = () => null;
     assert.equal(pageMin(null), p.strategy.compositeMin);
     assert.equal(detectorMin(), p.strategy.compositeMin);
+    assert.deepEqual(await planned(), { min: p.strategy.compositeMin, ranked: true });
     await orders.validateEntry(signal, 2); // clears the base threshold
 
     regime.getCachedRegime = () => ({ regime: 'recession', confidence: 'high' });
     const raised = pageMin('recession');
     assert.equal(raised, p.regime.recession.compositeMin);
     assert.equal(detectorMin(), raised);
+    assert.deepEqual(await planned(), { min: raised, ranked: false });
     await assert.rejects(() => orders.validateEntry(signal, 2),
       err => err.rule === 'low_composite' && err.message.includes(`entry minimum of +${raised.toFixed(2)}`));
-  } finally { regime.getCachedRegime = cachedRegime; }
+  } finally {
+    regime.getCachedRegime = cachedRegime;
+    scanMod.watchlistScan = kept.scan; riskData.collectRiskInputs = kept.inputs; riskBudget.assessEntryRisk = kept.assess;
+  }
 });
