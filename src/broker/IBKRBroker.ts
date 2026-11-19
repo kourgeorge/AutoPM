@@ -583,6 +583,17 @@ export class IBKRBroker implements IBroker {
           logger.warn(`[IBKR] Fill ${e.execId} has an unrecognised side "${e.side}" — skipped`);
           return [];
         }
+        // An execution with no price is DROPPED, not recorded as 0. The P&L matchers only
+        // reject a price that is not a finite number (see `computeOutcomes`), so a 0 here
+        // passes: a "$0 buy" followed by a real sale books the whole sale as profit, which
+        // reaches the scorecard and the learning weights and rewards a trade that never
+        // made money. Alpaca's parse yields `NaN` for the same missing field and is dropped
+        // there; a negative price is equally impossible and equally dropped.
+        const price = e.price;
+        if (price == null || !Number.isFinite(price) || price <= 0) {
+          logger.warn(`[IBKR] Fill ${e.execId} has no usable price (${String(price)}) — skipped`);
+          return [];
+        }
         return [{
           execId:  e.execId!,
           // Non-durable across client sessions, which is why `permId` is carried too.
@@ -592,7 +603,7 @@ export class IBKRBroker implements IBroker {
           symbol:  contract.symbol ?? '',
           side,
           qty:     e.shares ?? 0,
-          price:   e.price ?? 0,
+          price,
           fee:     feeByExecId.get(e.execId!) ?? null,
           // Ingest time on a parse failure, not a dropped fill: a fill missing from the
           // ledger corrupts every FIFO match after it, while a wrong timestamp only

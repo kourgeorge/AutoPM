@@ -12,6 +12,7 @@ import { llmUsage, llmUsageForDay } from '../review/llmUsage';
 import { candidates, signalScorecard, saveLearningSettings, triggerLearning, learningRuns, rollbackLearning } from '../learning/loop';
 import { serviceStatus } from './status';
 import { getPolicySnapshot, saveStrategy } from '../policy/load';
+import { signalTally } from '../strategy/signals';
 import { getState } from '../state/state';
 import { listRecords, readRecord } from '../core/storage';
 import { canonicalSymbol } from '../core/symbols';
@@ -437,7 +438,13 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     const tick = getLastTick();
     return {
       lastTickAt: tick?.tickAt ?? null,
-      watchlist: tick ? Object.values(tick.watchlist) : [],
+      // The composite is the learned weighted one, the number the entry gate reads — not a
+      // plain mean of the scores. Same reduction the TUI and the compact scan use.
+      watchlist: tick ? Object.values(tick.watchlist).map(row => ({
+        ...row,
+        composite: signalTally(row.signals).composite,
+        meanReversionComposite: signalTally(row.meanReversionSignals).composite,
+      })) : [],
     };
   });
 
