@@ -12,6 +12,7 @@
 
 import type { Bar } from '../core/types';
 import type { Policy } from '../policy/types';
+import type { Regime } from '../macro/regime';
 import { computeSignals, signalTally, type SignalScore } from '../strategy/signals';
 import { computeMeanReversionSignals } from '../strategy/meanReversion';
 import { reversalFilter, type ReversalFilter } from '../strategy/reversal';
@@ -106,6 +107,16 @@ const lastOf = (series: number[]): number | null => series.length ? series[serie
 const mean = (values: number[]): number => values.reduce((s, v) => s + v, 0) / values.length;
 
 /**
+ * The entry threshold that actually gates entries: the cached macro regime's `compositeMin` when
+ * one is cached, else `policy.strategy.compositeMin`. Same resolution as `entrySignalVeto` in
+ * `orderManager.ts` and the armed detector in `technical.ts`, so the page never shows a lower bar
+ * than the one entries are refused on.
+ */
+export function resolveCompositeMin(policy: Policy, regime: Regime | null | undefined): number {
+  return regime ? policy.regime[regime].compositeMin : policy.strategy.compositeMin;
+}
+
+/**
  * PURE. Everything numeric on the page, from a daily series and what the caller already holds.
  * `bars` are completed daily sessions, oldest first.
  */
@@ -117,6 +128,8 @@ export function tickerMetrics(input: {
   quote?: { price: number; stale: boolean } | null;
   fundamentals?: Fundamentals | null;
   analysts?: AnalystView | null;
+  /** The resolved entry threshold (see `resolveCompositeMin`); defaults to the base strategy value. */
+  compositeMin?: number;
   now?: Date;
 }): TickerMetrics {
   const { symbol, bars, policy, row = null, fundamentals = null, analysts = null } = input;
@@ -190,7 +203,7 @@ export function tickerMetrics(input: {
       volatilityPct: round(volatility, 1),
       relativeVolume: priorVolume ? round(volumes[20] / priorVolume) : null,
     },
-    trend: { composite: trendSignals.length ? signalTally(trendSignals).composite : null, compositeMin: s.compositeMin, signals: trendSignals },
+    trend: { composite: trendSignals.length ? signalTally(trendSignals).composite : null, compositeMin: input.compositeMin ?? s.compositeMin, signals: trendSignals },
     meanReversion: { composite: mrSignals.length ? signalTally(mrSignals).composite : null, signals: mrSignals },
     reversal: row?.reversal ?? (window.length ? reversalFilter(window, fundamentals?.liquidity.marketCap ?? null) : null),
     indicatorSource: fromTick ? 'tick' : scored ? 'bars' : null,

@@ -317,6 +317,24 @@ test('ticker metrics place the price in its 52-week range and keep each data sou
     assert.equal(m.fundamentals,null);assert.deepEqual(m.errors,['Company fundamentals are unavailable.']);
   } finally {[collector.collectBars,yahoo.getAnalystRaw,fundamentals.getFundamentals]=original;}
 });
+test('ticker metrics show the regime-adjusted entry threshold, the same one the entry gate uses',async()=>{
+  const collector=require('../src/collect/barSource'),yahoo=require('../src/collect/yahoo'),fundamentals=require('../src/collect/fundamentals'),regime=require('../src/macro/regime');
+  const { resolveCompositeMin }=require('../src/collect/tickerMetrics');
+  const original=[collector.collectBars,yahoo.getAnalystRaw,fundamentals.getFundamentals,regime.getCachedRegime];
+  try {
+    collector.collectBars=async()=>({value:[],source:'alpaca',stale:false,fetchedAt:new Date().toISOString(),asOf:null});
+    yahoo.getAnalystRaw=async()=>{throw new Error('off');};fundamentals.getFundamentals=async()=>{throw new Error('off');};
+    const p=policy.getPolicy();
+    regime.getCachedRegime=()=>null;
+    const base=(await request('/api/ticker-metrics?symbol=regimetest')).body;
+    assert.equal(base.trend.compositeMin,p.strategy.compositeMin);assert.equal(base.trend.compositeMin,0.2);
+    regime.getCachedRegime=()=>({regime:'recession'});
+    const raised=(await request('/api/ticker-metrics?symbol=regimetest')).body;
+    assert.equal(raised.trend.compositeMin,0.3,'a cached base-threshold answer is not reused under a raised regime');
+    assert.equal(resolveCompositeMin(p,'recession'),p.regime.recession.compositeMin);
+    assert.equal(resolveCompositeMin(p,null),p.strategy.compositeMin);
+  } finally {[collector.collectBars,yahoo.getAnalystRaw,fundamentals.getFundamentals,regime.getCachedRegime]=original;}
+});
 test('a reconnecting stream that replays a large backlog does not crash the server',async()=>{
   const ui=new HeadlessUI(),own=startApiServer({ui,trader:{status:{paused:false}},serveWeb:false});
   await new Promise(resolve=>setTimeout(resolve,30));
