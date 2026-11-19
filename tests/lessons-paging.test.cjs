@@ -9,7 +9,7 @@ Object.assign(process.env, {
   BROKER: 'alpaca', HEADLESS: '1', AI_PROVIDER: 'ollama', AI_API_KEY: 'test',
   ALPACA_KEY_ID: 'test', ALPACA_SECRET_KEY: 'test', ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
 });
-require(root + '/node_modules/ts-node/register');
+require('ts-node/register');
 const denyNetwork = () => { throw new Error('Unexpected network access in lessons paging test'); };
 require('node:http').request = require('node:https').request = global.fetch = denyNetwork;
 const from = name => require(root + '/src/' + name);

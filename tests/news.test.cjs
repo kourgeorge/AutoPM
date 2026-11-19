@@ -7,7 +7,7 @@ Object.assign(process.env, {
   ALPACA_KEY_ID: 'audit', ALPACA_SECRET_KEY: 'audit',
   ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
 });
-require(root + '/node_modules/ts-node/register');
+require('ts-node/register');
 const { shapeYahooNews } = require(root + '/src/collect/yahoo');
 const { executeResearchTool, RESEARCH_TOOL_DEFINITIONS } = require(root + '/src/tools/researchTools');
 

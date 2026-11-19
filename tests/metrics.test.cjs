@@ -10,7 +10,7 @@ Object.assign(process.env, {
   ALPACA_KEY_ID: 'test', ALPACA_SECRET_KEY: 'test',
   ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
 });
-require(root + '/node_modules/ts-node/register');
+require('ts-node/register');
 const { scorecard } = require(root + '/src/review/metrics');
 const { recordFills } = require(root + '/src/review/fills');
 const journal = require(root + '/src/journal/journal');

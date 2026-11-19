@@ -11,7 +11,7 @@ Object.assign(process.env, {
   ALPACA_KEY_ID: 'test', ALPACA_SECRET_KEY: 'test',
   ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
 });
-require(root + '/node_modules/ts-node/register');
+require('ts-node/register');
 const denyNetwork = () => { throw new Error('Unexpected network access in litellm tags test'); };
 require('node:http').request = denyNetwork;
 require('node:https').request = denyNetwork;

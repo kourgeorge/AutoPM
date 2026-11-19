@@ -12,7 +12,7 @@ Object.assign(process.env, {
   ALPACA_BASE_URL: 'https://paper-api.alpaca.markets',
 });
 delete process.env.AI_REASONING_EFFORT;
-require(root + '/node_modules/ts-node/register');
+require('ts-node/register');
 const denyNetwork = () => { throw new Error('Unexpected network access in openai cache test'); };
 require('node:http').request = denyNetwork;
 require('node:https').request = denyNetwork;
