@@ -361,3 +361,19 @@ test('AI model and key can be changed from settings, apply to the next call, and
   const reset=(await request('/api/settings/ai-connection',{model:null,apiKey:null})).body;
   assert.equal(reset.modelSource,'env');assert.equal(reset.keySource,'env');assert.equal(reset.model,start.model);
 });
+test('the watchlist API shows the learned weighted composite the entry gate reads, not a plain mean',async()=>{
+  const {signalTally}=require('../src/strategy/signals');
+  // A weight other than 1: +1 and -0.5 average to +0.25, but weigh 0.5 and 2 and they come to -0.20.
+  const trend=[{name:'EMA Momentum',score:1,detail:'up'},{name:'MACD',score:-0.5,detail:'down'}];
+  const meanReversion=[{name:'RSI Reversion',score:-1,detail:'overbought'}];
+  storage.saveValue('learningWeights',{'EMA Momentum':0.5,MACD:2});
+  try {
+    recordTick({positions:{},orders:[],account:{equity:100000},portfolio:{},tickAt:new Date().toISOString(),
+      watchlist:{WEIGHTED:{symbol:'WEIGHTED',price:100,signals:trend,meanReversionSignals:meanReversion,signalSummary:'composite -0.20',meanReversionSummary:'composite -1.00'}}});
+    const row=(await request('/api/watchlist')).body.watchlist.find(r=>r.symbol==='WEIGHTED');
+    assert.equal(row.composite,signalTally(trend).composite);
+    assert.equal(row.composite,-0.2);
+    assert.notEqual(row.composite,0.25,'the plain mean is not what the watchlist shows');
+    assert.equal(row.meanReversionComposite,signalTally(meanReversion).composite);
+  } finally {storage.deleteValue('learningWeights');}
+});

@@ -703,11 +703,6 @@ function renderPortfolio(p, s) {
   $('open-pnl').className = direction(openPnl);
   $('open-pnl-pct').textContent = priced && cost ? `${signedPct(openPnl / cost * 100)} on cost` : '';
 }
-// Match the TUI's equally weighted composite, rounded to three decimals before display.
-function watchComposite(signals) {
-  const scores=(signals || []).map(signal=>signal.score);
-  return scores.length && scores.every(Number.isFinite) ? Number((scores.reduce((sum,score)=>sum+score,0)/scores.length).toFixed(3)) : null;
-}
 // The search box filters the last watchlist snapshot; Enter opens a ticker even when it is not watched.
 let lastWatchlist = {watchlist:[],lastTickAt:null};
 const watchFilter = $('watchlist-filter');
@@ -725,8 +720,8 @@ $('watchlist-search').addEventListener('submit', event => {
 function renderWatchlist(data) {
   lastWatchlist=data;
   const outdated=!data.lastTickAt || Date.now()-Date.parse(data.lastTickAt)>180000,q=watchQuery(),total=(data.watchlist || []).length;
-  const list=watchMatches(data).map(row=>({...row,trend:watchComposite(row.signals),mr:watchComposite(row.meanReversionSignals)}))
-    .sort((a,b)=>(b.trend ?? -Infinity)-(a.trend ?? -Infinity) || a.symbol.localeCompare(b.symbol));
+  // The server sends the learned weighted composite the entry gate reads; sort on it.
+  const list=[...watchMatches(data)].sort((a,b)=>(b.composite ?? -Infinity)-(a.composite ?? -Infinity) || a.symbol.localeCompare(b.symbol));
   const scoreCell=(score,signals,summary)=>{
     const strength=score==null || Math.abs(score)<0.15 ? '' : Math.abs(score)>=0.5 ? ' strong' : ' mild';
     const cell=text('span',score==null?'—':`${score>=0?'+':''}${score.toFixed(2)}`,`signal-score${strength && ` ${direction(score)}${strength}`}`);
@@ -744,7 +739,7 @@ function renderWatchlist(data) {
     const symbol=uiButton(row.symbol,()=>openPositionReview(row.symbol));symbol.setAttribute('aria-label',`Open ${row.symbol} details`);symbol.setAttribute('aria-haspopup','dialog');
     const price=text('span',stale?'—':money(row.price),stale?'stale':'');price.title=stale?(row.staleReason || 'Price unavailable or stale'):'';
     return [symbol,price,text('span',stale||row.dayChangePct==null?'—':signedPct(row.dayChangePct),stale?'stale':direction(row.dayChangePct)),
-      scoreCell(row.trend,row.signals,row.signalSummary),scoreCell(row.mr,row.meanReversionSignals,row.meanReversionSummary),rsiCell(row.rsi)];
+      scoreCell(row.composite,row.signals,row.signalSummary),scoreCell(row.meanReversionComposite,row.meanReversionSignals,row.meanReversionSummary),rsiCell(row.rsi)];
   });
   $('watchlist-status').textContent=data.error || (!data.lastTickAt?'Waiting for data':`${q?`${list.length} of ${total}`:list.length} symbols${outdated?' · stale snapshot':''}`);
   if(!list.length){
