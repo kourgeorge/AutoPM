@@ -3,29 +3,24 @@ dist/
 *.js.map
 .env
 .env.*
+!.env.example
 .DS_Store
-data/state.json
-data/journal.jsonl
-data/fills.jsonl
-data/events.jsonl
-data/proposals.jsonl
-data/LESSONS.md
-data/sectors.json
-data/fundamentals.json
+# All of `data/` is local account data: state and journals, chat logs, the saved AI key in
+# db/settings.json, learning bars, the engine lock, cached bars and backtest output. Ignored
+# as a folder instead of file by file so a newly written file under it never starts out
+# untracked — one `git add .` from being published. Nothing under `data/` is tracked.
+data/
 # Throwaway probe scripts and their output. Under ./tmp rather than /tmp because
 # ts-node resolves against rootDir; kept out of git because each one answers a
 # single question about live data and is worthless the day after.
 tmp/
 
-data/policy/
 policy/history/
 
-# Cached historical bars (regenerable from Alpaca), the AI decision cache (keyed by input
-# hash, regenerable by re-running the backtest), and generated backtest reports — none of
-# these is source, all are large and worthless to diff.
-data/historicalBars/
+# Cached historical bars (regenerable from Alpaca), kept at the repo root, and generated
+# backtest reports — neither is source, both are large and worthless to diff. The copies
+# under `data/` are covered by the `data/` rule above.
 /historicalBars/
-data/aiDecisionCache.json
 backtest-results/
 
 # Old Interactive Brokers run (Sept 2026): live trading records, never committed.
@@ -51,16 +46,13 @@ autotrade-system-architecture.visual-check.*
 # A real position export — actual holdings and cost basis. This repo is PUBLIC.
 autotrade-positions-import.csv
 
-# Account data (JSON files under data/db/), the legacy SQLite file it was exported from,
-# and account job artifacts.
-data/db/
-data/*.sqlite*
-data/jobs/
-data/backups/
-
 # Separate broker account directories contain local trading records and caches.
 /data-alpaca/
 /data-ibkr/
 
-# symcc task board, worktrees and scouts (local only)
+# symcc task board, worktrees and scouts (local only), and the symphony agent session folder
+# (conversation logs, state, board and agent memory) — the same kind of local log, and the
+# same place a pasted credential would end up. No trailing slash, so the rule also holds on a
+# fresh clone or another machine before the folder has been created.
 .symcc/
+.symphony
