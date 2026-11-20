@@ -315,14 +315,25 @@ export class AlpacaBroker implements IBroker {
           );
         }
 
+        // A fill with no usable price or qty is NOT returned. `recordFills` stores by id and
+        // refuses later copies, so a NaN-priced fill saved now would block the priced copy a
+        // later poll brings — and the ledger skips non-number prices, so that round trip
+        // would never close. Skipping it here leaves the id free for the next poll.
+        const qty = parseFloat(a.qty);
+        const price = parseFloat(a.price);
+        if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0) {
+          logger.warn(`[Alpaca] Fill ${a.id} has no usable price "${a.price}" or qty "${a.qty}" — skipped until a later poll`);
+          continue;
+        }
+
         fills.push({
           execId:  a.id,
           brokerOrderId: a.order_id,
           permId:  null,
           symbol:  a.symbol,
           side,
-          qty:     parseFloat(a.qty),
-          price:   parseFloat(a.price),
+          qty,
+          price,
           // Equity commissions are zero but regulatory fees (SEC, TAF) arrive as separate
           // FEE activities, so what this fill cost is not knowable from this row.
           fee:     null,

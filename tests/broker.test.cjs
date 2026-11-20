@@ -23,7 +23,8 @@ beforeEach(() => {
   for (const verb of ['get', 'post', 'patch', 'delete']) {
     alpacaTrading[verb] = async (url, body) => {
       sent.push({ verb, url, body });
-      const reply = replies[verb + ' ' + url];
+      let reply = replies[verb + ' ' + url];
+      if (typeof reply === 'function') reply = reply(body);
       if (reply instanceof Error) throw reply;
       if (reply === undefined) throw new Error('No fake reply for ' + verb + ' ' + url);
       return { data: reply };
@@ -88,4 +89,33 @@ test('order status mapping: replaced and expired read as cancelled, a 404 as mis
   assert.equal((await b.getOrder('b')).status, 'partial');
   replies['get /v2/orders/c'] = httpError(404, 'order not found');
   assert.equal(await b.getOrder('c'), null);
+});
+
+const fillRow = (id, over = {}) => ({ id, order_id: 'o-' + id, symbol: 'AAPL', side: 'buy', qty: '2', price: '100.5', transaction_time: '2026-11-19T15:00:00Z', ...over });
+
+test('a fill with no price is not returned, so a later poll can still record it', async () => {
+  replies['get /v2/account/activities'] = [fillRow('a1'), fillRow('a2', { side: 'sell', price: undefined })];
+  const fills = await new AlpacaBroker().getFills();
+  assert.deepEqual(fills.map(f => f.execId), ['a1']);
+});
+
+test('a normal fill keeps its price, qty, side and id', async () => {
+  replies['get /v2/account/activities'] = [fillRow('a1', { side: 'sell', qty: '3', price: '42.25' })];
+  const [f] = await new AlpacaBroker().getFills();
+  assert.equal(f.execId, 'a1');
+  assert.equal(f.side, 'sell');
+  assert.equal(f.qty, 3);
+  assert.equal(f.price, 42.25);
+});
+
+test('fills page through with page_token set to the last id of the previous page', async () => {
+  const page1 = Array.from({ length: 100 }, (_, i) => fillRow('p' + i));
+  const page2 = [fillRow('last')];
+  replies['get /v2/account/activities'] = (opts) => (opts.params.page_token ? page2 : page1);
+  const fills = await new AlpacaBroker().getFills();
+  assert.equal(fills.length, 101);
+  const calls = sent.filter(s => s.url === '/v2/account/activities');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].body.params.page_token, undefined);
+  assert.equal(calls[1].body.params.page_token, 'p99');
 });
