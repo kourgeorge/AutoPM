@@ -70,9 +70,10 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
     work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });
 }
+const receiptPointer = (receiptId: string | undefined, totalCharacters: number) => JSON.stringify({ truncated: true, receiptId, totalCharacters,
+  note: receiptId ? 'Read get_tool_result(receiptId, offset, limit) for complete pages. No evidence was discarded.' : 'Legacy result is oversized; repeat a narrower query to retrieve complete evidence.' });
 function boundedResult(raw: string, receiptId?: string): string {
-  return raw.length <= INLINE_RESULT_LIMIT ? raw : JSON.stringify({ truncated: true, receiptId, totalCharacters: raw.length,
-    note: receiptId ? 'Read get_tool_result(receiptId, offset, limit) for complete pages. No evidence was discarded.' : 'Legacy result is oversized; repeat a narrower query to retrieve complete evidence.' });
+  return raw.length <= INLINE_RESULT_LIMIT ? raw : receiptPointer(receiptId, raw.length);
 }
 
 /**
@@ -206,6 +207,21 @@ export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT
     if (nextUser > 0) removed.push(...messages.splice(0, nextUser));
     else removed.push(...messages.splice(1, messages[1]?.content.some(b => b.type === 'tool_use') ? 2 : 1));
   }
+  // Trimming stops at the cycle message and the newest exchange, and a big tool batch can still be
+  // over the limit (T-69: 13–21 results of up to 16k each). Swap the largest saved results for
+  // receipt pointers, largest first: each is saved in full, so no evidence or trader text is lost.
+  let size = JSON.stringify(messages).length;
+  if (size + pinnedSize > limit) {
+    const results = messages.flatMap(m => m.content.filter((b): b is Extract<ContentBlock, { type: 'tool_result' }> => b.type === 'tool_result' && !!b.receiptId))
+      .sort((a, b) => b.content.length - a.content.length);
+    for (const b of results) {
+      if (size + pinnedSize <= limit) break;
+      const pointer = receiptPointer(b.receiptId, b.content.length);
+      const saved = JSON.stringify(b.content).length - JSON.stringify(pointer).length;
+      if (saved <= 0) continue;
+      b.content = pointer; size -= saved;
+    }
+  }
   if (removed.length) {
     // One note, replaced: it counts every left-out message and points at the newest saved part,
     // which names the one before it, so the note stays the same size however often it trims.
@@ -219,6 +235,19 @@ export function compactMessages(input: ChatMessage[], limit = TURN_CONTEXT_LIMIT
     else messages.unshift({ role: 'user', content: head });
   }
   return messages;
+}
+
+/**
+ * Fail before the model call, naming what is too big, when even trimming and receipt pointers
+ * cannot fit the conversation (only a first message too big on its own can do that).
+ */
+function assertFits(messages: ChatMessage[], limit: number): void {
+  const size = JSON.stringify(messages).length;
+  if (size <= limit) return;
+  if (limit <= 0) throw new Error(`The instructions and tool list alone fill the ${REQUEST_CHAR_LIMIT}-character request limit; no room is left for the conversation`);
+  const first = JSON.stringify(messages[0] ?? null).length;
+  throw new Error(`Turn context is too big to send: the first message (the cycle context or request) is ${first} characters and the whole conversation ${size}, `
+    + `but only ${limit} fit in one request after the instructions and tool list. Saved tool results were already swapped for receipt pointers, so the first message must be made smaller`);
 }
 
 interface Receipt { id: string; round: number; name: string; input: Record<string, any>; value: any; finishedAt?: string }
@@ -403,6 +432,7 @@ export async function runAgentLoop(opts: {
           }
         }
         current.messages = compactMessages(current.messages, limit, progress());
+        assertFits(current.messages, limit);
         const response = await abortable(opts.provider.chat({ systemPrompt: opts.systemPrompt, messages: current.messages,
           tools: opts.registry.definitions, maxTokens: opts.maxTokens, signal }), signal);
         signal.throwIfAborted();
