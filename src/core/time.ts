@@ -52,6 +52,16 @@ export function etDate(now: Date = new Date()): string {
   return etNow(now).date;
 }
 
+/**
+ * The ET date of a millisecond timestamp, or null when the timestamp is not a finite number.
+ *
+ * Portfolio equity is stamped at the session's ET close and a daily bar at its ET open, so
+ * reading either in UTC rolls some of them onto the neighbouring date.
+ */
+export function etDateOf(ms: number): string | null {
+  return Number.isFinite(ms) ? etNow(new Date(ms)).date : null;
+}
+
 export type MarketSession = 'closed' | 'premarket' | 'open' | 'afterhours';
 
 /**

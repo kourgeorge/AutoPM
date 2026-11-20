@@ -27,7 +27,7 @@ import fs from 'fs';
 import path from 'path';
 import { DATA_DIR, ensureDataDir } from './paths';
 import { writeFileAtomic } from './fsAtomic';
-import { etNow } from './time';
+import { etNow, etDateOf } from './time';
 
 /** `day`: '' = the old single file of a day kind, a date = that day folder, undefined = an ordinary kind. */
 interface Row { seq: number; id: string; at: string; json?: string; offset?: number; length?: number; name?: string; requestId?: string; day?: string }
@@ -49,7 +49,7 @@ const DAY_NAME = /^\d{4}-\d{2}-\d{2}$/;
 export const RECENT_DAYS = 30;
 const dayFile = (kind: string, day: string) => path.join(DAYS_DIR, day, kind + '.jsonl');
 const fileOfRow = (kind: string, row: Row) => row.day ? dayFile(kind, row.day) : recordFile(kind);
-const etDay = (at: string) => Number.isFinite(Date.parse(at)) ? etNow(new Date(at)).date : undefined;
+const etDay = (at: string) => etDateOf(Date.parse(at)) ?? undefined;
 const todayET = () => etNow(new Date()).date;
 const daysBack = (day: string, n: number) => {
   const [y, m, d] = day.split('-').map(Number);

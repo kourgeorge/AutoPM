@@ -9,7 +9,7 @@
 import type { ToolDefinition } from '../core/types';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
-import { etDate } from '../collect/etDate';
+import { etDateOf } from '../core/time';
 import { ui } from '../ui/ui';
 import { comparePerformance } from '../review/benchmark';
 
@@ -74,7 +74,7 @@ async function showPriceHistory(input: Record<string, unknown>): Promise<string>
   }
 
   const closes = bars.value.map((b) => b.c);
-  const dates = bars.value.map((b) => etDate(Date.parse(b.t)) ?? b.t);
+  const dates = bars.value.map((b) => etDateOf(Date.parse(b.t)) ?? b.t);
 
   ui.showChart({ kind: 'price', label: symbol, values: closes, dates });
 

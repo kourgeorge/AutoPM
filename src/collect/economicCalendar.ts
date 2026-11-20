@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { readValue, saveValue } from '../core/storage';
 import { agentContext } from '../core/agentContext';
+import { etDate } from '../core/time';
 
 const BLS_URL = 'https://www.bls.gov/schedule/news_release/bls.ics';
 const FED_URL = 'https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm';
@@ -68,7 +69,7 @@ export async function economicCalendar(days = 14) {
     // Outages are retried on the next tool request instead of becoming a six-hour empty calendar.
     if (calendar.sources.every(s => s.status === 'available')) saveValue('economic-calendar', calendar);
   }
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const today = etDate(new Date());
   const to = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   return { ...calendar, from: today, to, events: calendar.events.filter(e => e.date >= today && e.date <= to),
     complete: calendar.sources.every(s => s.status === 'available') };
