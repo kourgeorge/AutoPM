@@ -205,7 +205,7 @@ test('extended-hours prices keep their real trade time; overnight prices are res
 });
 
 test('the entry gate, the entry detector, the ticker page and entry planning share one entry threshold', async () => {
-  const { resolveCompositeMin, tickerMetrics } = require('../src/collect/tickerMetrics');
+  const { resolveCompositeMin, resolveRsiEntryMin, tickerMetrics } = require('../src/collect/tickerMetrics');
   const scanMod = require('../src/features/watchlistScan'), riskData = require('../src/strategy/riskData');
   const riskBudget = require('../src/strategy/riskBudget'), { riskAwareWatchlistScan } = require('../src/strategy/entryPlanning');
   const kept = { scan: scanMod.watchlistScan, inputs: riskData.collectRiskInputs, assess: riskBudget.assessEntryRisk };
@@ -227,11 +227,15 @@ test('the entry gate, the entry detector, the ticker page and entry planning sha
   const row = { symbol: 'AAPL', price: 100, stale: false, emaCrossedUp: true, rsi: 99, emaFast: 1, emaSlow: 1, atr: 2,
     signals: [{ name: 'x', score: 1 }], signalSummary: 'x', reversal: { chasing: false } };
   const detectorMin = () => entrySignalDetector.evaluate({ watchlist: { AAPL: row } }, p)[0].evidence.compositeMin;
+  const detectorRsiMin = () => entrySignalDetector.evaluate({ watchlist: { AAPL: row } }, p)[0].evidence.rsiEntryMin;
+  const pageRsiMin = r => tickerMetrics({ symbol: 'AAPL', bars: series, policy: p, rsiEntryMin: resolveRsiEntryMin(p, r) }).momentum.rsiEntryMin;
   const pageMin = r => tickerMetrics({ symbol: 'AAPL', bars: series, policy: p, compositeMin: resolveCompositeMin(p, r) }).trend.compositeMin;
   try {
     regime.getCachedRegime = () => null;
     assert.equal(pageMin(null), p.strategy.compositeMin);
     assert.equal(detectorMin(), p.strategy.compositeMin);
+    assert.equal(pageRsiMin(null), p.strategy.rsiEntryMin);
+    assert.equal(detectorRsiMin(), p.strategy.rsiEntryMin);
     assert.deepEqual(await planned(), { min: p.strategy.compositeMin, ranked: true });
     await orders.validateEntry(signal, 2); // clears the base threshold
 
@@ -239,6 +243,9 @@ test('the entry gate, the entry detector, the ticker page and entry planning sha
     const raised = pageMin('recession');
     assert.equal(raised, p.regime.recession.compositeMin);
     assert.equal(detectorMin(), raised);
+    assert.equal(pageRsiMin('recession'), p.regime.recession.rsiEntryMin);
+    assert.equal(pageRsiMin('recession'), p.strategy.rsiEntryMin + 10);
+    assert.equal(detectorRsiMin(), pageRsiMin('recession'));
     assert.deepEqual(await planned(), { min: raised, ranked: false });
     await assert.rejects(() => orders.validateEntry(signal, 2),
       err => err.rule === 'low_composite' && err.message.includes(`entry minimum of +${raised.toFixed(2)}`));

@@ -117,6 +117,15 @@ export function resolveCompositeMin(policy: Policy, regime: Regime | null | unde
 }
 
 /**
+ * The RSI floor that actually arms entry signals: the cached macro regime's `rsiEntryMin` when one
+ * is cached, else `policy.strategy.rsiEntryMin`. The one copy of this rule: the entry detector in
+ * `technical.ts` calls it too, so the page shows the same RSI entry minimum the detector uses.
+ */
+export function resolveRsiEntryMin(policy: Policy, regime: Regime | null | undefined): number {
+  return regime ? policy.regime[regime].rsiEntryMin : policy.strategy.rsiEntryMin;
+}
+
+/**
  * PURE. Everything numeric on the page, from a daily series and what the caller already holds.
  * `bars` are completed daily sessions, oldest first.
  */
@@ -130,6 +139,8 @@ export function tickerMetrics(input: {
   analysts?: AnalystView | null;
   /** The resolved entry threshold (see `resolveCompositeMin`); defaults to the base strategy value. */
   compositeMin?: number;
+  /** The resolved RSI entry floor (see `resolveRsiEntryMin`); defaults to the base strategy value. */
+  rsiEntryMin?: number;
   now?: Date;
 }): TickerMetrics {
   const { symbol, bars, policy, row = null, fundamentals = null, analysts = null } = input;
@@ -196,7 +207,7 @@ export function tickerMetrics(input: {
       emaFastPeriod: s.emaFast, emaSlowPeriod: s.emaSlow,
     },
     momentum: {
-      rsi: round(rsiNow, 1), rsiPeriod: s.rsiPeriod, rsiEntryMin: s.rsiEntryMin, rsiExitMax: s.rsiExitMax,
+      rsi: round(rsiNow, 1), rsiPeriod: s.rsiPeriod, rsiEntryMin: input.rsiEntryMin ?? s.rsiEntryMin, rsiExitMax: s.rsiExitMax,
       macdHistogram: round(macdNow ? lastOf(macdNow.histogram) : null, 3),
       adx: round(window.length >= 30 ? lastOf(adx(window)) : null, 1),
       atr: round(atrNow), atrPct: atrNow != null && price ? round(atrNow / price * 100) : null,

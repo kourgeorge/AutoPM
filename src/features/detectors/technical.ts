@@ -20,7 +20,7 @@
 
 import { boolCrossing, type Detector, type DetectorHit } from '../eventBus';
 import { getCachedRegime } from '../../macro/regime';
-import { resolveCompositeMin } from '../../collect/tickerMetrics';
+import { resolveCompositeMin, resolveRsiEntryMin } from '../../collect/tickerMetrics';
 import { signalTally } from '../../strategy/signals';
 import { bandOf, pctText } from './util';
 
@@ -104,9 +104,7 @@ export const entrySignalDetector: Detector = {
     // is the point: if attention read a live regime and permission read a cached one, the two
     // could hold different thresholds for the same instant and be back to disagreeing.
     const regime = getCachedRegime();
-    const effectiveRsiMin = regime
-      ? policy.regime[regime.regime].rsiEntryMin
-      : policy.strategy.rsiEntryMin;
+    const effectiveRsiMin = resolveRsiEntryMin(policy, regime?.regime);
     const effectiveCompositeMin = resolveCompositeMin(policy, regime?.regime);
 
     for (const f of Object.values(data.watchlist)) {

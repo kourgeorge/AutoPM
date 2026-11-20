@@ -20,7 +20,7 @@ import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
 import { getAnalystRaw, type Timeframe } from '../collect/yahoo';
 import { getFundamentals } from '../collect/fundamentals';
-import { mapAnalystView, resolveCompositeMin, tickerMetrics, type AnalystView } from '../collect/tickerMetrics';
+import { mapAnalystView, resolveCompositeMin, resolveRsiEntryMin, tickerMetrics, type AnalystView } from '../collect/tickerMetrics';
 import { getCachedRegime } from '../macro/regime';
 import { confirmProtection, clearUnplacedProtection } from '../strategy/protectionIntent';
 import { adoptHolding, AdoptRefused } from '../strategy/adopt';
@@ -414,8 +414,9 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
     if (!/^[A-Z0-9][A-Z0-9./-]{0,19}$/.test(symbol)) throw new HttpError(400, 'A valid ticker is required');
     // Resolved from the CACHED regime, like the entry gate, and part of the cache key so a
     // base-threshold answer is never reused once a regime has raised the bar.
-    const policy = getPolicy(), compositeMin = resolveCompositeMin(policy, getCachedRegime()?.regime);
-    const cacheKey = `${symbol}|${compositeMin}`;
+    const policy = getPolicy(), cachedRegime = getCachedRegime()?.regime;
+    const compositeMin = resolveCompositeMin(policy, cachedRegime), rsiEntryMin = resolveRsiEntryMin(policy, cachedRegime);
+    const cacheKey = `${symbol}|${compositeMin}|${rsiEntryMin}`;
     const cached = tickerMetricsCache.get(cacheKey);
     if (cached && cached.until > Date.now()) return cached.result;
     const result = (async () => {
@@ -430,7 +431,7 @@ function buildRoutes({ ui, trader, messageService }: ApiServerDeps, equityHistor
       const row = tick ? Object.values(tick.watchlist).find(r => canonicalSymbol(r.symbol) === key) ?? null : null;
       const held = tick ? Object.values(tick.positions).find(p => canonicalSymbol(p.symbol) === key) ?? null : null;
       const quote = row?.price != null ? { price: row.price, stale: row.stale } : held?.price != null ? { price: held.price, stale: held.stale } : null;
-      return { ...tickerMetrics({ symbol, bars, policy, row, quote, fundamentals, analysts, compositeMin }), errors };
+      return { ...tickerMetrics({ symbol, bars, policy, row, quote, fundamentals, analysts, compositeMin, rsiEntryMin }), errors };
     })();
     if (tickerMetricsCache.size >= 64) tickerMetricsCache.delete(tickerMetricsCache.keys().next().value!);
     tickerMetricsCache.set(cacheKey, { until: Date.now() + 60_000, result });
