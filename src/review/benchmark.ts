@@ -27,7 +27,7 @@ import { alpacaTrading } from '../core/alpacaHttp';
 import { logger } from '../core/logger';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
-import { etDate } from '../collect/etDate';
+import { etDateOf } from '../core/time';
 import { r, stdev } from './metrics';
 
 /** Sessions per year, for annualising a daily Sharpe. The market's own constant. */
@@ -246,7 +246,7 @@ function parseEquityHistory(data: any): { series: Map<string, number>; opening?:
     // Zero equity is what Alpaca reports for sessions before the account was funded. It is
     // not a $0 portfolio, and treating it as a level would manufacture a −100 % day.
     if (!Number.isFinite(value) || value <= 0) { if (series.size === 0) unfunded = true; continue; }
-    const date = etDate(Number(stamps[i]) * 1000);
+    const date = etDateOf(Number(stamps[i]) * 1000);
     if (!date) continue;
     if (series.size === 0 && unfunded) opening = { date, value };
     series.set(date, value);
@@ -309,7 +309,7 @@ async function fetchSymbolCurve(symbol: string, days: number): Promise<Leg & { s
 
   const series = new Map<string, number>();
   for (const bar of bars.value) {
-    const date = etDate(Date.parse(bar.t));
+    const date = etDateOf(Date.parse(bar.t));
     if (date && Number.isFinite(bar.c) && bar.c > 0) series.set(date, bar.c);
   }
 
