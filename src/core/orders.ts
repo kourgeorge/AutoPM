@@ -88,7 +88,7 @@ function changed(before: Order['result'], after: NonNullable<Order['result']>): 
 }
 export interface TransitionMeta {
   decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
-  result?: NonNullable<Order['result']>; decisionId?: string;
+  result?: NonNullable<Order['result']>;
 }
 export function transitionOrder(id: string, status: OrderStatus, meta: TransitionMeta = {}): Order {
   const next = transaction(() => {

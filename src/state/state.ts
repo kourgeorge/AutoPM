@@ -34,7 +34,6 @@ export interface Order {
   requestId?: string;
   requestedBy?: string;
   toolCallId?: string;
-  decisionId?: string;
   /** For an entry the plan, once: symbol as written, qty, maxQty, price, stopLoss, takeProfit, atr, thesis, observationIds, contextVariant, riskAssessment. */
   params: Record<string, unknown>;
   /** The trader's reason. The journal row for this order does not copy it. */
@@ -57,7 +56,7 @@ export interface Order {
 export interface OrderStep {
   at: string; transition: OrderStatus | 'created';
   decidedBy?: 'human' | 'timeout'; actorId?: string; rejectReason?: string;
-  result?: NonNullable<Order['result']>; decisionId?: string;
+  result?: NonNullable<Order['result']>;
 }
 
 export interface SystemState {
