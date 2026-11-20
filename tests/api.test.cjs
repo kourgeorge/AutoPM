@@ -399,3 +399,25 @@ test('the watchlist API shows the learned weighted composite the entry gate read
     assert.equal(row.meanReversionComposite,signalTally(meanReversion).composite);
   } finally {storage.deleteValue('learningWeights');}
 });
+test('learning runs are listed newest first and the operator can roll back to an older one; an unknown run is 404',async()=>{
+  const run=(id,at,weightsBefore,weightsAfter)=>storage.appendRecord('learning-runs',id,at,{id,type:'run',at,tradingDay:at.slice(0,10),weightsBefore,weightsAfter,active:[],signals:[],changes:[]});
+  const older={'EMA Momentum':0.8,MACD:1.2}, newer={'EMA Momentum':1,MACD:1.4};
+  run('run-a','2026-11-02T23:00:00.000Z',{'EMA Momentum':1,MACD:1},older);
+  run('run-b','2026-11-03T23:00:00.000Z',older,newer);
+  storage.saveValue('learningWeights',newer);storage.saveValue('learningLive',{at:'2026-11-03T23:00:00.000Z',weights:newer,active:[]});
+  try {
+    const listed=await request('/api/learning/runs');
+    assert.equal(listed.res.status,200);
+    assert.deepEqual(listed.body.runs.map(r=>r.id),['run-b','run-a']);
+    assert.deepEqual(listed.body.runs[1].weightsAfter,older);
+    const back=await request('/api/learning/rollback',{runId:'run-a'});
+    assert.equal(back.res.status,200);
+    assert.equal(back.body.type,'rollback');assert.equal(back.body.restoredFrom,'run-a');
+    assert.deepEqual(storage.readValue('learningWeights'),older);
+    assert.deepEqual(storage.readValue('learningLive').weights,older);
+    const after=(await request('/api/learning/runs')).body.runs;
+    assert.equal(after[0].type,'rollback');assert.equal(after[0].restoredFrom,'run-a');assert.equal(after.length,3);
+    const missing=await request('/api/learning/rollback',{runId:'run-nope'});
+    assert.equal(missing.res.status,404);assert.match(missing.body.error,/No learning run/);
+  } finally {storage.deleteValue('learningWeights');storage.deleteValue('learningLive');}
+});

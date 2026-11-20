@@ -1373,8 +1373,36 @@ $('usage-days').onchange = attempt(loadUsage);
 // ── Signals (learning layer) ────────────────────────────────────────────────
 const icCell = p => p && p.meanIC != null ? `${p.meanIC >= 0 ? '+' : ''}${p.meanIC.toFixed(3)} (${p.tStat == null ? '—' : p.tStat.toFixed(1)})` : '—';
 const signalStatus = { testing: 'Waiting for test', shadow: 'Live trial (not counting)', active: 'Counting', rejected: 'Rejected', retired: 'Retired' };
+/** One line per run: how many weights moved (each with before → after) and the AI-written signals counting after it. */
+function learningRunSummary(run) {
+  const before = run.weightsBefore || {}, after = run.weightsAfter || {};
+  const moved = Object.keys(after).filter(k => Math.abs(Number(after[k]) - Number(before[k] ?? 1)) > 1e-9)
+    .map(k => `${k} ${Number(before[k] ?? 1).toFixed(2)} → ${Number(after[k]).toFixed(2)}`);
+  const active = (run.active || []).length;
+  const parts = [moved.length ? `${moved.length} weight${moved.length === 1 ? '' : 's'} moved: ${moved.join(', ')}` : 'No weight moved',
+    `${active} AI-written signal${active === 1 ? '' : 's'} counting`];
+  if (run.changes?.length) parts.push(`${run.changes.length} change${run.changes.length === 1 ? '' : 's'} recorded`);
+  const cell = text('span', parts.join(' · '), 'history-row-reason');
+  cell.title = [parts.join(' · '), ...(run.changes || [])].join('\n');
+  return cell;
+}
+async function undoLearningRun(run) {
+  if (!confirm('Put the signal weights and AI-written signals back to how this run left them? This is recorded in the history.')) return;
+  const out = await api('learning/rollback', { runId: run.id });
+  notice(`Signal weights and AI-written signals put back to the run of ${new Date(run.at).toLocaleString()}.${out.changes?.length ? ' ' + out.changes.join(' ') : ''}`, true);
+  await loadLearning();
+}
+async function loadLearningRuns() {
+  const { runs } = await api('learning/runs?limit=20');
+  const when = new Map(runs.map(x => [x.id, x.at]));
+  const kind = x => x.type === 'rollback'
+    ? `Undo of ${when.has(x.restoredFrom) ? new Date(when.get(x.restoredFrom)).toLocaleString() : x.restoredFrom || 'an earlier run'}` : 'Run';
+  if (!runs.length) { $('learning-runs').replaceChildren(); return; }
+  rows('learning-runs', runs, x => [new Date(x.at).toLocaleString(), x.tradingDay || '—', kind(x), learningRunSummary(x),
+    x.type === 'run' ? uiButton('Undo to this run', attempt(() => undoLearningRun(x)), '') : '—']);
+}
 async function loadLearning() {
-  const r = await api('learning');
+  const [r] = await Promise.all([api('learning'), loadLearningRuns()]);
   $('learning-enabled').checked = r.settings.enabled; $('learning-ideas').checked = r.settings.proposeIdeas;
   if (!r.measured) { $('learning-how').textContent = r.note; return; }
   $('learning-how').textContent = r.howToRead;
