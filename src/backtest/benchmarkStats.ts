@@ -12,7 +12,8 @@
 
 import type { EquityPoint } from './engine';
 import { getHistoricalBars } from './barCache';
-import { dailyReturns, annualisedSharpe, annualisedVolPct, maxDrawdownPct, MIN_RETURNS_FOR_SHARPE } from '../review/benchmark';
+// One copy of the date matching and return statistics, shared with the live benchmark so the two cannot drift.
+import { compareSeries, MIN_RETURNS_FOR_SHARPE } from '../review/benchmark';
 
 const THIN_SESSIONS = 30;
 
@@ -34,13 +35,6 @@ export interface BenchmarkStats {
   caveats: string[];
 }
 
-// One copy of the return statistics, shared with the live benchmark so the two cannot drift.
-function r(n: number | null, dp = 2): number | null {
-  if (n == null || !Number.isFinite(n)) return null;
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
-}
-
 export async function benchmarkStats(
   equityCurve: EquityPoint[],
   start: string,
@@ -54,58 +48,28 @@ export async function benchmarkStats(
 
   if (spySeries.size === 0) caveats.push('SPY bars unavailable for this range — no benchmark comparison.');
 
-  const dates = [...equitySeries.keys()].filter(d => spySeries.has(d)).sort();
-  const equityDates = dates.length > 0 ? dates : [...equitySeries.keys()].sort();
-  const spyDates = dates.length > 0 ? dates : [...spySeries.keys()].sort();
+  // The backtest keeps maxDrawdownPct even when the portfolio return is null (no
+  // `drawdownNeedsReturn`), unlike the live report.
+  const cmp = compareSeries(equitySeries, spySeries);
+  const { sessions } = cmp.window;
 
-  const equityLevels = equityDates.map(d => equitySeries.get(d)!).filter(Number.isFinite);
-  const spyLevels = spyDates.map(d => spySeries.get(d)!).filter(Number.isFinite);
-
-  const totalReturnPct = (levels: number[]): number | null =>
-    levels.length >= 2 && levels[0] > 0 ? (levels[levels.length - 1] / levels[0] - 1) * 100 : null;
-
-  const portfolioReturnPct = totalReturnPct(equityLevels);
-  const spyReturnPct = totalReturnPct(spyLevels);
-
-  const equityReturns = dailyReturns(equityLevels);
-  const spyReturns = dailyReturns(spyLevels);
-
-  const sessions = dates.length;
-  const from = (dates[0] ?? equityDates[0] ?? spyDates[0]) ?? null;
-  const to = (dates[dates.length - 1] ?? equityDates[equityDates.length - 1] ?? spyDates[spyDates.length - 1]) ?? null;
-
-  if (equityLevels.length > 0 && spyLevels.length > 0 && sessions === 0) {
+  if (cmp.equityLevelCount > 0 && cmp.spyLevelCount > 0 && sessions === 0) {
     caveats.push('the simulated equity curve and the SPY series share no dates, so nothing here is a comparison.');
   }
   if (sessions > 0 && sessions < THIN_SESSIONS) {
     caveats.push(`window is ${sessions} session(s) — too short for a meaningful comparison.`);
   }
-  if (equityReturns.length > 0 && equityReturns.length < MIN_RETURNS_FOR_SHARPE) {
-    caveats.push(`only ${equityReturns.length} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so the Sharpe figures are null rather than noisy.`);
+  if (cmp.equityReturnCount > 0 && cmp.equityReturnCount < MIN_RETURNS_FOR_SHARPE) {
+    caveats.push(`only ${cmp.equityReturnCount} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so the Sharpe figures are null rather than noisy.`);
   }
-  if (equityReturns.length >= MIN_RETURNS_FOR_SHARPE) {
+  if (cmp.equityReturnCount >= MIN_RETURNS_FOR_SHARPE) {
     caveats.push('Sharpe figures use a zero risk-free rate on both legs — read them as return per unit of volatility, and compare the simulation to SPY rather than to a textbook threshold.');
   }
   caveats.push('0.05% slippage and $0 commission are baked into fill prices; no other cost (spread, borrow, tax) is modelled.');
 
   return {
-    window: { from, to, sessions },
-
-    portfolioReturnPct: r(portfolioReturnPct),
-    spyReturnPct: r(spyReturnPct),
-    excessPct:
-      portfolioReturnPct != null && spyReturnPct != null && sessions > 0
-        ? r(portfolioReturnPct - spyReturnPct)
-        : null,
-
-    portfolioSharpe: r(annualisedSharpe(equityReturns)),
-    spySharpe: r(annualisedSharpe(spyReturns)),
-    portfolioVolPct: r(annualisedVolPct(equityReturns)),
-    spyVolPct: r(annualisedVolPct(spyReturns)),
-
-    maxDrawdownPct: r(maxDrawdownPct(equityLevels)),
-    spyMaxDrawdownPct: r(maxDrawdownPct(spyLevels)),
-
+    window: cmp.window,
+    ...cmp.fields,
     caveats,
   };
 }

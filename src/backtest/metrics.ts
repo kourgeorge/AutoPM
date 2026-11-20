@@ -10,7 +10,7 @@
 import type { SimulatedTrade } from './engine';
 
 // One copy of the statistics, shared with the live scorecard so the two cannot drift.
-import { perTradeSharpeIsThin, r, mean, median, stdev, meanOverSigma } from '../review/metrics';
+import { perTradeSharpeIsThin, r, groupBy, tradeShape } from '../review/metrics';
 
 export interface GroupStats {
   trades: number;
@@ -86,28 +86,6 @@ function summarise(t: SimulatedTrade): TradeSummary {
   };
 }
 
-function groupBy(trades: SimulatedTrade[], key: (t: SimulatedTrade) => string): Record<string, GroupStats> {
-  const buckets = new Map<string, SimulatedTrade[]>();
-  for (const t of trades) {
-    const k = key(t);
-    const list = buckets.get(k);
-    if (list) list.push(t);
-    else buckets.set(k, [t]);
-  }
-
-  const out: Record<string, GroupStats> = {};
-  for (const [k, list] of [...buckets].sort((a, b) => b[1].length - a[1].length)) {
-    const gross = list.reduce((a, t) => a + t.grossPnL, 0);
-    out[k] = {
-      trades: list.length,
-      grossPnL: r(gross)!,
-      winRate: r((list.filter(t => t.grossPnL > 0).length / list.length) * 100),
-      expectancy: r(gross / list.length),
-    };
-  }
-  return out;
-}
-
 export function scorecard(trades: SimulatedTrade[]): Scorecard {
   const empty: Scorecard = {
     window: { from: null, to: null },
@@ -126,60 +104,22 @@ export function scorecard(trades: SimulatedTrade[]): Scorecard {
   };
   if (trades.length === 0) return empty;
 
-  const wins = trades.filter(t => t.grossPnL > 0);
-  const losses = trades.filter(t => t.grossPnL < 0);
-  const scratches = trades.length - wins.length - losses.length;
 
-  const grossPnL = trades.reduce((a, t) => a + t.grossPnL, 0);
-  const sumWins = wins.reduce((a, t) => a + t.grossPnL, 0);
-  const sumLosses = losses.reduce((a, t) => a + t.grossPnL, 0);
-
-  // Realised equity curve in order of exit — same reasoning as `scorecard()`: this is a floor
-  // on drawdown, not the true worst, since it ignores the mark-to-market path of open trades.
-  let peak = 0, running = 0, maxDrawdown = 0;
-  let streak = 0, maxConsecutiveLosses = 0;
-  const byExit = [...trades].sort((a, b) => Date.parse(a.exitAt) - Date.parse(b.exitAt));
-  for (const t of byExit) {
-    running += t.grossPnL;
-    peak = Math.max(peak, running);
-    maxDrawdown = Math.max(maxDrawdown, peak - running);
-    streak = t.grossPnL < 0 ? streak + 1 : 0;
-    maxConsecutiveLosses = Math.max(maxConsecutiveLosses, streak);
-  }
-
-  const holds = trades.map(t => t.holdingDays);
-
-  const rMultiples: number[] = [];
-  const stopDistances: number[] = [];
-  const stopAtrMultiples: number[] = [];
-  let breached = 0;
-  let worstBreachPct: number | null = null;
-
-  for (const t of trades) {
-    const stop = t.intendedStop;
-    if (!(stop > 0) || !(t.entryPrice > stop)) continue;
-
-    const riskPerShare = t.entryPrice - stop;
-    rMultiples.push(t.grossPnL / (riskPerShare * t.qty));
-    stopDistances.push((riskPerShare / t.entryPrice) * 100);
-    if (t.atrAtEntry > 0) stopAtrMultiples.push(riskPerShare / t.atrAtEntry);
-
-    if (t.exitReason === 'stop' && t.exitPrice < stop) {
-      breached++;
-      const slip = ((stop - t.exitPrice) / stop) * 100;
-      worstBreachPct = worstBreachPct == null ? slip : Math.max(worstBreachPct, slip);
-    }
-  }
-
-  const returnPcts = trades.map(t => t.returnPct);
-  const returnPctStdev = stdev(returnPcts);
+  const shape = tradeShape(trades, {
+    // Backtest: only an exit BY the stop counts as a breach.
+    breached: (t, stop) => t.exitReason === 'stop' && t.exitPrice < stop,
+    hold: t => t.holdingDays,
+    sortByExit: true,
+  });
+  const returnPctStdev = shape.rawReturnPctStdev;
+  const rSample = shape.edge.expectancyRSample;
 
   const caveats: string[] = [];
   if (trades.length < 20) {
     caveats.push(`${trades.length} simulated trade(s) — too few for the win rate or expectancy to distinguish skill from variance.`);
   }
-  if (rMultiples.length < trades.length) {
-    caveats.push(`expectancyR covers ${rMultiples.length} of ${trades.length} trade(s); the rest had no usable stop distance (entry at or below the stop).`);
+  if (rSample < trades.length) {
+    caveats.push(`expectancyR covers ${rSample} of ${trades.length} trade(s); the rest had no usable stop distance (entry at or below the stop).`);
   }
   const endOfData = trades.filter(t => t.exitReason === 'end_of_data').length;
   if (endOfData > 0) {
@@ -198,48 +138,25 @@ export function scorecard(trades: SimulatedTrade[]): Scorecard {
       from: trades.reduce((acc, t) => (Date.parse(t.entryAt) <= Date.parse(acc) ? t.entryAt : acc), trades[0].entryAt),
       to: trades.reduce((acc, t) => (Date.parse(t.exitAt) >= Date.parse(acc) ? t.exitAt : acc), trades[0].exitAt),
     },
-    trades: trades.length,
-    wins: wins.length,
-    losses: losses.length,
-    scratches,
-    winRate: r((wins.length / trades.length) * 100),
+    ...shape.counts,
 
-    grossPnL: r(grossPnL)!,
+    ...shape.edge,
 
-    avgWin: r(mean(wins.map(t => t.grossPnL))),
-    avgLoss: r(mean(losses.map(t => t.grossPnL))),
-    profitFactor: sumLosses < 0 ? r(sumWins / Math.abs(sumLosses)) : null,
-    expectancy: r(grossPnL / trades.length),
-    expectancyPct: r(mean(trades.map(t => t.returnPct))),
-    expectancyR: r(mean(rMultiples)),
-    expectancyRSample: rMultiples.length,
+    best: summarise(shape.best),
+    worst: summarise(shape.worst),
 
-    returnPctStdev: r(returnPctStdev),
-    perTradeSharpe: r(meanOverSigma(returnPcts), 3),
-    perTradeSharpeR: r(meanOverSigma(rMultiples), 3),
-    expectancyTStat: r(
-      returnPctStdev != null && returnPctStdev > 0
-        ? mean(returnPcts)! / (returnPctStdev / Math.sqrt(returnPcts.length))
-        : null,
-      2,
-    ),
+    avgHoldDays: shape.hold.avg,
+    medianHoldDays: shape.hold.median,
+    avgHoldWinnersDays: shape.hold.winners,
+    avgHoldLosersDays: shape.hold.losers,
 
-    best: summarise(trades.reduce((a, b) => (b.returnPct > a.returnPct ? b : a))),
-    worst: summarise(trades.reduce((a, b) => (b.returnPct < a.returnPct ? b : a))),
-
-    avgHoldDays: r(mean(holds)),
-    medianHoldDays: r(median(holds)),
-    avgHoldWinnersDays: r(mean(wins.map(t => t.holdingDays))),
-    avgHoldLosersDays: r(mean(losses.map(t => t.holdingDays))),
-
-    maxDrawdown: r(maxDrawdown)!,
-    maxConsecutiveLosses,
+    ...shape.drawdown,
 
     stopDiscipline: {
-      breached,
-      worstBreachPct: r(worstBreachPct),
-      avgStopDistancePct: r(mean(stopDistances)),
-      avgStopAtrMultiple: r(mean(stopAtrMultiples)),
+      breached: shape.stops.breached,
+      worstBreachPct: shape.stops.worstBreachPct,
+      avgStopDistancePct: shape.stops.avgStopDistancePct,
+      avgStopAtrMultiple: shape.stops.avgStopAtrMultiple,
     },
 
     bySymbol: groupBy(trades, t => t.symbol),

@@ -28,6 +28,7 @@ import { logger } from '../core/logger';
 import { collectBars } from '../collect/barSource';
 import { isPresent } from '../collect/types';
 import { etDate } from '../collect/etDate';
+import { r, stdev } from './metrics';
 
 /** Sessions per year, for annualising a daily Sharpe. The market's own constant. */
 const TRADING_DAYS_PER_YEAR = 252;
@@ -122,14 +123,6 @@ export function dailyReturns(levels: number[]): number[] {
   return out;
 }
 
-/** Sample standard deviation, n−1. Null below two points, where dispersion is undefined. */
-function stdev(xs: number[]): number | null {
-  if (xs.length < 2) return null;
-  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
-  const variance = xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1);
-  return Math.sqrt(variance);
-}
-
 /** Annualised mean-over-sigma. Null when sigma is zero — a flat line has no ratio. */
 export function annualisedSharpe(returns: number[]): number | null {
   if (returns.length < MIN_RETURNS_FOR_SHARPE) return null;
@@ -156,10 +149,67 @@ export function maxDrawdownPct(levels: number[]): number | null {
   return worst;
 }
 
-function r(n: number | null, dp = 2): number | null {
-  if (n == null || !Number.isFinite(n)) return null;
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
+/**
+ * Line an equity curve up against SPY by DATE and compute the return fields both benchmark
+ * reports share — the live one (`benchmark()`) and the backtest one (`benchmarkStats()`).
+ *
+ * Aligned by date and never by index: around a holiday the two series differ in length, and
+ * an index join would then silently compare a Tuesday to a Wednesday for the rest of the
+ * window. When only one leg has data, that leg is measured on its own dates. How the dates
+ * are read off the raw data, and every caveat, stay with the caller.
+ *
+ * `drawdownNeedsReturn`: report `maxDrawdownPct` as null whenever the portfolio return is
+ * null (the live report does; the backtest keeps it).
+ */
+export function compareSeries(
+  equitySeries: Map<string, number>,
+  spySeries: Map<string, number>,
+  opts: { drawdownNeedsReturn?: boolean } = {},
+) {
+  const dates = [...equitySeries.keys()]
+    .filter(d => spySeries.has(d))
+    .sort();
+
+  // Each leg alone, for the case where only one arrived. Dates are the intersection when
+  // both did, so the two return figures always cover the same sessions.
+  const equityDates = dates.length > 0 ? dates : [...equitySeries.keys()].sort();
+  const spyDates = dates.length > 0 ? dates : [...spySeries.keys()].sort();
+
+  const equityLevels = equityDates.map(d => equitySeries.get(d)!).filter(Number.isFinite);
+  const spyLevels = spyDates.map(d => spySeries.get(d)!).filter(Number.isFinite);
+
+  const portfolioReturnPct = totalReturnPct(equityLevels);
+  const spyReturnPct = totalReturnPct(spyLevels);
+
+  const equityReturns = dailyReturns(equityLevels);
+  const spyReturns = dailyReturns(spyLevels);
+
+  const sessions = dates.length;
+  const from = (dates[0] ?? equityDates[0] ?? spyDates[0]) ?? null;
+  const to = (dates[dates.length - 1] ?? equityDates[equityDates.length - 1] ?? spyDates[spyDates.length - 1]) ?? null;
+
+  return {
+    window: { from, to, sessions },
+    equityLevelCount: equityLevels.length,
+    spyLevelCount: spyLevels.length,
+    equityReturnCount: equityReturns.length,
+    fields: {
+      portfolioReturnPct: r(portfolioReturnPct),
+      spyReturnPct: r(spyReturnPct),
+      excessPct:
+        portfolioReturnPct != null && spyReturnPct != null && sessions > 0
+          ? r(portfolioReturnPct - spyReturnPct)
+          : null,
+
+      portfolioSharpe: r(annualisedSharpe(equityReturns)),
+      spySharpe: r(annualisedSharpe(spyReturns)),
+      portfolioVolPct: r(annualisedVolPct(equityReturns)),
+      spyVolPct: r(annualisedVolPct(spyReturns)),
+
+      maxDrawdownPct: opts.drawdownNeedsReturn && portfolioReturnPct == null ? null : r(maxDrawdownPct(equityLevels)),
+      spyMaxDrawdownPct: r(maxDrawdownPct(spyLevels)),
+    },
+  };
 }
 
 // ── The two legs ────────────────────────────────────────────────────────────────
@@ -342,66 +392,34 @@ export async function benchmark(opts: { days?: number } = {}): Promise<Benchmark
     caveats.push('the last SPY bar is stale, so the benchmark leg may end a session short of the portfolio leg');
   }
 
-  // Aligned by DATE and never by index: around a holiday the two series differ in length,
-  // and an index join would then silently compare a Tuesday to a Wednesday for the rest of
-  // the window.
-  const dates = [...equityLeg.series.keys()]
-    .filter(d => spyLeg.series.has(d))
-    .sort();
+  const cmp = compareSeries(equityLeg.series, spyLeg.series, { drawdownNeedsReturn: true });
+  const { from, to, sessions } = cmp.window;
 
-  // Each leg alone, for the case where only one arrived. Dates are the intersection when
-  // both did, so the two return figures always cover the same sessions.
-  const equityDates = dates.length > 0 ? dates : [...equityLeg.series.keys()].sort();
-  const spyDates = dates.length > 0 ? dates : [...spyLeg.series.keys()].sort();
-
-  const equityLevels = equityDates.map(d => equityLeg.series.get(d)!).filter(Number.isFinite);
-  const spyLevels = spyDates.map(d => spyLeg.series.get(d)!).filter(Number.isFinite);
-
-  let portfolioReturnPct = totalReturnPct(equityLevels);
-  const spyReturnPct = totalReturnPct(spyLevels);
-
-  let equityReturns = dailyReturns(equityLevels);
-  const spyReturns = dailyReturns(spyLevels);
-
-  const sessions = dates.length;
-  const from = (dates[0] ?? equityDates[0] ?? spyDates[0]) ?? null;
-  const to = (dates[dates.length - 1] ?? equityDates[equityDates.length - 1] ?? spyDates[spyDates.length - 1]) ?? null;
-
-  if (equityLevels.length > 0 && spyLevels.length > 0 && sessions === 0) {
+  if (cmp.equityLevelCount > 0 && cmp.spyLevelCount > 0 && sessions === 0) {
     caveats.push('the equity curve and the SPY series share no dates, so nothing here is a comparison — the two figures cover different sessions');
   }
   if (sessions > 0 && sessions < THIN_SESSIONS) {
     caveats.push(`window is ${sessions} session(s) — too short for a meaningful comparison, and one good or bad day moves every figure here`);
   }
-  if (equityReturns.length > 0 && equityReturns.length < MIN_RETURNS_FOR_SHARPE) {
-    caveats.push(`only ${equityReturns.length} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so the Sharpe figures are null rather than noisy`);
+  if (cmp.equityReturnCount > 0 && cmp.equityReturnCount < MIN_RETURNS_FOR_SHARPE) {
+    caveats.push(`only ${cmp.equityReturnCount} daily return(s) — no standard deviation is reported below ${MIN_RETURNS_FOR_SHARPE}, so the Sharpe figures are null rather than noisy`);
   }
 
+  // Cash flows inside the window: the equity curve is not a performance figure, so every
+  // portfolio-leg number is withheld.
   const accountingIssue = from ? await accountPerformanceIssue(from, equityLeg.opening) : null;
-  if (accountingIssue) { portfolioReturnPct = null; equityReturns = []; caveats.push(accountingIssue); }
+  const fields = accountingIssue
+    ? { ...cmp.fields, portfolioReturnPct: null, excessPct: null, portfolioSharpe: null, portfolioVolPct: null, maxDrawdownPct: null }
+    : cmp.fields;
+  if (accountingIssue) caveats.push(accountingIssue);
 
-  if (equityReturns.length >= MIN_RETURNS_FOR_SHARPE) {
+  if (!accountingIssue && cmp.equityReturnCount >= MIN_RETURNS_FOR_SHARPE) {
     caveats.push('Sharpe figures use a zero risk-free rate on both legs — read them as return per unit of volatility, and compare portfolio to SPY rather than to a textbook threshold');
   }
 
   return {
     window: { from, to, days, sessions },
-
-    portfolioReturnPct: r(portfolioReturnPct),
-    spyReturnPct: r(spyReturnPct),
-    excessPct:
-      portfolioReturnPct != null && spyReturnPct != null && sessions > 0
-        ? r(portfolioReturnPct - spyReturnPct)
-        : null,
-
-    portfolioSharpe: r(annualisedSharpe(equityReturns)),
-    spySharpe: r(annualisedSharpe(spyReturns)),
-    portfolioVolPct: r(annualisedVolPct(equityReturns)),
-    spyVolPct: r(annualisedVolPct(spyReturns)),
-
-    maxDrawdownPct: portfolioReturnPct == null ? null : r(maxDrawdownPct(equityLevels)),
-    spyMaxDrawdownPct: r(maxDrawdownPct(spyLevels)),
-
+    ...fields,
     caveats,
   };
 }

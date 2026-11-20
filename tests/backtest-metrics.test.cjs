@@ -146,3 +146,24 @@ test('backtest scorecard of identical-return wins gives null dispersion figures,
     ],
   });
 });
+
+// T-66: both scorecards share tradeShape() and pass in their own rules. Same rows, two rules:
+// the NVDA ai_exit below its stop is a breach under the live rule and not under the backtest one;
+// the drawdown walk follows array order unless sortByExit is set.
+test('tradeShape applies the breach, hold and exit-order rules it is given', () => {
+  const { tradeShape } = require(root + '/src/review/metrics');
+  const backtestRule = tradeShape(TRADES, {
+    breached: (t, stop) => t.exitReason === 'stop' && t.exitPrice < stop,
+    hold: t => t.holdingDays, sortByExit: true,
+  });
+  const liveRule = tradeShape(TRADES, { breached: (t, stop) => t.exitPrice < stop, hold: t => t.holdingDays * 24 });
+  assert.deepEqual(backtestRule.stops, { measurable: 5, breached: 1, worstBreachPct: 1.05, avgStopDistancePct: 4.28, avgStopAtrMultiple: 1.95 });
+  assert.equal(liveRule.stops.breached, 2);
+  assert.equal(liveRule.stops.worstBreachPct, 1.05);
+  assert.equal(backtestRule.hold.avg, 4.5);
+  assert.equal(liveRule.hold.avg, 108);
+  assert.deepEqual(backtestRule.drawdown, { maxDrawdown: 85, maxConsecutiveLosses: 2 });
+  assert.deepEqual(liveRule.drawdown, { maxDrawdown: 66, maxConsecutiveLosses: 1 });
+  assert.equal(backtestRule.best, TRADES[5]);
+  assert.equal(backtestRule.worst, TRADES[1]);
+});

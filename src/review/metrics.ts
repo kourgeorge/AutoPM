@@ -216,12 +216,13 @@ function summarise(o: TradeOutcome): TradeSummary {
   };
 }
 
-function groupBy(
-  outcomes: TradeOutcome[],
-  key: (o: TradeOutcome) => string,
+/** Per-group trade count, gross P&L, win rate and expectancy; largest group first. */
+export function groupBy<T extends { grossPnL: number }>(
+  rows: T[],
+  key: (row: T) => string,
 ): Record<string, GroupStats> {
-  const buckets = new Map<string, TradeOutcome[]>();
-  for (const o of outcomes) {
+  const buckets = new Map<string, T[]>();
+  for (const o of rows) {
     const k = key(o);
     const list = buckets.get(k);
     if (list) list.push(o);
@@ -239,6 +240,140 @@ function groupBy(
     };
   }
   return out;
+}
+
+/** The fields of one completed trade that the shared trade-shape statistics read. */
+export interface ShapeRow {
+  grossPnL: number;
+  returnPct: number;
+  entryPrice: number;
+  intendedStop: number | null;
+  qty: number;
+  atrAtEntry: number | null;
+  exitPrice: number;
+  exitAt: string;
+}
+
+/**
+ * The trade-shape statistics both scorecards share — the live one over real round trips and
+ * the backtest one over simulated trades — so the two cannot drift. Rows must be non-empty.
+ *
+ * The callers differ on purpose, and each difference is passed in rather than settled here:
+ * - `breached(row, stop)`: whether an exit counts as a stop breach. Live counts any exit
+ *   below the stop; the backtest only those that left by the stop.
+ * - `hold(row)`: hold time in the caller's unit (hours live, days in the backtest).
+ * - `sortByExit`: re-sort by exit time for the drawdown and losing-streak walk. The live
+ *   rows already arrive in exit order from the ledger; the backtest's do not.
+ */
+export function tradeShape<T extends ShapeRow>(
+  rows: T[],
+  opts: { breached: (row: T, stop: number) => boolean; hold: (row: T) => number; sortByExit?: boolean },
+) {
+  const wins = rows.filter(o => o.grossPnL > 0);
+  const losses = rows.filter(o => o.grossPnL < 0);
+  const scratches = rows.length - wins.length - losses.length;
+
+  const grossPnL = rows.reduce((a, o) => a + o.grossPnL, 0);
+  const sumWins = wins.reduce((a, o) => a + o.grossPnL, 0);
+  const sumLosses = losses.reduce((a, o) => a + o.grossPnL, 0);
+
+  // Realised equity curve, in order of exit. Drawdown on realised P&L only: the
+  // mark-to-market path of an open position is not in the record, so a deeper intra-trade
+  // trough is invisible here and this figure is a floor, not the true worst.
+  let peak = 0, running = 0, maxDrawdown = 0;
+  let streak = 0, maxConsecutiveLosses = 0;
+  const byExit = opts.sortByExit ? [...rows].sort((a, b) => Date.parse(a.exitAt) - Date.parse(b.exitAt)) : rows;
+  for (const o of byExit) {
+    running += o.grossPnL;
+    peak = Math.max(peak, running);
+    maxDrawdown = Math.max(maxDrawdown, peak - running);
+    streak = o.grossPnL < 0 ? streak + 1 : 0;
+    maxConsecutiveLosses = Math.max(maxConsecutiveLosses, streak);
+  }
+
+  const holds = rows.map(opts.hold);
+
+  // R multiples, over the subset whose entry declared a usable stop.
+  const rMultiples: number[] = [];
+  const stopDistances: number[] = [];
+  const stopAtrMultiples: number[] = [];
+  let breached = 0;
+  let worstBreachPct: number | null = null;
+
+  for (const o of rows) {
+    const stop = o.intendedStop;
+    if (stop == null || !(stop > 0) || !(o.entryPrice > stop)) continue;
+
+    const riskPerShare = o.entryPrice - stop;
+    rMultiples.push(o.grossPnL / (riskPerShare * o.qty));
+    stopDistances.push((riskPerShare / o.entryPrice) * 100);
+    if (o.atrAtEntry != null && o.atrAtEntry > 0) {
+      stopAtrMultiples.push(riskPerShare / o.atrAtEntry);
+    }
+
+    if (opts.breached(o, stop)) {
+      breached++;
+      const slip = ((stop - o.exitPrice) / stop) * 100;
+      worstBreachPct = worstBreachPct == null ? slip : Math.max(worstBreachPct, slip);
+    }
+  }
+
+  const returnPcts = rows.map(o => o.returnPct);
+  const returnPctStdev = stdev(returnPcts);
+
+  return {
+    /** Unrounded, for the callers' caveats. */
+    rawReturnPctStdev: returnPctStdev,
+    counts: {
+      trades: rows.length,
+      wins: wins.length,
+      losses: losses.length,
+      scratches,
+      winRate: r((wins.length / rows.length) * 100),
+      grossPnL: r(grossPnL)!,
+    },
+    edge: {
+      avgWin: r(mean(wins.map(o => o.grossPnL))),
+      avgLoss: r(mean(losses.map(o => o.grossPnL))),
+      // No losses is not an infinite profit factor, it is an unmeasurable one.
+      profitFactor: sumLosses < 0 ? r(sumWins / Math.abs(sumLosses)) : null,
+      expectancy: r(grossPnL / rows.length),
+      expectancyPct: r(mean(returnPcts)),
+      expectancyR: r(mean(rMultiples)),
+      expectancyRSample: rMultiples.length,
+
+      returnPctStdev: r(returnPctStdev),
+      // Three decimals: these are ratios near 1, where two decimals throws away a tenth of
+      // the resolution, unlike a win rate where it throws away nothing anybody can act on.
+      perTradeSharpe: r(meanOverSigma(returnPcts), 3),
+      perTradeSharpeR: r(meanOverSigma(rMultiples), 3),
+      expectancyTStat: r(
+        returnPctStdev != null && returnPctStdev > 0
+          ? mean(returnPcts)! / (returnPctStdev / Math.sqrt(returnPcts.length))
+          : null,
+        2,
+      ),
+    },
+    best: rows.reduce((a, b) => (b.returnPct > a.returnPct ? b : a)),
+    worst: rows.reduce((a, b) => (b.returnPct < a.returnPct ? b : a)),
+    hold: {
+      avg: r(mean(holds)),
+      median: r(median(holds)),
+      winners: r(mean(wins.map(opts.hold))),
+      losers: r(mean(losses.map(opts.hold))),
+    },
+    drawdown: {
+      maxDrawdown: r(maxDrawdown)!,
+      maxConsecutiveLosses,
+    },
+    stops: {
+      measurable: rMultiples.length,
+      breached,
+      worstBreachPct: r(worstBreachPct),
+      avgStopDistancePct: r(mean(stopDistances)),
+      avgStopAtrMultiple: r(mean(stopAtrMultiples)),
+    },
+  };
 }
 
 /**
@@ -276,59 +411,17 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
   };
   if (outcomes.length === 0) return empty;
 
-  const wins = outcomes.filter(o => o.grossPnL > 0);
-  const losses = outcomes.filter(o => o.grossPnL < 0);
-  const scratches = outcomes.length - wins.length - losses.length;
+  const shape = tradeShape(outcomes, {
+    // Live: any exit below the declared stop exceeded the declared risk, whatever the cause.
+    breached: (o, stop) => o.exitPrice < stop,
+    hold: o => o.holdingMs / 3_600_000,
+  });
+  const returnPctStdev = shape.rawReturnPctStdev;
+  const rSample = shape.edge.expectancyRSample;
 
   const grossPnL = outcomes.reduce((a, o) => a + o.grossPnL, 0);
-  const sumWins = wins.reduce((a, o) => a + o.grossPnL, 0);
-  const sumLosses = losses.reduce((a, o) => a + o.grossPnL, 0);
-
   const feesComplete = outcomes.every(o => o.feesComplete);
   const reportedFees = outcomes.reduce((a, o) => a + (o.fees ?? 0), 0);
-
-  // Realised equity curve, in order of exit. Drawdown on realised P&L only: the
-  // mark-to-market path of an open position is not in the ledger, so a deeper intra-trade
-  // trough is invisible here and this figure is a floor, not the true worst.
-  let peak = 0, running = 0, maxDrawdown = 0;
-  let streak = 0, maxConsecutiveLosses = 0;
-  for (const o of outcomes) {
-    running += o.grossPnL;
-    peak = Math.max(peak, running);
-    maxDrawdown = Math.max(maxDrawdown, peak - running);
-    streak = o.grossPnL < 0 ? streak + 1 : 0;
-    maxConsecutiveLosses = Math.max(maxConsecutiveLosses, streak);
-  }
-
-  const holds = outcomes.map(o => o.holdingMs / 3_600_000);
-
-  // R multiples, over the subset whose entry declared a stop.
-  const rMultiples: number[] = [];
-  const stopDistances: number[] = [];
-  const stopAtrMultiples: number[] = [];
-  let breached = 0;
-  let worstBreachPct: number | null = null;
-
-  for (const o of outcomes) {
-    const stop = o.intendedStop;
-    if (stop == null || !(stop > 0) || !(o.entryPrice > stop)) continue;
-
-    const riskPerShare = o.entryPrice - stop;
-    rMultiples.push(o.grossPnL / (riskPerShare * o.qty));
-    stopDistances.push((riskPerShare / o.entryPrice) * 100);
-    if (o.atrAtEntry != null && o.atrAtEntry > 0) {
-      stopAtrMultiples.push(riskPerShare / o.atrAtEntry);
-    }
-
-    if (o.exitPrice < stop) {
-      breached++;
-      const slip = ((stop - o.exitPrice) / stop) * 100;
-      worstBreachPct = worstBreachPct == null ? slip : Math.max(worstBreachPct, slip);
-    }
-  }
-
-  const returnPcts = outcomes.map(o => o.returnPct);
-  const returnPctStdev = stdev(returnPcts);
 
   const withoutRationale = outcomes.filter(o => o.entryRationale == null).length;
   const unexplained = outcomes.filter(o => o.unexplained).length;
@@ -343,8 +436,8 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
   if (withoutRationale > 0) {
     caveats.push(`${withoutRationale} of ${outcomes.length} round trip(s) have no journal record for the entry, so no rationale, stop or policy version — they count in the P&L and cannot be reasoned about.`);
   }
-  if (rMultiples.length < outcomes.length) {
-    caveats.push(`expectancyR covers ${rMultiples.length} of ${outcomes.length} round trip(s); the rest declared no usable stop.`);
+  if (rSample < outcomes.length) {
+    caveats.push(`expectancyR covers ${rSample} of ${outcomes.length} round trip(s); the rest declared no usable stop.`);
   }
   if (unexplained > 0) {
     caveats.push(`${unexplained} round trip(s) had fills that do not add up (a sell larger than the recorded position) — their numbers are a best reading, not a reconciliation.`);
@@ -375,57 +468,24 @@ export function scorecard(opts: { symbol?: string; days?: number } = {}): Scorec
       to: outcomes.reduce((acc, o) => latest(acc, o.exitAt), outcomes[0].exitAt),
       days: opts.days ?? null,
     },
-    trades: outcomes.length,
-    wins: wins.length,
-    losses: losses.length,
-    scratches,
-    winRate: r((wins.length / outcomes.length) * 100),
-
-    grossPnL: r(grossPnL)!,
+    ...shape.counts,
     feesComplete,
     fees: feesComplete || reportedFees > 0 ? r(reportedFees) : null,
     netPnL: feesComplete ? r(grossPnL - reportedFees) : null,
 
-    avgWin: r(mean(wins.map(o => o.grossPnL))),
-    avgLoss: r(mean(losses.map(o => o.grossPnL))),
-    // No losses is not an infinite profit factor, it is an unmeasurable one.
-    profitFactor: sumLosses < 0 ? r(sumWins / Math.abs(sumLosses)) : null,
-    expectancy: r(grossPnL / outcomes.length),
-    expectancyPct: r(mean(outcomes.map(o => o.returnPct))),
-    expectancyR: r(mean(rMultiples)),
-    expectancyRSample: rMultiples.length,
+    ...shape.edge,
 
-    returnPctStdev: r(returnPctStdev),
-    // Three decimals: these are ratios near 1, where two decimals throws away a tenth of
-    // the resolution, unlike a win rate where it throws away nothing anybody can act on.
-    perTradeSharpe: r(meanOverSigma(returnPcts), 3),
-    perTradeSharpeR: r(meanOverSigma(rMultiples), 3),
-    expectancyTStat: r(
-      returnPctStdev != null && returnPctStdev > 0
-        ? mean(returnPcts)! / (returnPctStdev / Math.sqrt(returnPcts.length))
-        : null,
-      2,
-    ),
+    best: summarise(shape.best),
+    worst: summarise(shape.worst),
 
-    best: summarise(outcomes.reduce((a, b) => (b.returnPct > a.returnPct ? b : a))),
-    worst: summarise(outcomes.reduce((a, b) => (b.returnPct < a.returnPct ? b : a))),
+    avgHoldHours: shape.hold.avg,
+    medianHoldHours: shape.hold.median,
+    avgHoldWinnersHours: shape.hold.winners,
+    avgHoldLosersHours: shape.hold.losers,
 
-    avgHoldHours: r(mean(holds)),
-    medianHoldHours: r(median(holds)),
-    avgHoldWinnersHours: r(mean(wins.map(o => o.holdingMs / 3_600_000))),
-    avgHoldLosersHours: r(mean(losses.map(o => o.holdingMs / 3_600_000))),
+    ...shape.drawdown,
 
-    maxDrawdown: r(maxDrawdown)!,
-    maxConsecutiveLosses,
-
-    stopDiscipline: {
-      measurable: rMultiples.length,
-      breached,
-      worstBreachPct: r(worstBreachPct),
-      avgStopDistancePct: r(mean(stopDistances)),
-      avgStopAtrMultiple: r(mean(stopAtrMultiples)),
-      policyStopAtrMult,
-    },
+    stopDiscipline: { ...shape.stops, policyStopAtrMult },
 
     bySymbol: groupBy(outcomes, o => o.symbol),
     byPolicyVersion: groupBy(outcomes, o => (o.policyVersion != null ? `v${o.policyVersion}` : 'unknown')),
