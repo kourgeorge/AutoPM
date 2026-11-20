@@ -24,6 +24,8 @@ export async function initializeAccount(): Promise<void> {
 export function assertExecutionOwner(): void {
   if (!ready) throw new Error('Account is not initialized; broker mutation refused');
 }
+/** The broker, for a write: checks the fence first. One copy for every strategy module that sends orders. */
+export function guardedBroker(): typeof broker { assertExecutionOwner(); return broker; }
 export function executionHealthy(): void { lastExecutionAt = new Date().toISOString(); error = null; }
 export function runtimeFailed(message: string): void { error = message; }
 export function runtimeStatus() {

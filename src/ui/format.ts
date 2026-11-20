@@ -49,19 +49,6 @@ function isWide(cp: number): boolean {
 }
 
 /**
- * Columns a piece of blessed MARKUP will occupy — the inverse of `cell()`, used by the probe
- * to assert that every rendered line is exactly as wide as it claimed.
- *
- * Escaped braces (written by `escapeTags`) are one visible column each and must survive tag
- * stripping, so they are removed before the tag pass rather than after it.
- */
-export function markupWidth(markup: string): number {
-  const escapes = markup.match(/\\[{}]/g)?.length ?? 0;
-  const stripped = markup.replace(/\\[{}]/g, '').replace(/\{[^{}]*\}/g, '');
-  return plainWidth(stripped) + escapes;
-}
-
-/**
  * Escape a string so blessed renders it literally instead of parsing it as a tag.
  *
  * Shared with the log box: a symbol, a model id or an operator's message can contain braces,

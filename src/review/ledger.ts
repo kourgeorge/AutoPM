@@ -79,6 +79,12 @@ export interface TradeOutcome {
   unexplained: boolean;
 }
 
+/**
+ * P&L after the costs the fills report: net when every fee is known, else gross minus the fees
+ * that were reported. One reading shared by the lesson report and the signal report.
+ */
+export function pnlAfterCosts(o: TradeOutcome): number { return o.netPnL ?? o.grossPnL - (o.fees ?? 0); }
+
 interface Leg {
   qty: number;
   notional: number;

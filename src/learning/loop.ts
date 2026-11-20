@@ -29,7 +29,7 @@ import { etDate, etNow } from '../core/time';
 import { getPolicy } from '../policy/load';
 import type { ToolDefinition } from '../core/types';
 import { LEARNING_ETFS, LEARNING_UNIVERSE, loadUniverse } from './history';
-import { computeOutcomes, type TradeOutcome } from '../review/ledger';
+import { computeOutcomes, pnlAfterCosts, type TradeOutcome } from '../review/ledger';
 import { buildUniverse, rankCorrelation, recentStats, report, requiredT, scoreBuiltIns, scoreScale, scoreSignals, similarity, HORIZON, MIN_STOCKS, type SignalReport, type PeriodStats, type Scored, type Universe } from './evaluate';
 import { compileSignal, checkCode, WINDOW } from './sandbox';
 import { LEARNED_PREFIX, SandboxedSignal, type ScoreScale } from '../signals/sandboxed';
@@ -460,9 +460,6 @@ export interface RealTradeSignal { trades: number; positive: RealTradeSide; nega
 export interface RealTrades { closedTrades: number; withSignals: number; skippedNoSignals: number; bySignal: Record<string, RealTradeSignal> }
 
 const round = (x: number, d: number) => Math.round(x * 10 ** d) / 10 ** d;
-
-/** P&L after the costs the fills report: net when every fee is known, else gross minus the fees that were reported. */
-function pnlAfterCosts(o: TradeOutcome): number { return o.netPnL ?? o.grossPnL - (o.fees ?? 0); }
 
 /**
  * How each signal did on the trader's own closed round trips. Measures only; changes no weight.

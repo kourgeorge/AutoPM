@@ -1,5 +1,5 @@
 import { flagVanishedProtection, protect, protectionIntents, recentlyConfirmedIntent } from './protectionIntent';
-import { assertExecutionOwner } from '../core/runtime';
+import { guardedBroker } from '../core/runtime';
 /**
  * L4 — the stop that rests at the venue.
  *
@@ -843,8 +843,6 @@ export async function sweepStops(): Promise<void> {
     }
   }
 }
-
-function guardedBroker() { assertExecutionOwner(); return broker; }
 
 async function verifyFreeHolding(symbol: string, qty: number): Promise<void> {
   const held = (await broker.getPositions()).find(p => sameSymbol(p.symbol, symbol));

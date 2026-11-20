@@ -1,4 +1,4 @@
-import { assertExecutionOwner } from '../core/runtime';
+import { guardedBroker } from '../core/runtime';
 /**
  * L4 — execution, and the guard that sits between the decision maker and the venue.
  *
@@ -834,5 +834,3 @@ export async function exitPosition(symbol: string, reason: string, qty?: number,
     timeoutMs: getPolicy().automation.timeoutMs });
   return { status: action.status, orderId: action.id, automatic: action.automatic ?? false };
 }
-
-function guardedBroker() { assertExecutionOwner(); return broker; }

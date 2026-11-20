@@ -29,7 +29,6 @@ export interface CollectRequest {
   barLimit: number;
   timeframe: Timeframe;
   maxQuoteAgeMs: number;
-  maxBarAgeMs?: number;
 }
 
 export interface RawBundle {
@@ -58,7 +57,7 @@ const dailyBars = new Map<string, { anchor: string; bars: Maybe<Bar[]> }>();
 export function resetTickBarCache(): void { dailyBars.clear(); }
 
 export async function tickBars(symbol: string, req: CollectRequest): Promise<Maybe<Bar[]>> {
-  if (req.timeframe !== '1Day' || req.maxBarAgeMs !== undefined) return collectBars(symbol, req.barLimit, req.timeframe, req.maxBarAgeMs);
+  if (req.timeframe !== '1Day') return collectBars(symbol, req.barLimit, req.timeframe);
   let anchor: string;
   try { anchor = await dailyAnchorDate(symbol, new Date()); }
   catch { return collectBars(symbol, req.barLimit, req.timeframe); }
@@ -89,10 +88,6 @@ export async function collectAll(req: CollectRequest): Promise<RawBundle> {
     Promise.all(
       symbols.map(
         async (s) =>
-          // `maxBarAgeMs` is passed through UNRESOLVED, undefined included. Defaulting it here
-          // used to hand `collectBars` a fixed number every tick, which meant the daily
-          // threshold could never be the calendar-derived one — and no caller in the system
-          // sets the field, so the constant always won. Undefined is the request to work it out.
           [s, await tickBars(s, req)] as const,
       ),
     ),

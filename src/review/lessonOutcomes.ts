@@ -17,7 +17,7 @@
  * is known, else gross minus the fees that were reported. Alpaca bills most fees separately,
  * so there the number is often still close to gross; `feesIncomplete` says how many trips that is.
  */
-import { computeOutcomes, type TradeOutcome } from './ledger';
+import { computeOutcomes, pnlAfterCosts, type TradeOutcome } from './ledger';
 import { readDecisions } from '../journal/journal';
 import type { DecisionRecord } from '../journal/types';
 import { r } from './metrics';
@@ -39,8 +39,6 @@ export interface LessonOutcomeReport { tracked: number; untracked: number; pnlBa
 
 const PNL_BASIS = 'P&L after fees: net when every fee is known, else gross minus the fees reported (the same reading as the signal report).';
 
-/** P&L after the costs the fills report — matches realTradeStats in learning/loop.ts. */
-function pnlAfterCosts(o: TradeOutcome): number { return o.netPnL ?? o.grossPnL - (o.fees ?? 0); }
 
 function returnAfterCosts(o: TradeOutcome): number {
   const cost = o.entryPrice * o.qty;
